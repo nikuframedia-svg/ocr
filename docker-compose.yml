@@ -1,0 +1,52 @@
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: metalogalva-vllm
+    restart: "no"
+    ipc: host
+    ports:
+      - "8000:8000"
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+      # First-time weight load on WSL/SSD takes ~30-60 s; default RPC timeout
+      # of 10 s causes the API server to self-SIGINT before the engine reports
+      # ready. 10 minutes is the practical ceiling for cold start.
+      VLLM_RPC_TIMEOUT: "600000"
+      VLLM_ENGINE_ITERATION_TIMEOUT_S: "600"
+      VLLM_LOGGING_LEVEL: ${VLLM_LOGGING_LEVEL:-INFO}
+    command:
+      - "Qwen/Qwen2.5-VL-7B-Instruct-AWQ"
+      - "--quantization=awq_marlin"
+      - "--gpu-memory-utilization=0.92"
+      - "--max-model-len=8192"
+      - '--limit-mm-per-prompt={"image": 1}'
+      # max_pixels = 1280*28*28 = ~1MP. Aumentar para 1254400 (1600*28*28)
+      # se accuracy de campos pequenos (lotes M26B0xxx) for fraca; latência sobe ~25%.
+      - '--mm-processor-kwargs={"max_pixels": 1003520}'
+      - "--enable-prefix-caching"
+      # NOTE: vLLM 0.20.x does not expose `--guided-decoding-backend` on the CLI.
+      # The backend is set per-request via `extra_body.guided_decoding_backend`
+      # in vllm_client.py (defaults to llguidance when available).
+      - "--served-model-name=Qwen/Qwen2.5-VL-7B-Instruct-AWQ"
+      # --enforce-eager kept defensive: Blackwell (RTX 50-series, sm_120)
+      # workers exited silently with code 255 in earlier attempts without
+      # this flag. Drop only after confirming vLLM ships graph-capture
+      # support for sm_120.
+      - "--enforce-eager"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # Healthcheck disabled until first successful warm-up: vLLM takes 60+ min
+    # to download the model on a slow connection and Docker's healthcheck
+    # apparatus does not play well with that.
+    healthcheck:
+      disable: true
+
+volumes:
+  hf-cache:

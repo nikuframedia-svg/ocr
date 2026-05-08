@@ -1,0 +1,696 @@
+/* =====================================================================
+   Metalogalva OCR — Design System
+   Port directo do protótipo (data/_design_ref_v2/styles.css)
+   adaptado para SSR Jinja + HTMX + Alpine (sem Tailwind, sem React).
+   ===================================================================== */
+
+:root {
+  --paper: #F4F1EB;
+  --paper-2: #ECE7DD;
+  --paper-3: #E2DCCE;
+  --ink: #16140F;
+  --ink-2: #2A271F;
+  --ink-3: #4A453A;
+  --ink-4: #756F61;
+  --ink-5: #9B9587;
+  --rule: #D6CFBE;
+  --rule-2: #C2BAA5;
+  --surface: #FBFAF6;
+  --surface-2: #FFFFFF;
+
+  --accent: #D4A574;
+  --accent-ink: #8A5F2D;
+  --accent-soft: #F0E2C9;
+
+  --ok: #2F7D43;
+  --ok-soft: #DDEBD8;
+  --warn: #B8841C;
+  --warn-soft: #F5E7C2;
+  --crit: #B53024;
+  --crit-soft: #F4D7D2;
+  --info: #2D5B8A;
+  --info-soft: #D5E2EE;
+
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --font-hand: 'Caveat', cursive;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+
+/* Alpine.js x-cloak — Alpine 3 doesn't inject this rule itself.
+   Without it, x-show/x-if elements briefly flash before Alpine boots. */
+[x-cloak] { display: none !important; }
+
+body {
+  font-family: var(--font-sans);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+a { color: inherit; text-decoration: none; }
+input, button, select, textarea { font-family: inherit; }
+
+.mono { font-family: var(--font-mono); font-feature-settings: 'tnum'; }
+.tnum { font-variant-numeric: tabular-nums; }
+.muted { color: var(--ink-4); }
+.tiny { font-size: 11px; }
+.lbl {
+  font-family: var(--font-mono); font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.12em; color: var(--ink-4);
+}
+.scroll-x { overflow-x: auto; }
+hr.rule { border: none; border-top: 1px solid var(--rule); margin: 0; }
+
+/* =====================================================================
+   App shell — sidebar 240px + main flex
+   ===================================================================== */
+.app {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  min-height: 100vh;
+}
+
+.sidebar {
+  background: var(--ink);
+  color: var(--paper);
+  padding: 24px 0;
+  position: sticky; top: 0; height: 100vh;
+  display: flex; flex-direction: column;
+  overflow-y: auto;
+}
+.sb-brand {
+  padding: 0 20px 24px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  margin-bottom: 12px;
+}
+.sb-brand-title { font-weight: 700; font-size: 16px; letter-spacing: -0.01em; }
+.sb-brand-sub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: rgba(255,255,255,0.5);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  margin-top: 4px;
+}
+.sb-section {
+  padding: 14px 20px 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: rgba(255,255,255,0.4);
+  text-transform: uppercase;
+}
+.sb-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 20px;
+  font-size: 14px;
+  color: rgba(255,255,255,0.75);
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  transition: background .12s;
+}
+.sb-item:hover { background: rgba(255,255,255,0.04); color: white; }
+.sb-item.active {
+  color: white; background: rgba(212,165,116,0.12);
+  border-left-color: var(--accent);
+}
+.sb-num {
+  font-family: var(--font-mono); font-size: 10px;
+  color: rgba(255,255,255,0.4); margin-right: 4px;
+}
+.sb-foot {
+  margin-top: auto; padding: 20px;
+  font-size: 11px; color: rgba(255,255,255,0.4);
+  font-family: var(--font-mono); letter-spacing: 0.08em;
+}
+
+.main {
+  background: var(--paper);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Mobile: collapse sidebar to top bar (when SSR detection fails to omit it) */
+@media (max-width: 768px) {
+  .app { grid-template-columns: 1fr; }
+  .sidebar {
+    position: relative; height: auto;
+    padding: 12px 16px; flex-direction: row;
+    align-items: center; gap: 12px; overflow-x: auto;
+  }
+  .sb-brand { padding: 0; border: none; margin: 0; flex-shrink: 0; }
+  .sb-brand-sub { display: none; }
+  .sb-section { display: none; }
+  .sb-item {
+    padding: 6px 10px; border-left: none;
+    border-bottom: 2px solid transparent;
+    flex-shrink: 0; font-size: 13px;
+  }
+  .sb-item.active { border-bottom-color: var(--accent); border-left: none; }
+  .sb-num { display: none; }
+  .sb-foot { display: none; }
+}
+
+/* Phase A (Round 29): on mobile devices, the SSR detection (User-Agent
+   sniffing) drops the sidebar entirely — the body gets ".mobile" class.
+   The capture page is the ONLY meaningful surface on a phone; everything
+   else is desktop-only. These rules ensure the layout collapses cleanly
+   when the sidebar is omitted server-side. */
+body.mobile .app { grid-template-columns: 1fr; }
+body.mobile .main { padding: 0; }
+/* Hide elements not relevant to the capture-only mobile flow. Pages that
+   don't make sense on a phone (queue, dashboards) still render but without
+   chrome — a future iteration can redirect them to /capture. */
+body.mobile .live-pulse { display: none; }
+
+/* Round 34 — mobile camera: cap viewport so shutter + concluir button
+   stay visible on small screens. */
+body.mobile .cam-wrap {
+  max-height: 50vh;
+  min-height: 200px;
+}
+body.mobile .cam-bar {
+  padding: 10px 14px 14px;
+}
+body.mobile .shutter {
+  width: 56px; height: 56px; border-width: 3px;
+}
+
+/* Round 36 — global rule: native date inputs need ≥160px to show
+   full DD/MM/YYYY including the year. Inline `min-width:auto` overrides
+   in templates were truncating to ~80px and hiding the year. Applied
+   globally so any future date input is correct by default. */
+input[type="date"] {
+  min-width: 160px;
+}
+
+/* Round 36 — compact header inline in /sheet/{id} banner.
+   Each field rendered as label + _cell.html micro-table for editing. */
+.sheet-header-inline {
+  display: flex; gap: 18px; flex-wrap: wrap;
+  align-items: flex-end;
+  padding: 10px 0 4px;
+  border-top: 1px dashed var(--rule);
+  margin-top: 8px;
+}
+.sheet-header-inline .hb-field {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sheet-header-inline .hb-field .lbl {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: var(--ink-4);
+  text-transform: uppercase;
+  margin: 0;
+}
+.sheet-header-inline table { border-collapse: collapse; }
+.sheet-header-inline table td { background: var(--paper-2); border-radius: 4px; }
+
+/* Round 34c — image rotation moved server-side (see /image/{sheet_id}
+   in main.py). PIL handles EXIF + portrait→landscape, results cached
+   next to the original. CSS rotate-cw hack removed (was causing
+   layout overflow when transformed image's bounding box stayed
+   vertical). */
+.img-rotate-wrap {
+  /* Wrapper that keeps the rotated image bounded — apply to <div> around <img>. */
+  display: inline-block;
+  position: relative;
+  overflow: hidden;
+}
+
+/* =====================================================================
+   Page header
+   ===================================================================== */
+.page-h {
+  padding: 24px 40px 12px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface);
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap;
+}
+.page-eyebrow {
+  font-family: var(--font-mono); font-size: 11px;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-4); margin-bottom: 4px;
+}
+.page-title { font-size: 28px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+.page-content { padding: 28px 40px 60px; }
+
+@media (max-width: 768px) {
+  .page-h { padding: 16px 18px 10px; }
+  .page-title { font-size: 22px; }
+  .page-content { padding: 18px; }
+}
+
+/* =====================================================================
+   Buttons
+   ===================================================================== */
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 14px;
+  border: 1px solid var(--rule-2);
+  background: var(--surface-2);
+  border-radius: 6px;
+  font-size: 13px; font-weight: 500;
+  color: var(--ink); cursor: pointer;
+  transition: all .12s;
+  text-decoration: none;
+}
+.btn:hover { border-color: var(--ink-3); }
+.btn:disabled { opacity: 0.5; pointer-events: none; }
+.btn.primary { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.btn.primary:hover { background: var(--ink-2); }
+.btn.ghost { background: transparent; border-color: transparent; }
+.btn.ghost:hover { background: var(--paper-2); }
+.btn.lg { padding: 14px 20px; font-size: 16px; }
+.btn.danger { background: var(--crit); color: white; border-color: var(--crit); }
+
+/* =====================================================================
+   Pills & dots
+   ===================================================================== */
+.pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 999px;
+  font-family: var(--font-mono); font-size: 10px;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  font-weight: 500;
+}
+.pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); }
+.pill.crit { background: var(--crit-soft); color: var(--crit); }
+.pill.info { background: var(--info-soft); color: var(--info); }
+.pill.neutral { background: var(--paper-2); color: var(--ink-3); }
+
+.dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 999px;
+  flex-shrink: 0;
+}
+.dot.ok { background: var(--ok); }
+.dot.warn { background: var(--warn); }
+.dot.crit { background: var(--crit); }
+.dot.info { background: var(--info); }
+.dot.idle { background: var(--ink-5); }
+
+/* =====================================================================
+   Cards
+   ===================================================================== */
+.card {
+  background: var(--surface-2);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+}
+.card-h {
+  padding: 14px 18px; border-bottom: 1px solid var(--rule);
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px;
+}
+.card-h-title { font-weight: 600; font-size: 14px; }
+.card-h-sub {
+  font-family: var(--font-mono); font-size: 10px;
+  color: var(--ink-4); letter-spacing: 0.12em; text-transform: uppercase;
+}
+.card-b { padding: 18px; }
+
+/* =====================================================================
+   Tables
+   ===================================================================== */
+.tbl { width: 100%; border-collapse: collapse; }
+.tbl th {
+  text-align: left; padding: 10px 12px;
+  font-family: var(--font-mono); font-size: 10px;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-4); font-weight: 500;
+  border-bottom: 1px solid var(--rule);
+  background: var(--paper);
+}
+.tbl td {
+  padding: 12px;
+  border-bottom: 1px solid var(--rule);
+  font-size: 13px; vertical-align: middle;
+}
+.tbl tr:last-child td { border-bottom: none; }
+.tbl tr:hover td { background: var(--paper); }
+
+/* =====================================================================
+   KPI cards
+   ===================================================================== */
+.kpi-grid { display: grid; gap: 16px; }
+.kpi {
+  background: var(--surface-2);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 18px;
+}
+.kpi-l {
+  font-family: var(--font-mono); font-size: 10px;
+  letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-4);
+}
+.kpi-v {
+  font-size: 36px; font-weight: 600; letter-spacing: -0.02em;
+  margin-top: 4px; line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.kpi-u { font-size: 14px; color: var(--ink-4); font-weight: 400; margin-left: 4px; }
+.kpi-d { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 12px; }
+
+/* =====================================================================
+   Bars
+   ===================================================================== */
+.bar-track {
+  background: var(--paper-2);
+  border-radius: 99px;
+  height: 6px;
+  overflow: hidden;
+}
+.bar-fill {
+  height: 100%;
+  background: var(--ink);
+  border-radius: 99px;
+  transition: width .3s;
+}
+.bar-fill.ok { background: var(--ok); }
+.bar-fill.warn { background: var(--warn); }
+.bar-fill.crit { background: var(--crit); }
+
+/* MiniBars (sparkline-ish) */
+.minibars {
+  display: flex; gap: 2px; align-items: flex-end;
+  height: 40px;
+}
+.minibars > span {
+  flex: 1;
+  background: var(--ink);
+  border-radius: 1px 1px 0 0;
+  min-height: 2px;
+  display: block;
+}
+.minibars.ok > span { background: var(--ok); }
+.minibars.warn > span { background: var(--warn); }
+.minibars.crit > span { background: var(--crit); }
+
+/* =====================================================================
+   Tabs
+   ===================================================================== */
+.tabs { display: flex; gap: 0; border-bottom: 1px solid var(--rule); }
+.tab {
+  padding: 10px 16px; cursor: pointer;
+  border-bottom: 2px solid transparent;
+  font-size: 13px; font-weight: 500; color: var(--ink-4);
+  margin-bottom: -1px;
+  background: transparent; border-top: none; border-left: none; border-right: none;
+}
+.tab.active { color: var(--ink); border-bottom-color: var(--ink); }
+.tab:hover { color: var(--ink-2); }
+
+/* =====================================================================
+   Confidence cells (DQ)
+   ===================================================================== */
+.cell-conf-hi { background: transparent; }
+.cell-conf-md {
+  background: var(--warn-soft);
+  box-shadow: inset 0 0 0 1px var(--warn);
+  position: relative;
+}
+.cell-conf-lo {
+  background: var(--crit-soft);
+  box-shadow: inset 0 0 0 1.5px var(--crit);
+  position: relative;
+}
+.cell-conf-md::after {
+  content: '?'; position: absolute; top: 1px; right: 4px;
+  font-size: 9px; font-weight: 700; color: var(--warn);
+}
+.cell-conf-lo::after {
+  content: '!'; position: absolute; top: 1px; right: 4px;
+  font-size: 9px; font-weight: 700; color: var(--crit);
+}
+
+/* Round 50 — folha validada: cells read-only (lock visual). */
+.cell-locked {
+  cursor: default !important;
+  user-select: text;
+  opacity: 0.92;
+}
+.cell-locked:hover {
+  background-color: inherit !important;
+}
+
+/* =====================================================================
+   Cross-check verification colors (Round 33)
+   - cc-match: cell value matches reference (plan/SAP) → green
+   - cc-no-match: cell diverges from reference → red
+   - cc-na: no reference (operator-managed or no plan/SAP entry) → neutral
+   These OVERRIDE the conf-* backgrounds when applied (specificity via
+   ordering — they appear after, so cascade wins).
+   ===================================================================== */
+.cc-match {
+  background: var(--ok-soft) !important;
+  box-shadow: inset 0 0 0 1px var(--ok);
+  position: relative;
+}
+.cc-no-match {
+  background: var(--crit-soft) !important;
+  box-shadow: inset 0 0 0 1.5px var(--crit);
+  position: relative;
+}
+/* Round 41c: cc-warn (strong yellow) for dimensional fields (esp,
+   larg_mm, comp_mm, lbase, ltopo) when they diverge from plan/SAP.
+   Yellow = "verify, may be operator decision OR OCR error", distinct
+   from cc-no-match (red) used for hard mismatches in identity fields
+   (OF, cliente, OV, modelo, lote). */
+.cc-warn {
+  background: #fde68a !important;            /* strong amber/yellow */
+  box-shadow: inset 0 0 0 1.5px #d97706;     /* darker amber border */
+  position: relative;
+}
+.cc-warn::before {
+  content: '!'; position: absolute; top: 1px; left: 4px;
+  font-size: 10px; font-weight: 700; color: #b45309;
+}
+.cc-na {
+  /* no override — preserves conf class background (typically transparent) */
+  position: relative;
+}
+.cc-match::before {
+  content: '✓'; position: absolute; top: 1px; left: 4px;
+  font-size: 10px; font-weight: 700; color: var(--ok);
+}
+.cc-no-match::before {
+  content: '✗'; position: absolute; top: 1px; left: 4px;
+  font-size: 10px; font-weight: 700; color: var(--crit);
+}
+
+/* =====================================================================
+   Forms
+   ===================================================================== */
+input[type="text"], input[type="number"], input[type="search"],
+input:not([type]), select, textarea {
+  padding: 8px 12px;
+  border: 1px solid var(--rule-2);
+  border-radius: 6px;
+  font-size: 14px;
+  background: var(--surface-2);
+  color: var(--ink);
+  outline: none;
+  transition: border-color .12s;
+}
+input:focus, select:focus, textarea:focus { border-color: var(--ink-3); }
+
+label.inline {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; color: var(--ink-3);
+}
+
+/* =====================================================================
+   Camera viewport (Fase 2)
+   ===================================================================== */
+.cam-wrap {
+  flex: 1 1 auto;
+  max-height: 60vh;       /* desktop cap */
+  min-height: 240px;
+  background: #111;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 360px;
+  border-radius: 12px;
+}
+.cam-wrap video, .cam-wrap canvas {
+  width: 100%; height: 100%;
+  object-fit: cover; display: block;
+}
+.cam-guides {
+  position: absolute; inset: 18px;
+  pointer-events: none;
+}
+.cam-corner {
+  position: absolute;
+  width: 28px; height: 28px;
+  border: 2px solid var(--accent);
+}
+.cam-corner.tl { top: 0; left: 0; border-right: none; border-bottom: none; }
+.cam-corner.tr { top: 0; right: 0; border-left: none; border-bottom: none; }
+.cam-corner.bl { bottom: 0; left: 0; border-right: none; border-top: none; }
+.cam-corner.br { bottom: 0; right: 0; border-left: none; border-top: none; }
+.cam-hint {
+  position: absolute; top: 16px; left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.65);
+  color: #fff; padding: 6px 14px; border-radius: 99px;
+  font-family: var(--font-mono); font-size: 11px;
+  letter-spacing: 0.1em; pointer-events: none;
+}
+.cam-bar {
+  flex-shrink: 0; background: var(--ink); color: var(--paper);
+  padding: 18px 22px 22px;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 18px;
+}
+.shutter {
+  width: 68px; height: 68px; border-radius: 50%;
+  background: #fff;
+  border: 4px solid rgba(255,255,255,0.4);
+  cursor: pointer; flex-shrink: 0; padding: 0;
+  transition: transform .1s;
+}
+.shutter:active { transform: scale(0.95); }
+.shutter:disabled { opacity: 0.5; pointer-events: none; }
+.cam-meta {
+  font-size: 11px; color: rgba(255,255,255,0.65);
+  font-family: var(--font-mono);
+}
+.cam-meta b { color: #fff; font-weight: 500; font-family: var(--font-sans); }
+
+/* =====================================================================
+   Bottom-sheet modal (mobile cell editor)
+   ===================================================================== */
+.sheet-bg {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.45);
+  display: flex; align-items: flex-end;
+  z-index: 50;
+  animation: fadein .15s;
+}
+@keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
+
+.sheet-modal {
+  background: var(--surface-2);
+  width: 100%;
+  border-radius: 18px 18px 0 0;
+  padding: 20px 22px 28px;
+  display: flex; flex-direction: column; gap: 10px;
+  animation: slideup .2s;
+}
+@keyframes slideup { from { transform: translateY(100%); } to { transform: translateY(0); } }
+.sheet-modal input {
+  width: 100%; padding: 14px;
+  font-size: 22px; font-family: var(--font-mono);
+  border: 2px solid var(--ink); border-radius: 8px;
+}
+
+/* =====================================================================
+   Spinner / progress (Fase 2/3)
+   ===================================================================== */
+.spinner {
+  width: 64px; height: 64px; border-radius: 50%;
+  border: 3px solid var(--rule);
+  border-top-color: var(--ink);
+  animation: spin 1s linear infinite;
+  display: inline-block;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.proc {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 18px; padding: 32px; text-align: center;
+}
+
+/* =====================================================================
+   Toast
+   ===================================================================== */
+.toast {
+  position: fixed; bottom: 20px; left: 50%;
+  transform: translateX(-50%);
+  background: var(--ink); color: #fff;
+  padding: 10px 16px; border-radius: 8px;
+  font-size: 13px; z-index: 60;
+}
+
+/* =====================================================================
+   Alerts banner (Fase 3 + 6)
+   ===================================================================== */
+.alert {
+  padding: 10px 14px; border-radius: 6px;
+  font-size: 13px; border: 1px solid;
+  display: flex; gap: 8px; align-items: flex-start;
+}
+.alert.ok { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
+.alert.warn { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
+.alert.crit { background: var(--crit-soft); border-color: var(--crit); color: var(--crit); }
+.alert.info { background: var(--info-soft); border-color: var(--info); color: var(--info); }
+
+/* =====================================================================
+   Avatar circle (Fase 5 — workers)
+   ===================================================================== */
+.avatar {
+  width: 32px; height: 32px; border-radius: 50%;
+  background: var(--paper-2);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 600; font-size: 12px;
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+
+/* =====================================================================
+   Live-update indicator (Phase B — HTMX polling)
+   ===================================================================== */
+.live-pulse {
+  position: fixed;
+  bottom: 16px; right: 20px;
+  background: var(--surface-2);
+  border: 1px solid var(--rule);
+  border-radius: 99px;
+  padding: 6px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-4);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  z-index: 40;
+  display: flex; align-items: center; gap: 6px;
+  pointer-events: none;
+}
+.live-pulse-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--ok);
+}
+.live-pulse.refreshing .live-pulse-dot {
+  background: var(--accent);
+  animation: live-pulse-blink 0.8s ease-in-out infinite;
+}
+@keyframes live-pulse-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+/* =====================================================================
+   Severity rail (Fase 6 — alerts)
+   ===================================================================== */
+.sev-rail {
+  width: 8px; align-self: stretch; border-radius: 4px;
+  flex-shrink: 0;
+}
+.sev-rail.crit { background: var(--crit); }
+.sev-rail.warn { background: var(--warn); }
+.sev-rail.info { background: var(--info); }
+.sev-rail.idle { background: var(--ink-5); }

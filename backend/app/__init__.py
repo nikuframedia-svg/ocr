@@ -1,0 +1,1 @@
+"""Metalogalva OCR application package."""

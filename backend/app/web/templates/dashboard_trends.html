@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% set live = true %}
+{% block title %}Tendências — Dashboard{% endblock %}
+{% block content %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+<div class="page-h">
+  <div>
+    <div class="page-eyebrow">Dashboard · Últimos 30 dias</div>
+    <h1 class="page-title">Tendências</h1>
+  </div>
+</div>
+
+<div id="dash-data" class="page-content"
+     hx-get="{{ request.url }}"
+     hx-trigger="every 30s"
+     hx-select="#dash-data"
+     hx-swap="outerHTML">
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;" class="d-grid">
+    <div class="card">
+      <div class="card-h"><div class="card-h-title">Quantidade — 30 dias</div></div>
+      <div class="card-b"><canvas id="chartDaily" height="160"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-h"><div class="card-h-title">Quantidade — 12 semanas</div></div>
+      <div class="card-b"><canvas id="chartWeekly" height="160"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-h"><div class="card-h-title">Quantidade — 12 meses</div></div>
+      <div class="card-b"><canvas id="chartMonthly" height="160"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-h"><div class="card-h-title">Top 15 modelos</div><div class="card-h-sub">12 meses</div></div>
+      {% if top_modelos %}
+      <table class="tbl" style="font-size:11px;">
+        <thead><tr><th>Modelo</th><th style="text-align:right;">Qtd</th><th style="text-align:right;">OFs</th><th style="text-align:right;">Op.</th></tr></thead>
+        <tbody>
+        {% for r in top_modelos %}
+        <tr><td class="mono">{{ r.modelo }}</td><td class="mono" style="text-align:right;">{{ r.qty }}</td><td class="mono" style="text-align:right;">{{ r.ofs }}</td><td class="mono" style="text-align:right;">{{ r.operadores }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<div class="card-b muted">Sem dados.</div>{% endif %}
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div class="card-h"><div class="card-h-title">Top 15 clientes</div><div class="card-h-sub">12 meses</div></div>
+    {% if top_clientes %}
+    <div class="card-b"><canvas id="chartClientes" height="80"></canvas></div>
+    {% else %}<div class="card-b muted">Sem dados.</div>{% endif %}
+  </div>
+
+  <div class="card">
+    <div class="card-h"><div class="card-h-title">Matriz Operador × Modelo</div><div class="card-h-sub">Top {{ matrix_modelo.modelos|length }}</div></div>
+    {% if matrix_modelo.cells %}
+    <div class="scroll-x">
+      <table class="tbl" style="font-size:11px;">
+        <thead>
+          <tr><th>Operador \ Modelo</th>
+          {% for m in matrix_modelo.modelos %}<th class="mono">{{ m }}</th>{% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for op in matrix_modelo.operadores %}
+          <tr>
+            <td><b>{{ op }}</b></td>
+            {% for mod in matrix_modelo.modelos %}
+              {% set match = matrix_modelo.cells | selectattr('operador','equalto',op) | selectattr('modelo','equalto',mod) | list %}
+              {% if match %}<td class="mono" style="text-align:center; background:var(--accent-soft);"><b>{{ match[0].qty }}</b></td>
+              {% else %}<td class="muted" style="text-align:center;">—</td>{% endif %}
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}<div class="card-b muted">Sem dados.</div>{% endif %}
+  </div>
+</div>
+
+<style>
+  @media (max-width: 900px) {
+    .d-grid { grid-template-columns: 1fr !important; }
+  }
+</style>
+
+<script>
+const daily = {{ daily | tojson }};
+const weekly = {{ weekly | tojson }};
+const monthly = {{ monthly | tojson }};
+const topClientes = {{ top_clientes | tojson }};
+
+const inkColor = '#16140F';
+const accentColor = '#D4A574';
+const okColor = '#2F7D43';
+const infoColor = '#2D5B8A';
+
+const baseOpts = {
+  plugins: { legend: { display: false } },
+  scales: { x: { grid: { display: false } }, y: { beginAtZero: true } },
+};
+
+if (daily.length) new Chart(document.getElementById('chartDaily'), {
+  type: 'line',
+  data: { labels: daily.map(d => d.day),
+    datasets: [{ label: 'qty', data: daily.map(d => d.qty), borderColor: inkColor, backgroundColor: inkColor, tension: 0.3, fill: false, pointRadius: 2 }] },
+  options: baseOpts,
+});
+if (weekly.length) new Chart(document.getElementById('chartWeekly'), {
+  type: 'bar',
+  data: { labels: weekly.map(d => d.week),
+    datasets: [{ label: 'qty', data: weekly.map(d => d.qty), backgroundColor: inkColor, borderRadius: 2 }] },
+  options: baseOpts,
+});
+if (monthly.length) new Chart(document.getElementById('chartMonthly'), {
+  type: 'bar',
+  data: { labels: monthly.map(d => d.month),
+    datasets: [{ label: 'qty', data: monthly.map(d => d.qty), backgroundColor: okColor, borderRadius: 2 }] },
+  options: baseOpts,
+});
+if (topClientes.length) new Chart(document.getElementById('chartClientes'), {
+  type: 'bar',
+  data: { labels: topClientes.map(d => d.cliente),
+    datasets: [{ label: 'qty', data: topClientes.map(d => d.qty), backgroundColor: accentColor, borderRadius: 2 }] },
+  options: { indexAxis: 'y', plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true } } },
+});
+</script>
+
+{% endblock %}

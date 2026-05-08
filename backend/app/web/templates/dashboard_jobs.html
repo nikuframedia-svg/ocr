@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% set live = true %}
+{% block title %}Obras — Dashboard{% endblock %}
+{% block content %}
+<div class="page-h">
+  <div>
+    <div class="page-eyebrow">Dashboard · Obras / OFs</div>
+    <h1 class="page-title">Obra</h1>
+  </div>
+</div>
+
+<div id="dash-data" class="page-content"
+     hx-get="{{ request.url }}"
+     hx-trigger="every 30s"
+     hx-select="#dash-data"
+     hx-swap="outerHTML">
+  <div style="display:grid; grid-template-columns:2fr 1fr; gap:16px;" class="d-grid">
+    <div class="card">
+      <div class="card-h">
+        <div class="card-h-title">Todas as OFs</div>
+        <div class="card-h-sub">{{ jobs|length }} OFs</div>
+      </div>
+      <div class="scroll-x">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>OF</th>
+              <th>Cliente</th>
+              <th style="text-align:right;">Qtd total</th>
+              <th style="text-align:right;">Folhas</th>
+              <th style="text-align:right;">Operadores</th>
+              <th>Período</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for j in jobs %}
+            <tr>
+              <td class="mono"><a href="/dashboard/jobs/{{ j.of }}"><b>{{ j.of }}</b></a></td>
+              <td>{{ j.cliente }}</td>
+              <td class="mono" style="text-align:right;"><b>{{ j.total_qty }}</b></td>
+              <td class="mono" style="text-align:right;">{{ j.sheets }}</td>
+              <td class="mono" style="text-align:right;">{{ j.operadores }}</td>
+              <td class="muted tiny">
+                {% if j.first_day == j.last_day %}{{ j.first_day }}{% else %}{{ j.first_day }} → {{ j.last_day }}{% endif %}
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" style="padding:32px; text-align:center;" class="muted">Ainda sem dados.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><div class="card-h-title">Lead time</div><div class="card-h-sub">Capture span</div></div>
+      {% if leads %}
+      <table class="tbl">
+        <thead><tr><th>OF</th><th style="text-align:right;">Dias</th></tr></thead>
+        <tbody>
+        {% for r in leads %}
+        <tr>
+          <td class="mono"><a href="/dashboard/jobs/{{ r.of }}">{{ r.of }}</a></td>
+          <td class="mono" style="text-align:right;">{{ r.days_span }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<div class="card-b muted">Necessário OFs em ≥2 dias.</div>{% endif %}
+    </div>
+  </div>
+</div>
+
+<style>
+  @media (max-width: 900px) {
+    .d-grid { grid-template-columns: 1fr !important; }
+  }
+</style>
+{% endblock %}

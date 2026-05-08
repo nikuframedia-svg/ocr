@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Pair telemóvel — Metalogalva OCR{% endblock %}
+{% block content %}
+<div class="page-h">
+  <div>
+    <div class="page-eyebrow">Chão de Fábrica</div>
+    <h1 class="page-title">Pair telemóvel</h1>
+  </div>
+</div>
+
+<div class="page-content">
+  <div x-data="pairApp()" x-init="init()" style="display:grid; grid-template-columns: 320px 1fr; gap:24px;" class="pair-grid">
+
+    <div class="card" style="padding:24px; text-align:center;">
+      <div class="lbl" style="margin-bottom:12px;">LER COM TELEFONE</div>
+
+      <div style="background:#fff; padding:8px; border-radius:6px; display:inline-block; min-height:264px; min-width:264px;">
+        <img :src="qrSrc" :alt="captureUrl" width="240" height="240" style="display:block;"
+             x-show="qrSrc">
+      </div>
+
+      <div class="mono" style="font-size:14px; margin-top:14px; word-break:break-all;" x-text="captureUrl"></div>
+
+      <div class="muted tiny" style="margin-top:10px;">
+        Telemóvel tem de estar na mesma rede wifi.
+      </div>
+
+      <button class="btn" style="margin-top:16px;" @click="copyUrl()">
+        <span x-show="!copied">Copiar URL</span>
+        <span x-show="copied">✓ Copiado</span>
+      </button>
+    </div>
+
+    <div style="display:flex; flex-direction:column; gap:16px;">
+      <div class="card card-b">
+        <div class="lbl">FLUXO</div>
+        <ol style="margin:10px 0 0 18px; padding:0; font-size:14px; line-height:1.7; color:var(--ink-3);">
+          <li>O operador abre a câmara do telemóvel e aponta para o QR.</li>
+          <li>Quando abrir o link, conceder permissão de câmara.</li>
+          <li>Enquadrar a folha Kanban com as guias laranja, tirar foto.</li>
+          <li>Esperar ~25 s pelo OCR.</li>
+          <li>Rever as células flagged a amarelo/vermelho, validar.</li>
+        </ol>
+      </div>
+
+      <div class="alert info">
+        <div>
+          <b>URL gerada do servidor onde estás:</b><br>
+          <span class="muted tiny">Se mudares de rede ou IP, regenera abrindo esta página.</span>
+        </div>
+      </div>
+
+      <div class="card card-b">
+        <div class="lbl" style="margin-bottom:8px;">ATALHO ALTERNATIVO</div>
+        <div style="font-size:13px; color:var(--ink-3);">
+          Sem QR? O operador pode escrever esta URL no browser do telemóvel:
+        </div>
+        <div class="mono" style="margin-top:8px; padding:10px; background:var(--paper-2); border-radius:6px; word-break:break-all;" x-text="captureUrl"></div>
+      </div>
+    </div>
+  </div>
+
+  <style>
+    @media (max-width: 768px) {
+      .pair-grid { grid-template-columns: 1fr !important; }
+    }
+  </style>
+</div>
+
+<script>
+function pairApp() {
+  return {
+    captureUrl: '',
+    qrSrc: '',
+    copied: false,
+
+    init() {
+      // Build URL from current location host (works on LAN behind any IP)
+      const url = new URL('/capture', window.location.href);
+      this.captureUrl = url.toString();
+      // Use api.qrserver.com (same as referência); free, no API key
+      const enc = encodeURIComponent(this.captureUrl);
+      this.qrSrc = 'https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=8&data=' + enc;
+    },
+
+    async copyUrl() {
+      try {
+        await navigator.clipboard.writeText(this.captureUrl);
+        this.copied = true;
+        setTimeout(() => { this.copied = false; }, 2000);
+      } catch (e) {
+        // Fallback: select-all on a temp input
+        const i = document.createElement('input');
+        i.value = this.captureUrl;
+        document.body.appendChild(i);
+        i.select();
+        document.execCommand('copy');
+        document.body.removeChild(i);
+        this.copied = true;
+        setTimeout(() => { this.copied = false; }, 2000);
+      }
+    },
+  };
+}
+</script>
+{% endblock %}

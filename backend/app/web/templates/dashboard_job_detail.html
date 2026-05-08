@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% set live = true %}
+{% block title %}OF {{ detail.of }} — Dashboard{% endblock %}
+{% block content %}
+<div class="page-h">
+  <div>
+    <div class="page-eyebrow">Dashboard · Obra</div>
+    <h1 class="page-title">OF <span class="mono">{{ detail.of }}</span></h1>
+  </div>
+  <a href="/dashboard/jobs" class="btn">← voltar</a>
+</div>
+
+<div id="dash-data" class="page-content"
+     hx-get="{{ request.url }}"
+     hx-trigger="every 30s"
+     hx-select="#dash-data"
+     hx-swap="outerHTML">
+
+  {# Big-number summary cards. Filter out None qtd (production_rows.qtd
+     is nullable when OCR couldn't read the cell) before summing — sum's
+     keyword is `start`, not `default`, and it errors on None values. #}
+  {% set total_qty = (detail.rows | rejectattr('qtd', 'none') | sum(attribute='qtd')) %}
+  {% set distinct_ops = detail.timeline | map(attribute='operador') | unique | list | length %}
+  {% set distinct_days = detail.timeline | map(attribute='day') | unique | list | length %}
+  {% set first_day = detail.sheets[0].sheet_iso_date if detail.sheets else '—' %}
+  {% set last_day = detail.sheets[-1].sheet_iso_date if detail.sheets else '—' %}
+  {% set first_cliente = detail.rows[0].cliente if detail.rows else '' %}
+  <div class="card" style="padding:24px; margin-bottom:16px;">
+    <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+      <div>
+        <div class="lbl">{{ first_cliente or '—' }}</div>
+        <div style="font-size:32px; font-weight:600; letter-spacing:-0.01em; margin-top:4px;" class="mono">{{ detail.of }}</div>
+      </div>
+      {% if first_day != last_day %}
+      <span class="pill neutral">{{ first_day }} → {{ last_day }}</span>
+      {% else %}
+      <span class="pill neutral">{{ first_day }}</span>
+      {% endif %}
+    </div>
+    <div style="display:flex; gap:32px; margin-top:24px; flex-wrap:wrap;">
+      <div>
+        <div class="lbl">Total qtd</div>
+        <div class="mono" style="font-size:36px; font-weight:600;">{{ total_qty }}</div>
+      </div>
+      <div>
+        <div class="lbl">Linhas</div>
+        <div class="mono" style="font-size:36px; font-weight:600;">{{ detail.rows | length }}</div>
+      </div>
+      <div>
+        <div class="lbl">Operadores</div>
+        <div class="mono" style="font-size:36px; font-weight:600;">{{ distinct_ops }}</div>
+      </div>
+      <div>
+        <div class="lbl">Dias activos</div>
+        <div class="mono" style="font-size:36px; font-weight:600;">{{ distinct_days }}</div>
+      </div>
+      <div>
+        <div class="lbl">Folhas</div>
+        <div class="mono" style="font-size:36px; font-weight:600;">{{ detail.sheets | length }}</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;" class="d-grid">
+    <div class="card">
+      <div class="card-h"><div class="card-h-title">Timeline</div><div class="card-h-sub">Dia × Operador</div></div>
+      {% if detail.timeline %}
+      <table class="tbl">
+        <thead><tr><th>Dia</th><th>Operador</th><th style="text-align:right;">Qtd</th><th>Modelos</th></tr></thead>
+        <tbody>
+        {% for r in detail.timeline %}
+        <tr>
+          <td>{{ r.day }}</td>
+          <td><a href="/dashboard/workers/{{ r.operador|urlencode }}">{{ r.operador }}</a></td>
+          <td class="mono" style="text-align:right;">{{ r.qty }}</td>
+          <td class="muted tiny">{{ r.modelos }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<div class="card-b muted">Sem dados.</div>{% endif %}
+    </div>
+
+    <div class="card">
+      <div class="card-h"><div class="card-h-title">Folhas</div><div class="card-h-sub">Que tocaram esta OF</div></div>
+      {% if detail.sheets %}
+      <table class="tbl">
+        <thead><tr><th>#</th><th>Data</th><th>Operador</th><th>Estado</th></tr></thead>
+        <tbody>
+        {% for r in detail.sheets %}
+        <tr>
+          <td class="mono"><a href="/sheet/{{ r.sheet_id }}">{{ r.sheet_id }}</a></td>
+          <td>{{ r.sheet_iso_date }}</td>
+          <td>{{ r.operador }}</td>
+          <td class="muted tiny">{{ r.sheet_status }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<div class="card-b muted">Sem folhas.</div>{% endif %}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-h">
+      <div class="card-h-title">Linhas detalhadas</div>
+      <div class="card-h-sub">{{ detail.rows|length }} linhas</div>
+    </div>
+    {% if detail.rows %}
+    <div class="scroll-x">
+      <table class="tbl" style="font-size:11px;">
+        <thead><tr><th>Folha</th><th>Data</th><th>Operador</th><th>Cliente</th><th>Modelo</th><th style="text-align:right;">Qtd</th><th style="text-align:right;">Comp</th><th style="text-align:right;">Larg</th><th>Lote</th><th>Coni</th><th style="text-align:right;">Esp</th><th style="text-align:right;">Lbase</th><th style="text-align:right;">Ltopo</th></tr></thead>
+        <tbody>
+        {% for r in detail.rows %}
+        <tr>
+          <td class="mono"><a href="/sheet/{{ r.sheet_id }}">{{ r.sheet_id }}</a></td>
+          <td>{{ r.sheet_iso_date }}</td>
+          <td>{{ r.operador }}</td>
+          <td>{{ r.cliente }}</td>
+          <td class="mono">{{ r.modelo }}</td>
+          <td class="mono" style="text-align:right;">{{ r.qtd or '' }}</td>
+          <td class="mono" style="text-align:right;">{{ r.comp_mm or '' }}</td>
+          <td class="mono" style="text-align:right;">{{ r.larg_mm or '' }}</td>
+          <td class="mono" style="font-size:10px;">{{ r.lote or '' }}</td>
+          <td>{{ r.coni or '' }}</td>
+          <td class="mono" style="text-align:right;">{{ r.esp or '' }}</td>
+          <td class="mono" style="text-align:right;">{{ r.lbase or '' }}</td>
+          <td class="mono" style="text-align:right;">{{ r.ltopo or '' }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<style>
+  @media (max-width: 900px) {
+    .d-grid { grid-template-columns: 1fr !important; }
+  }
+</style>
+{% endblock %}

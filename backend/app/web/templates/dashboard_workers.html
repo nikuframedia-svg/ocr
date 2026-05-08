@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% set live = true %}
+{% block title %}Trabalhadores — Dashboard{% endblock %}
+{% block content %}
+<div class="page-h">
+  <div>
+    <div class="page-eyebrow">Dashboard · Trabalhadores</div>
+    <h1 class="page-title">Trabalhador</h1>
+  </div>
+</div>
+
+<div id="dash-data" class="page-content"
+     hx-get="{{ request.url }}"
+     hx-trigger="every 30s"
+     hx-select="#dash-data"
+     hx-swap="outerHTML">
+  <div class="card" style="margin-bottom:16px;">
+    <div class="card-h"><div class="card-h-title">Operadores · resumo</div></div>
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Operador</th>
+            <th style="text-align:right;">Folhas</th>
+            <th style="text-align:right;">Total qtd</th>
+            <th style="text-align:right;">Média/linha</th>
+            <th style="text-align:right;">OFs</th>
+            <th style="text-align:right;">Clientes</th>
+            <th>Tendência 7d</th>
+            <th>Período</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for w in workers %}
+          {% set tmax = (w.trend | max) or 1 %}
+          <tr>
+            <td>
+              <div style="display:flex; align-items:center; gap:10px;">
+                <span class="avatar">{{ w.operador.split(' ') | map('first') | join('') }}</span>
+                <a href="/dashboard/workers/{{ w.operador|urlencode }}"><b>{{ w.operador }}</b></a>
+              </div>
+            </td>
+            <td class="mono" style="text-align:right;">{{ w.sheets }}</td>
+            <td class="mono" style="text-align:right;"><b>{{ w.total_qty }}</b></td>
+            <td class="mono muted" style="text-align:right;">{{ "%.1f"|format(w.avg_qty_per_row or 0) }}</td>
+            <td class="mono" style="text-align:right;">{{ w.distinct_ofs }}</td>
+            <td class="mono" style="text-align:right;">{{ w.distinct_clientes }}</td>
+            <td>
+              <div class="minibars" style="height:28px; width:90px;">
+                {% for v in w.trend %}<span style="height: {{ ((v * 100) / tmax) | round(0,'floor') | int if v else 4 }}%;"></span>{% endfor %}
+              </div>
+            </td>
+            <td class="muted tiny">{{ w.first_day }} → {{ w.last_day }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="8" style="padding:32px; text-align:center;" class="muted">Ainda sem dados.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-h">
+      <div class="card-h-title">Matriz Operador × Cliente</div>
+      <div class="card-h-sub">Últimos 12 meses · qtd / rate por hora</div>
+    </div>
+    {% if matrix.cells %}
+    <div class="scroll-x" style="padding:8px;">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Operador \ Cliente</th>
+            {% for cli in matrix.clientes %}<th>{{ cli }}</th>{% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for op in matrix.operadores %}
+          <tr>
+            <td><b>{{ op }}</b></td>
+            {% for cli in matrix.clientes %}
+              {% set match = matrix.cells | selectattr('operador', 'equalto', op) | selectattr('cliente', 'equalto', cli) | list %}
+              {% if match %}
+                {% set m = match[0] %}
+                <td style="text-align:center; background: var(--accent-soft);">
+                  <div class="mono"><b>{{ m.qty }}</b></div>
+                  <div class="mono tiny muted">{{ "%.1f"|format(m.rate_per_hour) }}/h</div>
+                </td>
+              {% else %}
+                <td style="text-align:center;" class="muted">—</td>
+              {% endif %}
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}<div class="card-b muted">Sem dados suficientes.</div>{% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,17 @@
+You are an OCR expert. The image shows the HEADER strip of a Metalogalva Kanban production sheet (top ~22% of the page). Extract the four header fields and return ONLY a valid JSON object with no markdown, no explanation.
+
+KNOWN VALUES — use exactly when matching:
+- OPERADOR + N°: "JÚLIO LIMA" (0537), "VITOR CARVALHO" (1391), "AUGUSTO MONTEIRO" (95).
+- SETOR/MAQUINA: only "BOBINE-FORMATO" has been observed.
+
+DATA format: DD-MM-YYYY. Single-digit day or month is OK ("9-4-2026") but PREFER zero-padded ("09-04-2026"). Normalize separators to "-".
+
+If a field is empty or unreadable, use "".
+
+Return exactly this JSON shape:
+{
+  "operador": "FULL NAME",
+  "n_operador": "e.g. 0537",
+  "setor_maquina": "BOBINE-FORMATO",
+  "data": "DD-MM-YYYY"
+}

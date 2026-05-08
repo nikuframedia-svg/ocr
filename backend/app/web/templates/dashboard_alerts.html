@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% set live = true %}
+{% block title %}Alertas — Dashboard{% endblock %}
+{% block content %}
+<div class="page-h">
+  <div>
+    <div class="page-eyebrow">Notificações</div>
+    <h1 class="page-title">Alertas</h1>
+  </div>
+</div>
+
+<div id="dash-data" class="page-content"
+     hx-get="{{ request.url }}"
+     hx-trigger="every 30s"
+     hx-select="#dash-data"
+     hx-swap="outerHTML">
+  {# KPI counts at top — derived from data dict #}
+  {% set n_crit = data.hard_violations | length %}
+  {% set n_warn = data.high_edits | length %}
+  {% set n_stuck = data.stuck | length %}
+  {% set n_field = data.top_edited_fields | length %}
+  <div class="kpi-grid kpi-row" style="grid-template-columns: repeat(4, 1fr); margin-bottom:24px;">
+    <div class="kpi" style="border-left: 4px solid var(--crit);">
+      <div class="kpi-l">Críticos</div>
+      <div class="kpi-v" style="color: {{ 'var(--crit)' if n_crit else 'var(--ink-4)' }};">{{ n_crit }}</div>
+      <div class="kpi-d muted tiny">violations L3</div>
+    </div>
+    <div class="kpi" style="border-left: 4px solid var(--warn);">
+      <div class="kpi-l">Atenção</div>
+      <div class="kpi-v" style="color: {{ 'var(--warn)' if n_warn else 'var(--ink-4)' }};">{{ n_warn }}</div>
+      <div class="kpi-d muted tiny">edições altas</div>
+    </div>
+    <div class="kpi" style="border-left: 4px solid var(--info);">
+      <div class="kpi-l">Estagnadas</div>
+      <div class="kpi-v" style="color: {{ 'var(--info)' if n_stuck else 'var(--ink-4)' }};">{{ n_stuck }}</div>
+      <div class="kpi-d muted tiny">&gt;1 dia sem validação</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-l">Failure modes</div>
+      <div class="kpi-v">{{ n_field }}</div>
+      <div class="kpi-d muted tiny">campos editados</div>
+    </div>
+  </div>
+
+  {# Lista unificada estilo "rail por severidade" #}
+  <div class="card" style="margin-bottom:16px;">
+    <div class="card-h">
+      <div class="card-h-title">Eventos</div>
+      <div class="card-h-sub">{{ n_crit + n_warn + n_stuck }} ALERTAS</div>
+    </div>
+    <div>
+      {% if not (data.hard_violations or data.high_edits or data.stuck) %}
+      <div class="card-b muted" style="text-align:center; padding:32px;">
+        Nenhum alerta. Tudo no verde.
+      </div>
+      {% endif %}
+
+      {% for v in data.hard_violations %}
+      <div style="display:flex; gap:14px; padding:18px 22px; border-bottom:1px solid var(--rule); align-items:stretch;">
+        <div class="sev-rail crit"></div>
+        <div style="flex:1; min-width:0;">
+          <div style="display:flex; align-items:center; gap:10px; margin-bottom:4px; flex-wrap:wrap;">
+            <span class="pill crit">DQ L3</span>
+            <span class="mono tiny muted">{{ v.captured_at }}</span>
+            <span class="pill neutral">folha #{{ v.id }}</span>
+          </div>
+          <div style="font-weight:600; font-size:15px; margin-bottom:2px;">
+            {{ v.n_errors }} violation(s) hard na folha #{{ v.id }}
+          </div>
+          <div class="muted" style="font-size:13px;">
+            Operador: {{ v.operador or '—' }} · Estado: {{ v.status }}
+          </div>
+        </div>
+        <a class="btn" href="/sheet/{{ v.id }}" style="align-self:center;">Abrir →</a>
+      </div>
+      {% endfor %}
+
+      {% for r in data.high_edits %}
+      <div style="display:flex; gap:14px; padding:18px 22px; border-bottom:1px solid var(--rule); align-items:stretch;">
+        <div class="sev-rail warn"></div>
+        <div style="flex:1; min-width:0;">
+          <div style="display:flex; align-items:center; gap:10px; margin-bottom:4px; flex-wrap:wrap;">
+            <span class="pill warn">EDIÇÕES</span>
+            <span class="pill neutral">folha #{{ r.id }}</span>
+          </div>
+          <div style="font-weight:600; font-size:15px; margin-bottom:2px;">
+            {{ r.n_edits }} edições em uma só folha
+          </div>
+          <div class="muted" style="font-size:13px;">
+            Operador: {{ r.operador or '—' }} · Capturada: {{ r.captured_at }}
+          </div>
+        </div>
+        <a class="btn" href="/sheet/{{ r.id }}" style="align-self:center;">Abrir →</a>
+      </div>
+      {% endfor %}
+
+      {% for r in data.stuck %}
+      <div style="display:flex; gap:14px; padding:18px 22px; border-bottom:1px solid var(--rule); align-items:stretch;">
+        <div class="sev-rail info"></div>
+        <div style="flex:1; min-width:0;">
+          <div style="display:flex; align-items:center; gap:10px; margin-bottom:4px; flex-wrap:wrap;">
+            <span class="pill info">PENDENTE</span>
+            <span class="pill neutral">folha #{{ r.id }}</span>
+          </div>
+          <div style="font-weight:600; font-size:15px; margin-bottom:2px;">
+            Folha capturada mas não-validada há &gt;1 dia
+          </div>
+          <div class="muted" style="font-size:13px;">
+            Operador: {{ r.operador or '—' }} · Capturada: {{ r.captured_at }}
+          </div>
+        </div>
+        <a class="btn" href="/sheet/{{ r.id }}" style="align-self:center;">Validar →</a>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  {# Failure modes — agrupado por campo, ajuda a entender padrões do OCR #}
+  {% if data.top_edited_fields %}
+  <div class="card">
+    <div class="card-h">
+      <div class="card-h-title">Failure modes do OCR</div>
+      <div class="card-h-sub">Top campos editados manualmente</div>
+    </div>
+    <table class="tbl">
+      <thead><tr><th>Campo</th><th style="text-align:right;">Edições</th></tr></thead>
+      <tbody>
+      {% set max_n = (data.top_edited_fields | map(attribute='n') | max) or 1 %}
+      {% for r in data.top_edited_fields %}
+      <tr>
+        <td class="mono">{{ r.field }}</td>
+        <td style="text-align:right; min-width:200px;">
+          <div style="display:inline-flex; align-items:center; gap:8px;">
+            <div class="bar-track" style="width:120px;">
+              <div class="bar-fill warn" style="width: {{ ((r.n * 100) / max_n) | round(0,'floor') | int }}%;"></div>
+            </div>
+            <span class="mono"><b>{{ r.n }}</b></span>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+
+<style>
+  @media (max-width: 900px) {
+    .kpi-row { grid-template-columns: repeat(2, 1fr) !important; }
+  }
+</style>
+{% endblock %}

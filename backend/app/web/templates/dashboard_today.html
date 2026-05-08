@@ -1,0 +1,255 @@
+{% extends "base.html" %}
+{% set live = true %}
+{% block title %}Hoje — Dashboard{% endblock %}
+{% block content %}
+<div x-data="{ layout: localStorage.getItem('today_layout') || 'overview' }"
+     x-init="$watch('layout', v => localStorage.setItem('today_layout', v))">
+
+  <div class="page-h">
+    <div>
+      <div class="page-eyebrow">Dashboard · {{ summary.date }}</div>
+      <h1 class="page-title">Hoje</h1>
+    </div>
+    <form method="get" action="/dashboard" style="display:flex; gap:6px; align-items:center;">
+      <input type="date" name="date" value="{{ date_filter or '' }}">
+      <button class="btn">Filtrar</button>
+    </form>
+  </div>
+
+  <div id="dash-data" class="page-content"
+       hx-get="{{ request.url }}"
+       hx-trigger="every 30s"
+       hx-select="#dash-data"
+       hx-swap="outerHTML">
+    <!-- KPIs sempre visíveis -->
+    {% set t = summary.totals %}
+    <div class="kpi-grid kpi-row" style="grid-template-columns: repeat(6, 1fr); margin-bottom:24px;">
+      <div class="kpi">
+        <div class="kpi-l">Quantidade</div>
+        <div class="kpi-v">{{ t.total_qty }}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">Folhas</div>
+        <div class="kpi-v">{{ t.total_sheets }}</div>
+        {% if t.sheets_pending and t.sheets_pending > 0 %}
+        <div class="kpi-d">
+          <span class="pill warn">{{ t.sheets_pending }} pendente</span>
+          {% if t.sheets_validated %}<span class="muted tiny">· {{ t.sheets_validated }} validada(s)</span>{% endif %}
+        </div>
+        {% elif t.sheets_validated and t.sheets_validated > 0 %}
+        <div class="kpi-d">
+          <span class="pill ok">{{ t.sheets_validated }} validada(s)</span>
+        </div>
+        {% endif %}
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">Horas</div>
+        <div class="kpi-v">{{ "%.1f"|format(t.total_hours or 0) }}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">Linhas</div>
+        <div class="kpi-v">{{ t.total_rows }}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">OFs</div>
+        <div class="kpi-v">{{ t.total_ofs }}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">Clientes</div>
+        <div class="kpi-v">{{ t.total_clientes }}</div>
+      </div>
+    </div>
+
+    <!-- Layout switcher -->
+    <div class="tabs" style="margin-bottom:16px;">
+      <button class="tab" :class="{ active: layout === 'overview' }" @click="layout = 'overview'">Overview</button>
+      <button class="tab" :class="{ active: layout === 'operadores' }" @click="layout = 'operadores'">Operadores</button>
+      <button class="tab" :class="{ active: layout === 'timeline' }" @click="layout = 'timeline'">Timeline 7 dias</button>
+    </div>
+
+    <!-- ============ OVERVIEW ============ -->
+    <div x-show="layout === 'overview'" x-cloak>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;" class="d-grid">
+        <div class="card">
+          <div class="card-h"><div class="card-h-title">Por operador</div></div>
+          {% if summary.by_operador %}
+          <table class="tbl">
+            <thead><tr><th>Operador</th><th style="text-align:right;">Qtd</th><th style="text-align:right;">Folhas</th><th style="text-align:right;">Horas</th></tr></thead>
+            <tbody>
+            {% for r in summary.by_operador %}
+            <tr>
+              <td>
+                <div style="display:flex; align-items:center; gap:10px;">
+                  <span class="avatar">{{ r.operador.split(' ') | map('first') | join('') }}</span>
+                  <a href="/dashboard/workers/{{ r.operador|urlencode }}">{{ r.operador }}</a>
+                </div>
+              </td>
+              <td class="mono" style="text-align:right;"><b>{{ r.qty }}</b></td>
+              <td class="mono" style="text-align:right;">{{ r.sheets }}</td>
+              <td class="mono" style="text-align:right;">{{ "%.1f"|format(r.hours or 0) }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+          {% else %}<div class="card-b muted">Sem dados.</div>{% endif %}
+        </div>
+
+        <div class="card">
+          <div class="card-h"><div class="card-h-title">Top OFs</div></div>
+          {% if summary.by_of %}
+          <table class="tbl">
+            <thead><tr><th>OF</th><th>Cliente</th><th style="text-align:right;">Qtd</th></tr></thead>
+            <tbody>
+            {% for r in summary.by_of %}
+            <tr>
+              <td class="mono"><a href="/dashboard/jobs/{{ r.of }}"><b>{{ r.of }}</b></a></td>
+              <td>{{ r.cliente }}</td>
+              <td class="mono" style="text-align:right;">{{ r.qty }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+          {% else %}<div class="card-b muted">Sem dados.</div>{% endif %}
+        </div>
+
+        <div class="card">
+          <div class="card-h"><div class="card-h-title">Top clientes</div></div>
+          {% if summary.by_cliente %}
+          <table class="tbl">
+            <thead><tr><th>Cliente</th><th style="text-align:right;">Qtd</th><th style="text-align:right;">OFs</th></tr></thead>
+            <tbody>
+            {% for r in summary.by_cliente %}
+            <tr><td>{{ r.cliente }}</td><td class="mono" style="text-align:right;">{{ r.qty }}</td><td class="mono" style="text-align:right;">{{ r.ofs }}</td></tr>
+            {% endfor %}
+            </tbody>
+          </table>
+          {% else %}<div class="card-b muted">Sem dados.</div>{% endif %}
+        </div>
+
+        <div class="card">
+          <div class="card-h"><div class="card-h-title">Top modelos</div></div>
+          {% if summary.by_modelo %}
+          <table class="tbl">
+            <thead><tr><th>Modelo</th><th style="text-align:right;">Qtd</th><th style="text-align:right;">OFs</th></tr></thead>
+            <tbody>
+            {% for r in summary.by_modelo %}
+            <tr><td class="mono tiny">{{ r.modelo }}</td><td class="mono" style="text-align:right;">{{ r.qty }}</td><td class="mono" style="text-align:right;">{{ r.ofs }}</td></tr>
+            {% endfor %}
+            </tbody>
+          </table>
+          {% else %}<div class="card-b muted">Sem dados.</div>{% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ OPERADORES (big cards) ============ -->
+    <div x-show="layout === 'operadores'" x-cloak>
+      {% if summary.by_operador %}
+      {% set max_qty = ((summary.by_operador | rejectattr('qty', 'none') | map(attribute='qty') | list | max) if (summary.by_operador | rejectattr('qty', 'none') | list) else 0) or 1 %}
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:16px;">
+        {% for r in summary.by_operador %}
+        {% set _q = r.qty or 0 %}
+        {% set pct = ((_q * 100) / max_qty) | round(0, 'floor') | int %}
+        <div class="card" style="padding:18px;">
+          <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px;">
+            <div style="flex:1; min-width:0;">
+              <div style="display:flex; align-items:center; gap:10px;">
+                <span class="avatar" style="width:40px; height:40px; font-size:14px;">{{ r.operador.split(' ') | map('first') | join('') }}</span>
+                <div>
+                  <div style="font-weight:600;">{{ r.operador }}</div>
+                  <div class="muted tiny">{{ r.sheets }} folha(s) · {{ "%.1f"|format(r.hours or 0) }}h</div>
+                </div>
+              </div>
+            </div>
+            <a class="btn ghost" href="/dashboard/workers/{{ r.operador|urlencode }}">→</a>
+          </div>
+          <div style="margin-top:18px; display:flex; align-items:baseline; gap:6px;">
+            <span class="mono" style="font-size:42px; font-weight:600; letter-spacing:-0.02em;">{{ _q }}</span>
+            <span class="muted">colunas</span>
+          </div>
+          <div class="bar-track" style="margin-top:10px;">
+            <div class="bar-fill" style="width: {{ pct }}%;"></div>
+          </div>
+          <div class="muted tiny" style="margin-top:6px;">
+            {{ "%.1f"|format((_q / r.hours) if r.hours else 0) }} col/h
+            {% if r.hours and r.hours > 0 %} · {{ "%.1f"|format(_q / (r.sheets or 1)) }} col/folha{% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}<div class="card card-b muted">Sem operadores hoje.</div>{% endif %}
+    </div>
+
+    <!-- ============ TIMELINE 7 dias ============ -->
+    <div x-show="layout === 'timeline'" x-cloak>
+      <div class="card">
+        <div class="card-h">
+          <div class="card-h-title">Output últimos 7 dias</div>
+          <div class="card-h-sub">Operador × Dia</div>
+        </div>
+        <div class="card-b">
+          {% if daily_op %}
+          {% set days = daily | map(attribute='day') | list %}
+          {% set ops = daily_op | map(attribute='operador') | unique | list %}
+          {# Compute max via filter (Jinja {% set %} inside {% for %} doesn't
+             propagate outside the loop scope — use the filter chain instead). #}
+          {% set max_q = ((daily_op | map(attribute='qty') | reject('none') | list | max) if daily_op else 0) or 1 %}
+          <div class="scroll-x">
+            <table class="tbl" style="font-size:11px;">
+              <thead>
+                <tr>
+                  <th>Operador</th>
+                  {% for d in days %}<th>{{ d[5:] }}</th>{% endfor %}
+                  <th style="text-align:right;">Σ</th>
+                </tr>
+              </thead>
+              <tbody>
+              {% for op in ops %}
+              {% set total = namespace(s=0) %}
+              <tr>
+                <td>
+                  <div style="display:flex; align-items:center; gap:10px;">
+                    <span class="avatar">{{ op.split(' ') | map('first') | join('') }}</span>
+                    <a href="/dashboard/workers/{{ op|urlencode }}">{{ op }}</a>
+                  </div>
+                </td>
+                {% for d in days %}
+                  {% set match = daily_op | selectattr('day', 'equalto', d) | selectattr('operador', 'equalto', op) | list %}
+                  {% if match and match[0].qty %}
+                    {% set q = match[0].qty %}
+                    {% set total.s = total.s + q %}
+                    {% set intensity = ((q * 100) / max_q) | round(0, 'floor') | int %}
+                    <td class="mono" style="text-align:center; background:rgba(212,165,116, {{ intensity / 100 }}); font-weight:600;">{{ q }}</td>
+                  {% else %}
+                    <td class="muted" style="text-align:center;">·</td>
+                  {% endif %}
+                {% endfor %}
+                <td class="mono" style="text-align:right; font-weight:600;">{{ total.s }}</td>
+              </tr>
+              {% endfor %}
+              </tbody>
+              {% if daily %}
+              <tfoot>
+                <tr style="background:var(--paper-2);">
+                  <td class="lbl">Σ TOTAL</td>
+                  {% for d in daily %}<td class="mono" style="text-align:center; font-weight:600;">{{ d.qty }}</td>{% endfor %}
+                  <td class="mono" style="text-align:right; font-weight:600;">{{ daily | rejectattr('qty', 'none') | sum(attribute='qty') }}</td>
+                </tr>
+              </tfoot>
+              {% endif %}
+            </table>
+          </div>
+          {% else %}<div class="muted">Sem dados nos últimos 7 dias.</div>{% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <style>
+    @media (max-width: 900px) {
+      .d-grid { grid-template-columns: 1fr !important; }
+      .kpi-row { grid-template-columns: repeat(2, 1fr) !important; }
+    }
+  </style>
+</div>
+{% endblock %}

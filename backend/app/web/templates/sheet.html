@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+{% block title %}Folha #{{ sheet.id }} — Metalogalva OCR{% endblock %}
+{% block content %}
+<div x-data="cellEditor()" @open-cell-editor.window="open($event.detail)">
+
+<div class="page-h">
+  <div style="flex:1; min-width:0;">
+    <div class="page-eyebrow">Folha · {{ sheet.captured_at }}</div>
+    <h1 class="page-title">Folha #{{ sheet.id }}</h1>
+
+    {# Round 36 — cabeçalho compacto editável + OFs distintos como pills #}
+    <div class="sheet-header-inline">
+      {% for f in header_fields %}
+        {% set path = 'header.' + f %}
+        <div class="hb-field">
+          <span class="lbl">{{ f.upper().replace('_', ' ') }}</span>
+          <table style="border-collapse:collapse;"><tbody><tr>
+            {% with field_path=path, value=header.get(f, ''),
+                    audit=cells_by_path.get(path, {}), edited=False, sheet_id=sheet.id, sheet_status=sheet.status %}
+              {% include "_cell.html" %}
+            {% endwith %}
+          </tr></tbody></table>
+        </div>
+      {% endfor %}
+      {% set distinct_ofs = [] %}
+      {% for r in rows %}
+        {% set of_v = (r.of or '') | string | trim %}
+        {% if of_v and of_v not in distinct_ofs %}{% set _ = distinct_ofs.append(of_v) %}{% endif %}
+      {% endfor %}
+      {% if distinct_ofs %}
+        <div class="hb-field">
+          <span class="lbl">OFS</span>
+          <span style="display:inline-flex; gap:6px; flex-wrap:wrap; padding-top:2px;">
+            {% for of in distinct_ofs %}
+              <a href="/kanbans?of={{ of }}" class="pill neutral mono"
+                 style="text-decoration:none; font-size:11px;">{{ of }}</a>
+            {% endfor %}
+          </span>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+  <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+    {# Round 41d — view toggle: OCR raw vs post-snap (final) #}
+    <div class="period-tabs" title="Vista">
+      <a href="/sheet/{{ sheet.id }}"
+         class="period-tab {% if view_mode != 'raw' %}active{% endif %}">Cross-check</a>
+      <a href="/sheet/{{ sheet.id }}?view=raw"
+         class="period-tab {% if view_mode == 'raw' %}active{% endif %}">OCR cru</a>
+    </div>
+    {% if view_mode == 'raw' %}
+      <span class="pill warn" title="Valores antes de DQ snap + cross-check">OCR original</span>
+    {% endif %}
+    {% if sheet.status == 'error' %}
+      <span class="pill crit">Erro</span>
+    {% elif flagged_count > 0 and view_mode != 'raw' %}
+      <span class="pill warn">{{ flagged_count }} review</span>
+    {% endif %}
+    {% if sheet.status == 'validated' %}
+      <span class="pill ok">✓ Validada · {{ sheet.operador }}</span>
+      <a class="btn" href="/sheet/{{ sheet.id }}/csv">Baixar CSV</a>
+    {% else %}
+      <form method="post" action="/sheet/{{ sheet.id }}/validate"
+            style="display:inline-flex; gap:8px; align-items:center;">
+        <select name="operador" required class="kv-select" style="min-width:180px;">
+          <option value="">Confirmar operador…</option>
+          {% for op in operadores %}<option value="{{ op }}">{{ op }}</option>{% endfor %}
+        </select>
+        <button class="btn primary" type="submit">Validar</button>
+      </form>
+    {% endif %}
+  </div>
+</div>
+
+<div class="page-content">
+
+{% if sheet.status == 'error' %}
+  <div class="alert crit" style="margin-bottom:16px;">
+    <div>
+      <b>Erro na extracção</b><br>
+      <span style="font-size:12px;">{{ sheet.error_message }}</span><br>
+      <a href="/capture" style="color:var(--accent-ink); margin-top:6px; display:inline-block;">→ Tirar nova foto</a>
+    </div>
+  </div>
+{% endif %}
+
+<div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px;" class="sheet-grid">
+  <!-- Image -->
+  <div class="card" style="padding:8px; position:relative;"
+       x-data="{ showOriginal: false }">
+    <img id="kanban-img-{{ sheet.id }}"
+         :src="showOriginal ? '/image/{{ sheet.id }}/original' : '/image/{{ sheet.id }}'"
+         alt="folha {{ sheet.id }}"
+         style="width:100%; max-height:70vh; height:auto; object-fit:contain; display:block;">
+    <div style="position:absolute; top:14px; right:14px; display:flex; gap:6px;">
+      <button type="button" class="btn"
+              style="padding:4px 10px; font-size:13px;"
+              title="Alternar entre kanban cropped e foto original"
+              @click="showOriginal = !showOriginal"
+              x-text="showOriginal ? '⤳ kanban' : '⤳ foto'"></button>
+      <button type="button" class="btn"
+              style="padding:4px 10px; font-size:13px;"
+              title="Rodar 90° (se a foto está ao contrário)"
+              onclick="fetch('/sheet/{{ sheet.id }}/rotate', {method:'POST'})
+                         .then(r => r.json())
+                         .then(j => {
+                           const im = document.getElementById('kanban-img-{{ sheet.id }}');
+                           im.src = im.src.split('?')[0] + '?t=' + Date.now();
+                         });">↻ rodar</button>
+    </div>
+  </div>
+
+  <!-- Tabela editável (Round 36 — cabeçalho movido para banner) -->
+  <div style="display:flex; flex-direction:column; gap:12px;">
+    <!-- Rows -->
+    <div class="card">
+      <div class="card-h">
+        <div class="card-h-title">Tabela de produção</div>
+        <div class="card-h-sub">{{ rows|length }} linhas</div>
+      </div>
+      <div class="scroll-x">
+        <table class="tbl" style="font-size:11px;">
+          <thead>
+            <tr>
+              <th>#</th>
+              {% for f in row_fields %}<th>{{ f }}</th>{% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in rows %}
+            <tr>
+              <td class="mono muted">{{ loop.index }}</td>
+              {% set row_index = loop.index0 %}
+              {% for f in row_fields %}
+                {% set path = 'rows[' ~ row_index ~ '].' ~ f %}
+                {% set audit = cells_by_path.get(path, {}) %}
+                {% with field_path=path, value=row.get(f, ''), audit=audit, edited=False, sheet_id=sheet.id, sheet_status=sheet.status %}
+                  {% include "_cell.html" %}
+                {% endwith %}
+              {% endfor %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="card">
+      <div class="card-h">
+        <div class="card-h-title">Rodapé</div>
+      </div>
+      <div class="card-b">
+        <table class="tbl" style="border:none;">
+          <tbody>
+            {% for f in footer_fields %}
+            <tr>
+              <td class="lbl" style="width:200px; padding:6px 8px;">{{ f }}</td>
+              {% set path = 'footer.' + f %}
+              {% set audit = cells_by_path.get(path, {}) %}
+              {% with field_path=path, value=footer.get(f, ''), audit=audit, edited=False, sheet_id=sheet.id, sheet_status=sheet.status %}
+                {% include "_cell.html" %}
+              {% endwith %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+</div>
+
+<!-- ============== Mobile bottom-sheet editor ============== -->
+<template x-if="active">
+  <div class="sheet-bg" @click.self="cancel()">
+    <div class="sheet-modal">
+      <div class="lbl" x-text="label"></div>
+      <div style="font-size:16px; font-weight:600;">Editar valor</div>
+      <form :action="'/sheet/' + sheet_id + '/edit'" method="post"
+            @submit.prevent="submit()">
+        <input type="hidden" name="field_path" :value="field_path">
+        <input type="text" name="new_value" x-model="value"
+               x-ref="bsInput"
+               x-init="$nextTick(() => $refs.bsInput.focus())"
+               inputmode="text">
+        <div style="display:flex; gap:8px; margin-top:12px;">
+          <button type="button" class="btn lg" style="flex:1;" @click="cancel()">Cancelar</button>
+          <button type="submit" class="btn lg primary" style="flex:1;">Confirmar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</template>
+
+</div><!-- /cellEditor wrapper -->
+
+<style>
+  @media (max-width: 900px) {
+    .sheet-grid { grid-template-columns: 1fr !important; }
+  }
+</style>
+
+<script>
+function cellEditor() {
+  return {
+    active: false,
+    sheet_id: null,
+    field_path: '',
+    value: '',
+    label: '',
+    cell_id: '',
+    open(detail) {
+      this.sheet_id = detail.sheet_id;
+      this.field_path = detail.field_path;
+      this.value = detail.value || '';
+      this.label = detail.label || '';
+      this.cell_id = detail.cell_id;
+      this.active = true;
+    },
+    cancel() {
+      this.active = false;
+    },
+    async submit() {
+      const fd = new FormData();
+      fd.append('field_path', this.field_path);
+      fd.append('new_value', this.value);
+      try {
+        const res = await fetch('/sheet/' + this.sheet_id + '/edit', {
+          method: 'POST',
+          body: fd,
+          headers: { 'HX-Request': 'true' }
+        });
+        if (!res.ok) throw new Error('save falhou (' + res.status + ')');
+        const html = await res.text();
+        const cell = document.getElementById(this.cell_id);
+        if (cell) cell.outerHTML = html;
+        this.active = false;
+      } catch (e) {
+        alert('Falha ao guardar: ' + e.message);
+      }
+    },
+  };
+}
+</script>
+{% endblock %}

@@ -1,0 +1,77 @@
+# Secrets and local config
+.env
+.env.local
+*.pem
+*.key
+
+# Customer-sensitive material — never commit
+inputs/
+processados/
+data/app.db
+data/app.db-*
+data/images/
+data/scans/
+data/_logs/*.log
+data/_logs/*.err
+data/_logs/*.pid
+data/_logs/tunnel_url.txt
+data/dossier_pages/
+data/cross_sheet.json
+data/_design_ref/
+data/_design_ref_v2/
+ground_truth/
+ground_truth_draft/
+ground_truth_humano_raw/
+
+# Claude Code local state
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
+
+# Mined refs derived from customer XLSX — sensitive
+lexicons/sap_plan_mined.json
+lexicons/learned.json
+*.xlsx
+
+# Reports — runs are noisy; keep only the curated baseline_v0.md
+reports/runs/
+reports/extractions_*/
+reports/sap_validation/
+reports/dq_index/
+reports/r42_baseline.json
+reports/round43_variants_results.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# uv
+uv.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Build / dist
+dist/
+build/

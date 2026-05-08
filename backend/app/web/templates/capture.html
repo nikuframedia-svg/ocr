@@ -1,0 +1,519 @@
+{% extends "base.html" %}
+{% block title %}Captura — Metalogalva OCR{% endblock %}
+{% block content %}
+<div x-data="captureApp()" x-init="start()" class="capture-root" style="display:flex; flex-direction:column; min-height:calc(100vh - 0px);">
+
+  <div class="page-h">
+    <div>
+      <div class="page-eyebrow">Chão de Fábrica · Captura</div>
+      <h1 class="page-title">Capturar folhas</h1>
+    </div>
+    <span x-show="streamReady" class="pill ok"><span class="dot ok"></span>LIGADO</span>
+    <span x-show="!streamReady && !streamErr" class="pill neutral">A iniciar câmara…</span>
+    <span x-show="streamErr" class="pill warn">Sem câmara</span>
+  </div>
+
+  <!-- ============== STAGE: PREVIEW (camera live + thumb strip) ============== -->
+  <template x-if="stage === 'preview'">
+    <div style="flex:1; padding: 18px 18px 0; display:flex; flex-direction:column; gap:14px;">
+      <div class="cam-wrap">
+        <video x-ref="video" x-show="!streamErr" playsinline muted autoplay></video>
+        <div class="cam-guides" x-show="!streamErr">
+          <div class="cam-corner tl"></div>
+          <div class="cam-corner tr"></div>
+          <div class="cam-corner bl"></div>
+          <div class="cam-corner br"></div>
+        </div>
+        <div class="cam-hint" x-show="!streamErr">ENQUADRAR FOLHA · BOA LUZ</div>
+
+        <!-- error overlay + file fallback -->
+        <div x-show="streamErr" style="color:#fff; padding:24px; text-align:center; max-width:380px;">
+          <div style="font-weight:600; margin-bottom:8px;">Câmara indisponível</div>
+          <div style="font-size:13px; opacity:.8; margin-bottom:18px;" x-text="streamErr"></div>
+          <label class="btn primary" style="cursor:pointer;">
+            Escolher do telefone
+            <input type="file" accept="image/*" capture="environment" multiple
+                   @change="onFiles($event)" style="display:none;">
+          </label>
+        </div>
+      </div>
+
+      <!-- shutter row -->
+      <div class="cam-bar" style="border-radius: 12px;">
+        <div class="cam-meta">
+          <div>FOTOS</div>
+          <b x-text="photos.length"></b>
+        </div>
+        <button class="shutter" @click="shoot()" :disabled="!streamReady" aria-label="Tirar foto"></button>
+        <div class="cam-meta" style="text-align:right;">
+          <button class="btn primary lg" @click="goConfirm()" :disabled="photos.length === 0">
+            Concluir
+          </button>
+        </div>
+      </div>
+
+      <!-- Thumbnail strip showing accumulated photos -->
+      <div x-show="photos.length > 0" class="thumb-strip">
+        <template x-for="(p, idx) in photos" :key="p.id">
+          <div class="thumb">
+            <img :src="p.url" :alt="'foto ' + (idx+1)">
+            <span class="thumb-num" x-text="idx + 1"></span>
+            <button class="thumb-x" @click="removePhoto(p.id)" aria-label="Remover foto">×</button>
+          </div>
+        </template>
+      </div>
+    </div>
+  </template>
+
+  <!-- ============== STAGE: CONFIRM (count + send all) ============== -->
+  <template x-if="stage === 'confirm'">
+    <div style="flex:1; padding:18px; display:flex; flex-direction:column; gap:14px;">
+      <div class="card" style="text-align:center; padding:24px;">
+        <div style="font-size:64px; line-height:1; margin-bottom:8px;" x-text="photos.length"></div>
+        <div style="font-size:18px; color:var(--ink-2);">
+          <span x-text="photos.length === 1 ? 'kanban capturado' : 'kanbans capturados'"></span>
+        </div>
+      </div>
+
+      <!-- Mini grid of thumbnails for visual confirmation -->
+      <div class="thumb-grid">
+        <template x-for="(p, idx) in photos" :key="p.id">
+          <div class="thumb-grid-item">
+            <img :src="p.url" :alt="'foto ' + (idx+1)">
+            <span class="thumb-num" x-text="idx + 1"></span>
+          </div>
+        </template>
+      </div>
+
+      <div class="alert ok">
+        <span>Cada foto vai ser processada com OCR. Demora ~25s por foto.</span>
+      </div>
+
+      <div style="display:flex; gap:10px;">
+        <button class="btn lg" style="flex:1;" @click="backToPreview()">Voltar</button>
+        <button class="btn lg primary" style="flex:2;" @click="uploadAll()">
+          Enviar <span x-text="photos.length"></span>
+          <span x-text="photos.length === 1 ? 'kanban' : 'kanbans'"></span>
+        </button>
+      </div>
+    </div>
+  </template>
+
+  <!-- ============== STAGE: UPLOADING (progress) ============== -->
+  <template x-if="stage === 'uploading'">
+    <div class="proc">
+      <div class="spinner"></div>
+      <div>
+        <div style="font-size:18px; font-weight:600;">A enviar e processar</div>
+        <div class="muted tiny" style="margin-top:4px;">
+          <span x-text="uploadIdx + 1"></span> de <span x-text="photos.length"></span>
+        </div>
+      </div>
+      <div style="width:100%; max-width:400px; height:8px; background:#3a3729; border-radius:4px; overflow:hidden;">
+        <div :style="'width:' + (((uploadIdx) / photos.length) * 100) + '%; height:100%; background:var(--accent); transition: width 0.3s;'"></div>
+      </div>
+      <div class="muted tiny">Não fechar esta janela.</div>
+    </div>
+  </template>
+
+  <!-- ============== STAGE: QTD-CONFIRM (mobile-only edit) ============== -->
+  <template x-if="stage === 'qtd_confirm'">
+    <div style="flex:1; padding:18px; display:flex; flex-direction:column; gap:14px; overflow-y:auto;">
+      <div class="card">
+        <div class="card-h">
+          <div class="card-h-title">Confirmar quantidades</div>
+          <div class="card-h-sub muted tiny">
+            <span x-text="photos.length"></span>
+            <span x-text="photos.length === 1 ? 'folha pronta' : 'folhas prontas'"></span> ·
+            edita só QTD se for necessário
+          </div>
+        </div>
+      </div>
+
+      <template x-for="sheet in qtdSheets" :key="sheet.sheet_id">
+        <div class="card">
+          <div class="card-h" style="padding:8px 12px;">
+            <div>
+              <div class="card-h-title" style="font-size:13px;">
+                <span x-text="sheet.operador || '—'"></span> · <span x-text="sheet.data || '—'"></span>
+              </div>
+              <div class="muted tiny">
+                Folha #<span x-text="sheet.sheet_id"></span> ·
+                <span x-text="sheet.rows.length"></span>
+                <span x-text="sheet.rows.length === 1 ? ' linha' : ' linhas'"></span>
+              </div>
+            </div>
+          </div>
+          <div class="card-b" style="padding:0;">
+            <table style="width:100%; border-collapse:collapse;" class="qtd-table">
+              <thead>
+                <tr style="background:var(--paper-2); font-size:11px;">
+                  <th style="text-align:left; padding:6px 8px; width:32px;">#</th>
+                  <th style="text-align:left; padding:6px 8px; width:80px;">OF</th>
+                  <th style="text-align:left; padding:6px 8px;">Modelo</th>
+                  <th style="text-align:right; padding:6px 8px; width:80px;">QTD</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="row in sheet.rows" :key="row.row_index">
+                  <tr style="border-top:1px solid var(--rule);">
+                    <td class="mono tiny" style="padding:8px;" x-text="row.row_index + 1"></td>
+                    <td class="mono tiny" style="padding:8px; font-weight:600;"
+                        x-text="row.of || '—'"></td>
+                    <td class="mono tiny" style="padding:8px;">
+                      <span x-text="row.modelo || '—'"></span>
+                      <div class="muted" style="font-size:10px;" x-text="row.cliente"></div>
+                    </td>
+                    <td style="padding:6px 8px;">
+                      <input type="number" inputmode="numeric"
+                             :value="row.qtd"
+                             @input="row.qtd = $event.target.value"
+                             style="width:100%; padding:6px; text-align:right;
+                                    font-family:var(--font-mono); font-size:14px;
+                                    border:1px solid var(--rule-2); border-radius:4px;">
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+              <tfoot>
+                <tr style="background:var(--paper-2); border-top:2px solid var(--rule-2);">
+                  <td colspan="3" style="padding:8px; font-weight:600;">
+                    Total colunas produzidas
+                  </td>
+                  <td style="padding:6px 8px;">
+                    <input type="number" inputmode="numeric"
+                           :value="sheet.colunas_produzidas"
+                           @input="sheet.colunas_produzidas = $event.target.value"
+                           style="width:100%; padding:6px; text-align:right;
+                                  font-family:var(--font-mono); font-size:14px; font-weight:600;
+                                  border:1px solid var(--rule-2); border-radius:4px;">
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      </template>
+
+      <div style="display:flex; gap:10px;">
+        <button class="btn lg" style="flex:1;" @click="skipConfirm()">Saltar</button>
+        <button class="btn lg primary" style="flex:2;" @click="submitQtds()" :disabled="savingQtds">
+          <span x-show="!savingQtds">Confirmar e gravar</span>
+          <span x-show="savingQtds" style="display:flex; align-items:center; gap:8px;">
+            <span class="spinner" style="width:16px; height:16px; border-width:2px;"></span>
+            A gravar…
+          </span>
+        </button>
+      </div>
+    </div>
+  </template>
+
+  <!-- ============== STAGE: DONE (success) ============== -->
+  <template x-if="stage === 'done'">
+    <div class="proc">
+      <div style="font-size:80px; line-height:1;">✓</div>
+      <div style="font-size:24px; font-weight:600;">
+        <span x-text="photos.length"></span>
+        <span x-text="photos.length === 1 ? 'kanban gravado' : 'kanbans gravados'"></span>
+      </div>
+      <div class="muted">Bom trabalho!</div>
+      <button class="btn lg primary" @click="reset()" style="margin-top:24px;">
+        Tirar mais fotos
+      </button>
+    </div>
+  </template>
+
+  <canvas x-ref="canvas" style="display:none;"></canvas>
+</div>
+
+<style>
+.thumb-strip {
+  display:flex; gap:8px; overflow-x:auto; padding:4px 0;
+  scrollbar-width: thin;
+}
+.thumb {
+  position:relative; flex-shrink:0; width:84px; height:108px;
+  border-radius:8px; overflow:hidden; background:#2a271f;
+}
+.thumb img { width:100%; height:100%; object-fit:cover; display:block; }
+.thumb-num {
+  position:absolute; top:4px; left:4px;
+  background:rgba(0,0,0,0.7); color:#fff;
+  font-size:11px; font-weight:600; padding:2px 6px; border-radius:4px;
+}
+.thumb-x {
+  position:absolute; top:4px; right:4px;
+  background:rgba(220,40,40,0.85); color:#fff; border:none;
+  width:20px; height:20px; border-radius:50%;
+  font-size:14px; line-height:1; cursor:pointer;
+  display:flex; align-items:center; justify-content:center; padding:0;
+}
+.thumb-grid {
+  display:grid; gap:8px;
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+}
+.thumb-grid-item {
+  position:relative; aspect-ratio: 3/4;
+  border-radius:8px; overflow:hidden; background:#2a271f;
+}
+.thumb-grid-item img { width:100%; height:100%; object-fit:cover; display:block; }
+</style>
+
+<script>
+function captureApp() {
+  return {
+    stage: 'preview',         // preview | confirm | uploading | qtd_confirm | done
+    streamReady: false,
+    streamErr: '',
+    photos: [],               // [{ id, blob, url }]
+    uploadIdx: 0,
+    uploadedSheetIds: [],     // sheet_ids returned by /upload?return=json
+    qtdSheets: [],            // payload from GET /mobile/qtds for editing QTDs
+    savingQtds: false,
+    _stream: null,
+    _photoCounter: 0,
+    _backLockArmed: false,
+
+    // Round 50 — lock browser back button after upload completes so the
+    // operator can't accidentally undo finalised work. Stays armed on
+    // 'uploading', 'qtd_confirm' and 'done' stages. Cleared on reset().
+    armBackLock() {
+      if (this._backLockArmed) return;
+      this._backLockArmed = true;
+      history.pushState({ locked: true }, '', location.href);
+      window.addEventListener('popstate', this._onPopState.bind(this));
+    },
+    _onPopState(e) {
+      // Block any attempt to navigate back during a locked stage.
+      const lockedStages = ['uploading', 'qtd_confirm', 'done'];
+      if (lockedStages.includes(this.stage)) {
+        history.pushState({ locked: true }, '', location.href);
+      }
+    },
+    disarmBackLock() {
+      if (!this._backLockArmed) return;
+      this._backLockArmed = false;
+      window.removeEventListener('popstate', this._onPopState.bind(this));
+    },
+
+    async start() {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        this.streamErr = 'Browser sem suporte a câmara.';
+        return;
+      }
+      try {
+        this._stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: 'environment' },
+            width:  { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
+          audio: false,
+        });
+        const v = this.$refs.video;
+        if (v) {
+          v.srcObject = this._stream;
+          await v.play().catch(() => {});
+          this.streamReady = true;
+        }
+      } catch (e) {
+        this.streamErr = e.message || 'Sem acesso à câmara';
+      }
+    },
+
+    stopStream() {
+      if (this._stream) {
+        this._stream.getTracks().forEach(t => t.stop());
+        this._stream = null;
+      }
+      this.streamReady = false;
+    },
+
+    shoot() {
+      const v = this.$refs.video;
+      if (!v || !v.videoWidth) return;
+      const c = this.$refs.canvas;
+      const maxW = 1600;
+      const ratio = Math.min(1, maxW / Math.max(v.videoWidth, v.videoHeight));
+      c.width = Math.round(v.videoWidth * ratio);
+      c.height = Math.round(v.videoHeight * ratio);
+      c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+      c.toBlob(b => {
+        if (!b) return;
+        this._photoCounter++;
+        this.photos.push({
+          id: this._photoCounter,
+          blob: b,
+          url: URL.createObjectURL(b),
+        });
+        // Brief flash effect for feedback (could enhance later)
+      }, 'image/jpeg', 0.85);
+    },
+
+    onFiles(ev) {
+      const files = Array.from(ev.target.files || []);
+      for (const f of files) {
+        this._photoCounter++;
+        this.photos.push({
+          id: this._photoCounter,
+          blob: f,
+          url: URL.createObjectURL(f),
+        });
+      }
+    },
+
+    removePhoto(id) {
+      const idx = this.photos.findIndex(p => p.id === id);
+      if (idx >= 0) {
+        URL.revokeObjectURL(this.photos[idx].url);
+        this.photos.splice(idx, 1);
+      }
+    },
+
+    goConfirm() {
+      if (this.photos.length === 0) return;
+      this.stopStream();
+      this.stage = 'confirm';
+    },
+
+    backToPreview() {
+      this.stage = 'preview';
+      this.start();
+    },
+
+    async uploadAll() {
+      if (this.photos.length === 0) return;
+      this.stage = 'uploading';
+      this.armBackLock();
+      this.uploadIdx = 0;
+      this.uploadedSheetIds = [];
+      const totalCount = this.photos.length;
+      let okCount = 0;
+      let failures = [];
+
+      for (let i = 0; i < this.photos.length; i++) {
+        this.uploadIdx = i;
+        const photo = this.photos[i];
+        const fd = new FormData();
+        fd.append('image', photo.blob, `kanban_${i+1}.jpeg`);
+        try {
+          // Generous timeout (60s) — OCR pipeline takes ~25s; give slack for slow networks
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 90_000);
+          const res = await fetch('/upload?return=json', {
+            method: 'POST',
+            body: fd,
+            signal: ctrl.signal,
+          });
+          clearTimeout(timer);
+          console.log(`[upload ${i+1}/${totalCount}] HTTP ${res.status}`);
+          if (res.ok) {
+            const body = await res.json().catch(() => ({}));
+            console.log(`[upload ${i+1}/${totalCount}] body:`, body);
+            if (body.status === 'ok' && body.sheet_id) {
+              okCount++;
+              this.uploadedSheetIds.push(body.sheet_id);
+            } else {
+              failures.push({i: i+1, reason: body.error || 'OCR error'});
+            }
+          } else {
+            failures.push({i: i+1, reason: `HTTP ${res.status}`});
+          }
+        } catch (e) {
+          console.error(`[upload ${i+1}/${totalCount}] error:`, e);
+          failures.push({i: i+1, reason: e.name === 'AbortError' ? 'timeout' : e.message});
+        }
+      }
+      this.uploadIdx = totalCount;
+      console.log(`[uploadAll] sheet IDs uploaded:`, this.uploadedSheetIds);
+
+      if (failures.length > 0) {
+        const msg = failures.map(f => `Foto ${f.i}: ${f.reason}`).join('\n');
+        alert(`${okCount} de ${totalCount} enviadas com sucesso.\n\nFalharam:\n${msg}`);
+      }
+
+      // Move to QTD-confirm stage if any sheet succeeded; else go straight to done
+      if (this.uploadedSheetIds.length > 0) {
+        await this.loadQtds();
+        console.log(`[uploadAll] qtdSheets loaded:`, this.qtdSheets);
+        if (this.qtdSheets.length > 0) {
+          this.stage = 'qtd_confirm';
+          return;
+        }
+      }
+      this.stage = 'done';
+    },
+
+    async loadQtds() {
+      try {
+        const ids = this.uploadedSheetIds.join(',');
+        console.log(`[loadQtds] requesting /mobile/qtds?ids=${ids}`);
+        const res = await fetch(`/mobile/qtds?ids=${encodeURIComponent(ids)}`);
+        console.log(`[loadQtds] HTTP ${res.status}`);
+        if (!res.ok) { this.qtdSheets = []; return; }
+        const body = await res.json();
+        console.log(`[loadQtds] received ${(body.sheets || []).length} sheets`);
+        this.qtdSheets = body.sheets || [];
+      } catch (e) {
+        console.error(`[loadQtds] error:`, e);
+        this.qtdSheets = [];
+      }
+    },
+
+    async submitQtds() {
+      if (this.savingQtds) return;
+      this.savingQtds = true;
+      // Build edits: only QTD per row + colunas_produzidas
+      const edits = [];
+      for (const s of this.qtdSheets) {
+        for (const r of s.rows) {
+          edits.push({
+            sheet_id: s.sheet_id,
+            field_path: `rows[${r.row_index}].qtd`,
+            value: String(r.qtd ?? ''),
+          });
+        }
+        edits.push({
+          sheet_id: s.sheet_id,
+          field_path: 'footer.colunas_produzidas',
+          value: String(s.colunas_produzidas ?? ''),
+        });
+      }
+      try {
+        const res = await fetch('/mobile/qtds-batch', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({edits}),
+        });
+        if (!res.ok) throw new Error('save failed');
+      } catch (e) {
+        alert('Erro a gravar quantidades: ' + e.message);
+      }
+      this.savingQtds = false;
+      this.stage = 'done';
+    },
+
+    skipConfirm() {
+      // Operator chose not to edit QTDs — proceed to done with existing values
+      this.stage = 'done';
+    },
+
+    reset() {
+      // Round 50 — disarm back-lock when starting fresh capture
+      this.disarmBackLock();
+      // Clean up object URLs to avoid memory leak
+      for (const p of this.photos) URL.revokeObjectURL(p.url);
+      this.photos = [];
+      this.uploadIdx = 0;
+      this.uploadedSheetIds = [];
+      this.qtdSheets = [];
+      this.savingQtds = false;
+      this._photoCounter = 0;
+      this.streamErr = '';
+      this.stage = 'preview';
+      this.start();
+    },
+  };
+}
+</script>
+{% endblock %}

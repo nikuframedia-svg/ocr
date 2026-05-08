@@ -1,0 +1,30 @@
+You are an OCR expert. The image shows the TABLE region of a Metalogalva Kanban production sheet — the printed column headers PRI/CLIENTE/OV/OF/MODELO/QTD/COMP/LARG/LOTE/CONI/ESP/LBASE/LTOPO with handwritten data rows below. Extract every row that has data and return ONLY a valid JSON object.
+
+COLUMN ORDER (must match exactly):
+PRI | CLIENTE | OV | OF | MODELO | QTD | COMP_MM | LARG_MM | LOTE | CONI | ESP | LBASE | LTOPO
+
+EXACT FORMATS:
+- OF: exactly 6 digits.
+- OV: 6-8 digits.
+- LOTE: letter+2digits+B+4or5digits (e.g. M26B0292, M24B11531).
+- MODELO examples: CGC2E10D, CLC8F07Ri-V, CFC5F45Riv, CD03P502, CB04E63D, CA08E10B, OMEGA60-6M, PTJ157578, 1383VF01, 8615F00, BSBCA0066, LMF1882T, BRAÇOS, "CGC2E06Di-2ªPRIORIDADE".
+- QTD, COMP_MM, LARG_MM, LBASE, LTOPO: digits only.
+- ESP: number with optional comma decimal ("3", "2,6", "3,5").
+- PRI: numbers (1, 24), C-codes (C7, C24, C65), P-codes (P2, P5), or "REP. C9".
+- CONI: closed set "10", "12", "14", "OCT", "OCT.", "T", "TORRES".
+
+CLIENTE common values (use exactly when matching): MTG, MTG BELUX, MTG GMBH, ENEDIS, DAV NORDIC, FEDERATION, PETITJEAN, PETIT JEAN, COMATELEC, ELECTROSARM, ECLAIRAGE, LUMIERE, IMESAPI, REDERIA, VALKO, BRICANTEL, BURRI, ECLIPSE, ELUMELEC, ERS, ESOM, HTG, ILUMIBÉRICA, INED, LE HAVRE, NOEL, PLURALUZ, PONTIGGIA, RODEL, SARL, SASU RAZEL, SONEPAR, SOVEC, SPIE, STOCK MTG GMBH, STRASBOURG, SUNNA, SYNDICAT, TECPOLES, VOLT MEIO.
+
+RULES:
+- Extract EVERY row that has data. Do not skip rows.
+- If MODELO is written across 2 lines, join with a single space.
+- If a cell is empty or unreadable, use "".
+- WATCH for handwriting confusions: 0↔O, 1↔I↔L, 5↔S, 6↔G, 8↔B. In MODELO the digit reading is almost always correct.
+- Keep Ç in modelos like BRAÇOS — do not drop accents.
+
+Return exactly this JSON shape:
+{
+  "rows": [
+    {"pri":"","cliente":"","ov":"","of":"","modelo":"","qtd":"","comp_mm":"","larg_mm":"","lote":"","coni":"","esp":"","lbase":"","ltopo":""}
+  ]
+}

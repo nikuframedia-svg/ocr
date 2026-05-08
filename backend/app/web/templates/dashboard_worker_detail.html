@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% set live = true %}
+{% block title %}{{ detail.operador }} — Dashboard{% endblock %}
+{% block content %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+<div class="page-h">
+  <div>
+    <div class="page-eyebrow">Dashboard · Trabalhador</div>
+    <h1 class="page-title">{{ detail.operador }}</h1>
+  </div>
+  <a href="/dashboard/workers" class="btn">← voltar</a>
+</div>
+
+<div id="dash-data" class="page-content"
+     hx-get="{{ request.url }}"
+     hx-trigger="every 30s"
+     hx-select="#dash-data"
+     hx-swap="outerHTML">
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;" class="d-grid">
+    <div class="card">
+      <div class="card-h"><div class="card-h-title">Output por dia</div></div>
+      <div class="card-b">
+        {% if detail.per_day %}
+          <canvas id="chartPerDay" height="160"></canvas>
+        {% else %}<div class="muted">Sem dados.</div>{% endif %}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><div class="card-h-title">Mix por cliente</div></div>
+      {% if detail.mix_cliente %}
+      <table class="tbl">
+        <thead><tr><th>Cliente</th><th style="text-align:right;">Qtd</th><th style="text-align:right;">OFs</th></tr></thead>
+        <tbody>
+        {% for r in detail.mix_cliente %}
+        <tr><td>{{ r.cliente }}</td><td class="mono" style="text-align:right;">{{ r.qty }}</td><td class="mono" style="text-align:right;">{{ r.ofs }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<div class="card-b muted">Sem dados.</div>{% endif %}
+    </div>
+  </div>
+
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;" class="d-grid">
+    <div class="card">
+      <div class="card-h"><div class="card-h-title">Matriz competências</div><div class="card-h-sub">Por modelo</div></div>
+      {% if detail.mix_modelo %}
+      <div class="scroll-x">
+        <table class="tbl" style="font-size:11px;">
+          <thead><tr><th>Modelo</th><th style="text-align:right;">Qtd</th><th style="text-align:right;">Linhas</th><th style="text-align:right;">Comp médio</th></tr></thead>
+          <tbody>
+          {% for r in detail.mix_modelo %}
+          <tr><td class="mono">{{ r.modelo }}</td><td class="mono" style="text-align:right;">{{ r.qty }}</td><td class="mono" style="text-align:right;">{{ r.rows }}</td><td class="mono" style="text-align:right;">{{ "%.0f"|format(r.avg_comp or 0) }}mm</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}<div class="card-b muted">Sem dados.</div>{% endif %}
+    </div>
+
+    <div class="card">
+      <div class="card-h"><div class="card-h-title">Folhas recentes</div></div>
+      {% if detail.recent_sheets %}
+      <table class="tbl">
+        <thead><tr><th>#</th><th>Data</th><th>Estado</th><th style="text-align:right;">Horas</th></tr></thead>
+        <tbody>
+        {% for r in detail.recent_sheets %}
+        <tr>
+          <td class="mono"><a href="/sheet/{{ r.sheet_id }}">{{ r.sheet_id }}</a></td>
+          <td>{{ r.sheet_iso_date }}</td>
+          <td class="muted tiny">{{ r.sheet_status }}</td>
+          <td class="mono" style="text-align:right;">{{ "%.1f"|format(r.sheet_hours or 0) }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<div class="card-b muted">Sem folhas.</div>{% endif %}
+    </div>
+  </div>
+</div>
+
+<style>
+  @media (max-width: 900px) {
+    .d-grid { grid-template-columns: 1fr !important; }
+  }
+</style>
+
+<script>
+{% if detail.per_day %}
+new Chart(document.getElementById('chartPerDay'), {
+  type: 'bar',
+  data: {
+    labels: {{ detail.per_day | map(attribute='day') | list | tojson }},
+    datasets: [{
+      label: 'qtd',
+      data: {{ detail.per_day | map(attribute='qty') | list | tojson }},
+      backgroundColor: '#16140F',
+      borderRadius: 2,
+    }],
+  },
+  options: {
+    plugins: { legend: { display: false } },
+    scales: { x: { grid: { display: false } }, y: { beginAtZero: true } },
+  },
+});
+{% endif %}
+</script>
+
+{% endblock %}

@@ -1,0 +1,60 @@
+You are an OCR and data extraction expert. Analyze this industrial Kanban production sheet image carefully.
+
+Extract ALL data and return ONLY a valid JSON object. No markdown, no <think> blocks, no explanation.
+
+The sheet has:
+1. HEADER fields: Operador (full name), N° (operator number), Setor/Maquina, Data
+2. A TABLE with exactly these columns in order:
+   PRI | CLIENTE | OV | OF | MODELO | QTD | COMP_MM | LARG_MM | LOTE | CONI | ESP | LBASE | LTOPO
+3. FOOTER fields: Colunas Produzidas, Horas Trabalhadas
+
+KNOWN VALUES (these have been seen on previous sheets — use exactly when matching):
+
+OPERADOR (and N°): "JÚLIO LIMA" (0537), "VITOR CARVALHO" (1391), "AUGUSTO MONTEIRO" (95)
+
+SETOR/MAQUINA: only "BOBINE-FORMATO" has been observed.
+
+CLIENTE — common values, use exactly when matching: MTG, MTG BELUX, MTG GMBH, ENEDIS, DAV NORDIC, FEDERATION, PETITJEAN, PETIT JEAN, COMATELEC, ELECTROSARM, ECLAIRAGE, LUMIERE, IMESAPI, REDERIA, VALKO, BRICANTEL, BURRI, ECLIPSE, ELUMELEC, ERS, ESOM, HTG, ILUMIBÉRICA, INED, LE HAVRE, NOEL, PLURALUZ, PONTIGGIA, RODEL, SARL, SASU RAZEL, SONEPAR, SOVEC, SPIE, STOCK MTG GMBH, STRASBOURG, SUNNA, SYNDICAT, TECPOLES, VOLT MEIO.
+
+CONI — closed set: "10", "12", "14", "OCT", "OCT.", "T", "TORRES".
+
+EXACT FORMATS:
+- DATA: DD-MM-YYYY (e.g. 18-04-2026). Single-digit day or month is OK ("9-4-2026") but PREFER zero-padded.
+- OF: exactly 6 digits (e.g. 261860).
+- OV: 6 to 8 digits (e.g. 250010, 2602787).
+- LOTE: letter+2digits+B+4or5digits (e.g. M26B0292, M24B11531).
+- MODELO examples: CGC2E10D, CLC8F07Ri-V, CFC5F45Riv, CD03P502, CB04E63D, CA08E10B, OMEGA60-6M, PTJ157578, 1383VF01, 8615F00, BSBCA0066, LMF1882T, BRAÇOS, "CGC2E06Di-2ªPRIORIDADE".
+- QTD, COMP_MM, LARG_MM, LBASE, LTOPO: digits only.
+- ESP: number with optional comma decimal (e.g. "3", "2,6", "3,5").
+- HORAS_TRABALHADAS: time-like "5:30", "8:00", "0:30", or just hours "6", "6 H", "10:00".
+
+IMPORTANT RULES:
+- Extract EVERY row that has data — do not skip any row.
+- If MODELO is written across 2 lines, join with a single space.
+- PRI values: numbers (1, 24), C-codes (C7, C24, C65), P-codes (P2, P5), or "REP. C9".
+- CLIENTE may have no spaces (MTGBELUX) or spaces (MTG BELUX, DAV NORDIC, LE HAVRE, MTG GMBH, MTG.GMBH).
+- If a field is empty or not visible, use "".
+- Normalize date separators to "-" (so "18/04/2026" → "18-04-2026").
+
+WATCH OUT FOR THESE COMMON CONFUSIONS in handwritten cells:
+- 0 (zero) vs O (letter) — MODELO almost always has digits where they look like 0.
+- 1 (one) vs I (letter) vs L (letter) — usually 1 in MODELO codes.
+- 5 vs S, 6 vs G, 8 vs B — handwriting can blur these.
+- Ç in modelos like BRAÇOS — keep the cedilla, don't drop it.
+
+Return this exact JSON structure:
+{
+  "header": {
+    "operador": "FULL NAME",
+    "n_operador": "e.g. 0537",
+    "setor_maquina": "BOBINE-FORMATO",
+    "data": "DD-MM-YYYY"
+  },
+  "rows": [
+    {"pri":"","cliente":"","ov":"","of":"","modelo":"","qtd":"","comp_mm":"","larg_mm":"","lote":"","coni":"","esp":"","lbase":"","ltopo":""}
+  ],
+  "footer": {
+    "colunas_produzidas": "",
+    "horas_trabalhadas": ""
+  }
+}

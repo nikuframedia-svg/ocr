@@ -1,0 +1,317 @@
+{% extends "base.html" %}
+{% block title %}Kanban Viewer — Metalogalva OCR{% endblock %}
+{% block content %}
+
+<div class="page-h">
+  <div>
+    <div class="page-eyebrow">Revisão · Filtros multi</div>
+    <h1 class="page-title">Kanban Viewer</h1>
+  </div>
+  {% if sheet %}
+    <div style="display:flex; gap:12px; align-items:center;">
+      {# Validate button + status pill — Round 34: at top of page #}
+      {% if sheet.status == 'validated' %}
+        <span class="pill ok">✓ Validada · {{ sheet.operador }}</span>
+      {% else %}
+        <form method="post" action="/sheet/{{ sheet.id }}/validate"
+              style="display:inline-flex; gap:8px; align-items:center;">
+          <select name="operador" required class="kv-select" style="min-width:180px;">
+            <option value="">Confirmar operador…</option>
+            {% for op in valid_operadores %}
+              <option value="{{ op }}" {% if op == current_operador %}selected{% endif %}>{{ op }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn primary" type="submit">Validar</button>
+        </form>
+      {% endif %}
+    </div>
+  {% endif %}
+</div>
+
+<div class="page-content">
+
+{# ============== STICKY TOOLBAR — multi-filter (Round 34) ============== #}
+<div class="kv-toolbar kv-sticky">
+  <form action="/kanbans" method="get" style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+
+    <label style="display:inline-flex; align-items:center; gap:6px;">
+      <span class="lbl" style="margin:0;">OPERADOR</span>
+      <select name="operador" class="kv-select" onchange="this.form.submit()">
+        <option value="">— Todos —</option>
+        {% for op in operadores %}
+          <option value="{{ op }}" {% if op == current_operador %}selected{% endif %}>{{ op }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label style="display:inline-flex; align-items:center; gap:6px;">
+      <span class="lbl" style="margin:0;">DATA</span>
+      <input type="date" name="data" value="{{ current_data or '' }}"
+             class="kv-select"
+             onchange="this.form.submit()">
+    </label>
+
+    <label style="display:inline-flex; align-items:center; gap:6px;">
+      <span class="lbl" style="margin:0;">SETOR</span>
+      <select name="setor" class="kv-select" onchange="this.form.submit()">
+        <option value="">— Todos —</option>
+        {% for s in setores %}
+          <option value="{{ s }}" {% if s == current_setor %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label style="display:inline-flex; align-items:center; gap:6px;">
+      <span class="lbl" style="margin:0;">ESTADO</span>
+      <select name="status" class="kv-select" onchange="this.form.submit()">
+        <option value="" {% if not current_status %}selected{% endif %}>— Todas —</option>
+        <option value="extracted" {% if current_status == 'extracted' %}selected{% endif %}>Não validadas</option>
+        <option value="validated" {% if current_status == 'validated' %}selected{% endif %}>Validadas</option>
+      </select>
+    </label>
+
+    <label style="display:inline-flex; align-items:center; gap:6px;">
+      <span class="lbl" style="margin:0;">OF</span>
+      <input type="text" name="of" value="{{ current_of or '' }}"
+             class="kv-select" style="min-width:120px;"
+             placeholder="ex.: 261699">
+    </label>
+
+    {% if current_operador or current_data or current_setor or current_of or current_status %}
+      <a class="btn ghost" href="/kanbans" style="font-size:12px;">✕ Limpar filtros</a>
+    {% endif %}
+
+    {# Kanban nav within filtered set (Round 34: keyboard ←/→ work) #}
+    {% if sheet %}
+      {% set _qs %}{% if current_operador %}operador={{ current_operador|urlencode }}&{% endif %}{% if current_data %}data={{ current_data|urlencode }}&{% endif %}{% if current_setor %}setor={{ current_setor|urlencode }}&{% endif %}{% if current_of %}of={{ current_of|urlencode }}&{% endif %}{% if current_status %}status={{ current_status|urlencode }}&{% endif %}{% endset %}
+      <div class="kv-nav" style="margin-left:auto;">
+        <a class="btn" id="kv-prev"
+           href="{% if neighbors.prev_id %}/kanbans?{{ _qs }}sheet_id={{ neighbors.prev_id }}{% else %}#{% endif %}"
+           {% if not neighbors.prev_id %}aria-disabled="true" style="opacity:.4; pointer-events:none;"{% endif %}>⬅</a>
+        <span class="kv-pos mono">
+          <span>{{ neighbors.position }}</span>/<span>{{ neighbors.total }}</span>
+        </span>
+        <a class="btn" id="kv-next"
+           href="{% if neighbors.next_id %}/kanbans?{{ _qs }}sheet_id={{ neighbors.next_id }}{% else %}#{% endif %}"
+           {% if not neighbors.next_id %}aria-disabled="true" style="opacity:.4; pointer-events:none;"{% endif %}>➡</a>
+      </div>
+    {% endif %}
+  </form>
+</div>
+
+{% if not operadores %}
+  <div class="alert warn" style="margin-top:16px;">
+    <span>Sem operadores. Tira fotos primeiro em <a href="/capture">/capture</a>.</span>
+  </div>
+{% elif not sheet %}
+  <div class="alert warn" style="margin-top:16px;">
+    <span>Nenhum kanban combina os filtros actuais.
+      <a href="/kanbans">Limpar</a>.
+    </span>
+  </div>
+{% else %}
+
+  {# ============== HEADER CARD ============== #}
+  <div class="card" style="margin-top:16px;">
+    <div class="card-h">
+      <div class="card-h-title">Cabeçalho · Folha #{{ sheet.id }}</div>
+      <div class="card-h-sub muted tiny">Capturada {{ sheet.captured_at }}</div>
+    </div>
+    <div class="card-b">
+      <table class="kv-table">
+        <tbody>
+          {% for f in header_fields %}
+            {% set field_path = 'header.' ~ f %}
+            {% set value = header.get(f, '') %}
+            {% set audit = cells_by_path.get(field_path, {}) %}
+            {% set edited = audit.fix_chain | length > 0 if audit else false %}
+            <tr>
+              <th class="kv-label">{{ f.upper().replace('_', ' ') }}</th>
+              {% with field_path=field_path, value=value, audit=audit, edited=edited, sheet_id=sheet.id %}
+                {% include "_cell.html" %}
+              {% endwith %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {# ============== ROWS — TABLE LAYOUT (Round 34) ============== #}
+  <div class="card" style="margin-top:12px;">
+    <div class="card-h">
+      <div class="card-h-title">Linhas de Produção ({{ rows | length }})</div>
+    </div>
+    <div class="card-b" style="padding:0; overflow-x:auto;">
+      {% if not rows %}
+        <div class="muted tiny" style="padding:12px;">Sem linhas extraídas.</div>
+      {% else %}
+        <table class="tbl kv-rows-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              {% for f in row_fields %}
+                <th>{{ f.upper().replace('_', ' ') }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for row_idx in range(rows | length) %}
+              {% set row = rows[row_idx] %}
+              <tr>
+                <td class="mono tiny" style="background:var(--paper-2); padding:6px 8px;">L{{ row_idx + 1 }}</td>
+                {% for f in row_fields %}
+                  {% set field_path = 'rows[' ~ row_idx ~ '].' ~ f %}
+                  {% set value = row.get(f, '') %}
+                  {% set audit = cells_by_path.get(field_path, {}) %}
+                  {% set edited = audit.fix_chain | length > 0 if audit else false %}
+                  {% with field_path=field_path, value=value, audit=audit, edited=edited, sheet_id=sheet.id %}
+                    {% include "_cell.html" %}
+                  {% endwith %}
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+    </div>
+  </div>
+
+  {# ============== FOOTER CARD ============== #}
+  <div class="card" style="margin-top:12px;">
+    <div class="card-h">
+      <div class="card-h-title">Rodapé</div>
+    </div>
+    <div class="card-b">
+      <table class="kv-table">
+        <tbody>
+          {% for f in footer_fields %}
+            {% set field_path = 'footer.' ~ f %}
+            {% set value = footer.get(f, '') %}
+            {% set audit = cells_by_path.get(field_path, {}) %}
+            {% set edited = audit.fix_chain | length > 0 if audit else false %}
+            <tr>
+              <th class="kv-label">{{ f.upper().replace('_', ' ') }}</th>
+              {% with field_path=field_path, value=value, audit=audit, edited=edited, sheet_id=sheet.id %}
+                {% include "_cell.html" %}
+              {% endwith %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {# ============== ACTIONS (CSV download + view alternates) ============== #}
+  <div style="display:flex; gap:10px; margin-top:16px; align-items:center; flex-wrap:wrap;">
+    <a class="btn" href="/sheet/{{ sheet.id }}/csv">Baixar CSV</a>
+    <a class="btn ghost" href="/sheet/{{ sheet.id }}">Vista Tabela</a>
+  </div>
+
+  {# ============== PHOTO (collapsible, default closed) ============== #}
+  <details class="card" style="margin-top:12px;">
+    <summary class="card-h" style="cursor:pointer; user-select:none;">
+      <div class="card-h-title">Foto Original</div>
+      <div class="card-h-sub muted tiny">Click para expandir</div>
+    </summary>
+    <div class="card-b" style="position:relative;">
+      <img id="kv-img-{{ sheet.id }}" src="/image/{{ sheet.id }}"
+           alt="folha {{ sheet.id }}"
+           style="width:100%; max-height:60vh; object-fit:contain; display:block;">
+      <button type="button" class="btn"
+              style="position:absolute; top:14px; right:14px; padding:4px 10px; font-size:13px;"
+              title="Rodar 90° (se a foto está ao contrário)"
+              onclick="fetch('/sheet/{{ sheet.id }}/rotate', {method:'POST'})
+                         .then(r => r.json())
+                         .then(j => {
+                           const im = document.getElementById('kv-img-{{ sheet.id }}');
+                           im.src = '/image/{{ sheet.id }}?t=' + Date.now();
+                         });">↻ rodar</button>
+    </div>
+  </details>
+
+{% endif %}
+
+</div>{# end page-content #}
+
+<style>
+.kv-toolbar {
+  display:flex; align-items:center; gap:24px; flex-wrap:wrap;
+  padding:12px 16px;
+  background:var(--surface-2); border:1px solid var(--rule); border-radius:8px;
+}
+.kv-sticky {
+  position: sticky; top: 0; z-index: 20;
+  margin: -28px -40px 0 -40px;       /* offset page-content padding so sticky bar spans full width */
+  padding: 12px 40px;
+  border-radius: 0;
+  border-left: 0; border-right: 0; border-top: 0;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+}
+@media (max-width: 768px) {
+  .kv-sticky { margin: -18px -18px 0 -18px; padding: 10px 18px; }
+}
+.kv-select {
+  font-family:var(--font-sans); font-size:14px;
+  padding:6px 10px; border:1px solid var(--rule-2); border-radius:6px;
+  background:var(--surface); cursor:pointer; min-width:180px;
+}
+.kv-nav { display:flex; align-items:center; gap:6px; }
+.kv-pos { font-size:14px; padding:4px 12px; min-width:60px; text-align:center; }
+.kv-table { width:100%; border-collapse:collapse; }
+.kv-table tr { border-bottom:1px solid var(--rule); }
+.kv-table tr:last-child { border-bottom:none; }
+.kv-table .kv-label {
+  width:140px; min-width:140px;
+  padding:8px 12px;
+  font-family:var(--font-mono); font-size:11px;
+  letter-spacing:0.04em; text-transform:uppercase;
+  color:var(--ink-4);
+  text-align:left; vertical-align:middle;
+  background:var(--paper-2);
+  font-weight:500;
+}
+.kv-table td { padding:8px 12px; vertical-align:middle; }
+
+/* Round 34 — table with all rows visible at once.
+   Round 36b: removed sticky thead (top:60px) and nth-child(even) bg —
+   sticky thead overlapped data rows when combined with the sticky
+   filter toolbar (which now spans 2 lines with the new ESTADO + OF
+   filters), causing the 2nd data row to vanish behind the toolbar. */
+.kv-rows-table { font-size:12px; }
+.kv-rows-table th {
+  background: var(--paper-2);
+  padding: 6px 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+  white-space: nowrap;
+  border-bottom: 1px solid var(--rule-2);
+}
+.kv-rows-table td { padding: 0; }   /* let _cell.html control its own padding */
+
+@media (max-width: 700px) {
+  .kv-table .kv-label { width:100px; min-width:100px; font-size:10px; padding:6px 8px; }
+  .kv-table td { padding:6px 8px; }
+  .kv-toolbar { gap:12px; padding:10px; }
+  .kv-select { min-width:140px; font-size:13px; }
+}
+</style>
+
+<script>
+// Round 34 — keyboard arrows ←/→ navigate kanbans within filtered set
+window.addEventListener('keydown', (e) => {
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+  if (e.key === 'ArrowLeft') {
+    const a = document.getElementById('kv-prev');
+    if (a && !a.hasAttribute('aria-disabled')) a.click();
+  } else if (e.key === 'ArrowRight') {
+    const a = document.getElementById('kv-next');
+    if (a && !a.hasAttribute('aria-disabled')) a.click();
+  }
+});
+</script>
+
+{% endblock %}

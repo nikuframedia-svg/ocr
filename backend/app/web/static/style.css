@@ -1,0 +1,7 @@
+/* Cell colours by DQ confidence — applied via class on _cell.html */
+.cell-high { background: #ecfdf5; }
+.cell-mid  { background: #fef3c7; }
+.cell-low  { background: #fee2e2; }
+.cell-edited { box-shadow: inset 0 0 0 2px #6366f1; }
+
+[x-cloak] { display: none !important; }

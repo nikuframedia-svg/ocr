@@ -1,0 +1,87 @@
+{# Cell partial: returned by /sheet/{id}/edit (HTMX swap target).
+   Also rendered inline in sheet.html for initial render.
+
+   Behaviour:
+     - Desktop: click → inline edit input with autofocus + blur-to-save (Alpine).
+     - Mobile (window.innerWidth <= 768): click dispatches 'open-cell-editor'
+       event with cell metadata; sheet.html catches it and opens the
+       bottom-sheet modal which posts to the same /edit endpoint.
+#}
+{% set conf = audit.confidence if audit else 1.0 %}
+{% set cell_class = 'cell-conf-hi' if conf >= 0.9 else ('cell-conf-md' if conf >= 0.7 else 'cell-conf-lo') %}
+{# Round 33: cross-check status colors (overrides conf class for visual priority).
+   Round 41c: ESP NO_MATCH uses 'cc-warn' (strong yellow) — esp divergence
+   often indicates SAP data anomaly (e.g. M26B0358 lote esp 4.8 vs operator
+   2,6) rather than OCR error. Yellow = "verify with supervisor", red =
+   clear mismatch. #}
+{% set cc_status = cc_status_by_path.get(field_path, 'NA') if cc_status_by_path is defined else 'NA' %}
+{% set _is_dim_field = field_path.endswith('.esp') or field_path.endswith('.larg_mm')
+                      or field_path.endswith('.lbase') or field_path.endswith('.ltopo')
+                      or field_path.endswith('.comp_mm') %}
+{% if cc_status == 'MATCH' %}{% set cc_class = 'cc-match' %}
+{% elif cc_status == 'NO_MATCH' and _is_dim_field %}{% set cc_class = 'cc-warn' %}
+{% elif cc_status == 'NO_MATCH' %}{% set cc_class = 'cc-no-match' %}
+{% else %}{% set cc_class = 'cc-na' %}
+{% endif %}
+{% set cell_id = 'cell-' ~ field_path|replace('.','-')|replace('[','-')|replace(']','') %}
+{# Build human label from full path: "rows[3].cliente" -> "L4 · cliente"
+   (1-indexed for operator readability). split()[-1] dropped the row info. #}
+{% if field_path.startswith('rows[') %}
+  {% set _row_idx = field_path.split(']')[0].replace('rows[', '') | int %}
+  {% set _col = field_path.split('.', 1)[1] %}
+  {% set field_label = 'L' ~ (_row_idx + 1) ~ ' · ' ~ _col %}
+{% elif field_path.startswith('header.') %}
+  {% set field_label = 'CABEÇALHO · ' ~ field_path[7:] %}
+{% elif field_path.startswith('footer.') %}
+  {% set field_label = 'RODAPÉ · ' ~ field_path[7:] %}
+{% else %}
+  {% set field_label = field_path %}
+{% endif %}
+{# Round 50 — sheets validadas são read-only; sem click handler nem form. #}
+{% set _is_validated = sheet_status is defined and sheet_status == 'validated' %}
+<td class="{{ cell_class }} {{ cc_class }} {% if edited %}cell-edited{% endif %} {% if _is_validated %}cell-locked{% endif %}"
+    {% if cc_status == 'NO_MATCH' and cc_ref_by_path is defined %}title="Plan diz: {{ cc_ref_by_path.get(field_path, '') }}"{% endif %}
+    style="padding:6px 8px; font-family:var(--font-mono); font-size:12px; {% if _is_validated %}cursor:default;{% else %}cursor:text;{% endif %} min-width:60px;"
+    {% if not _is_validated %}
+    x-data='{
+      editing: false,
+      original: {{ value | tojson }},
+      isMobile() { return window.innerWidth <= 768; },
+      handleClick() {
+        if (this.isMobile()) {
+          this.$dispatch("open-cell-editor", {
+            sheet_id: {{ sheet_id }},
+            field_path: {{ field_path | tojson }},
+            value: this.original,
+            label: {{ field_label | tojson }},
+            cell_id: {{ cell_id | tojson }}
+          });
+        } else {
+          this.editing = true;
+        }
+      }
+    }'
+    {% endif %}
+    id="{{ cell_id }}">
+  {% if _is_validated %}
+  <div style="min-height:18px;">
+    {%- if value -%}{{ value }}{%- else -%}&nbsp;{%- endif -%}
+  </div>
+  {% else %}
+  <div x-show="!editing" @click="handleClick()" style="min-height:18px;">
+    {%- if value -%}{{ value }}{%- else -%}&nbsp;{%- endif -%}
+  </div>
+  <form x-show="editing" x-cloak
+        hx-post="/sheet/{{ sheet_id }}/edit"
+        hx-target="#{{ cell_id }}"
+        hx-swap="outerHTML"
+        @submit="editing = false">
+    <input type="hidden" name="field_path" value="{{ field_path }}">
+    <input type="text" name="new_value" value="{{ value }}"
+           x-init="$nextTick(() => $el.focus())"
+           @blur="$el.form.requestSubmit()"
+           @keydown.escape="editing = false; $el.value = original"
+           style="width:100%; font-family:var(--font-mono); font-size:12px; padding:2px 4px; border:1px solid var(--ink); border-radius:3px;">
+  </form>
+  {% endif %}
+</td>

@@ -1,0 +1,15 @@
+You are an OCR expert. The image shows the FOOTER strip of a Metalogalva Kanban production sheet (bottom ~17% of the page). Extract the two footer fields and return ONLY a valid JSON object with no markdown, no explanation.
+
+FORMATS:
+- COLUNAS_PRODUZIDAS: integer count, e.g. "264", "50", "876".
+- HORAS_TRABALHADAS: time-like "5:30", "8:00", "0:30", "10:00", or just hours "6", "6 H".
+
+Common values seen: "0:30", "3:00", "4:00", "5:30", "6", "6 H", "7:15", "8:00", "10:00".
+
+If a field is empty or unreadable, use "".
+
+Return exactly this JSON shape:
+{
+  "colunas_produzidas": "",
+  "horas_trabalhadas": ""
+}

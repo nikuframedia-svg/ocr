@@ -1,0 +1,262 @@
+{% extends "base.html" %}
+{% block title %}Produção — Metalogalva OCR{% endblock %}
+{% block content %}
+{% set live = true %}
+
+<div class="page-h">
+  <div>
+    <div class="page-eyebrow">KPI · Sector flow · {{ overview.period_label or '' }}</div>
+    <h1 class="page-title">Produção</h1>
+  </div>
+  <form method="get" action="/dashboard/production"
+        style="display:inline-flex; gap:12px; align-items:center; flex-wrap:wrap;">
+    {# Round 34 — period tabs #}
+    <div class="period-tabs">
+      {% for p, lbl in [('day','Dia'), ('week','Semana'), ('month','Mês'), ('year','Ano')] %}
+        <a href="/dashboard/production?period={{ p }}{% if date_filter %}&date={{ date_filter }}{% endif %}"
+           class="period-tab {% if period == p %}active{% endif %}">{{ lbl }}</a>
+      {% endfor %}
+    </div>
+    <input type="hidden" name="period" value="{{ period }}">
+    <label class="lbl" style="margin:0;">DATA</label>
+    <input type="date" name="date" value="{{ date_filter or '' }}"
+           class="kv-select" onchange="this.form.submit()">
+  </form>
+</div>
+
+<div class="page-content">
+
+  {# ============== TOP TOTALS BAR ============== #}
+  <div class="prod-totals">
+    <div class="prod-tot-card prod-tot-hero">
+      <div class="prod-tot-label">COLUNAS</div>
+      <div class="prod-tot-value">{{ overview.totals.colunas }}</div>
+    </div>
+    <div class="prod-tot-card">
+      <div class="prod-tot-label">COL/H</div>
+      <div class="prod-tot-value">{{ overview.totals.col_per_h }}</div>
+    </div>
+    <div class="prod-tot-card">
+      <div class="prod-tot-label">MIN/COL</div>
+      <div class="prod-tot-value">{{ overview.totals.min_per_col }}</div>
+    </div>
+    <div class="prod-tot-card">
+      <div class="prod-tot-label">HORAS TRAB.</div>
+      <div class="prod-tot-value">{{ overview.totals.hours }}</div>
+    </div>
+    <div class="prod-tot-card">
+      <div class="prod-tot-label">TONELADAS</div>
+      <div class="prod-tot-value">
+        {% if overview.totals.toneladas is none %}—{% else %}{{ overview.totals.toneladas }}{% endif %}
+      </div>
+    </div>
+    <div class="prod-tot-card prod-tot-meta">
+      <div class="prod-tot-label">% DESPERDÍCIO</div>
+      <div class="prod-tot-value">
+        {% if overview.totals.perc_desperdicio is none %}—{% else %}{{ overview.totals.perc_desperdicio }}%{% endif %}
+      </div>
+    </div>
+  </div>
+
+  {# ============== SECTOR FLOW ============== #}
+  <div class="prod-flow-wrap">
+    <div class="prod-flow">
+      {% for s in overview.sectors %}
+        <div class="prod-sector {% if s.has_data %}has-data{% else %}no-data{% endif %}"
+             data-sector="{{ s.name }}">
+          <div class="prod-sector-head">
+            <div class="prod-sector-name">{{ s.name }}</div>
+          </div>
+          <div class="prod-sector-body">
+            {% if s.has_data %}
+              <div class="prod-sector-qty">{{ s.qtd }} colunas</div>
+              <div class="prod-sector-stats">
+                <span>{{ s.col_per_h }} col/h</span>
+                <span>·</span>
+                <span>{{ s.hours }}h</span>
+              </div>
+            {% else %}
+              <div class="prod-sector-empty">— sem dados —</div>
+            {% endif %}
+          </div>
+          {% if s.machines %}
+            <div class="prod-machines">
+              {% for m in s.machines %}
+                <div class="prod-machine {% if m.qtd is none %}empty{% endif %}">
+                  <div class="prod-machine-code">{{ m.code }}</div>
+                  {% if m.qtd is none %}
+                    <div class="prod-machine-empty">—</div>
+                  {% else %}
+                    <div class="prod-machine-qty">{{ m.qtd }} col</div>
+                    <div class="prod-machine-stats">
+                      <span>{{ m.col_per_h }} col/h</span>
+                      <span>{{ m.hours }}h</span>
+                    </div>
+                  {% endif %}
+                </div>
+              {% endfor %}
+            </div>
+          {% endif %}
+        </div>
+        {% if not loop.last %}
+          <div class="prod-arrow">→</div>
+        {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+
+  {# ============== RIGHT-SIDE OPERATOR STATS ============== #}
+  <div class="prod-ops-bar">
+    <div class="prod-ops-card">
+      <div class="prod-tot-label">COL/OPERADOR</div>
+      <div class="prod-tot-value">{{ overview.totals.col_per_operador }}</div>
+    </div>
+    <div class="prod-ops-card">
+      <div class="prod-tot-label">N° OPERADORES</div>
+      <div class="prod-tot-value">{{ overview.totals.n_operadores }}</div>
+    </div>
+    <div class="prod-ops-card">
+      <div class="prod-tot-label">N° KANBANS</div>
+      <div class="prod-tot-value">{{ overview.totals.n_sheets }}</div>
+    </div>
+  </div>
+
+</div>{# end page-content #}
+
+<style>
+/* Round 34 — period tabs */
+.period-tabs {
+  display: inline-flex; gap: 0;
+  background: var(--paper-2);
+  border-radius: 8px; padding: 3px;
+}
+.period-tab {
+  font-family: var(--font-sans); font-size: 13px; font-weight: 500;
+  padding: 6px 14px; border-radius: 6px;
+  color: var(--ink-3); text-decoration: none;
+  transition: background .15s, color .15s;
+}
+.period-tab:hover { color: var(--ink); }
+.period-tab.active {
+  background: var(--ink); color: var(--paper);
+}
+
+.prod-totals {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px; margin-bottom: 20px;
+}
+.prod-tot-card {
+  background: var(--surface-2);
+  border: 1px solid var(--rule);
+  border-radius: 8px; padding: 10px 14px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.prod-tot-card.prod-tot-hero {
+  background: var(--ink); color: var(--paper);
+  border-color: var(--ink);
+}
+.prod-tot-card.prod-tot-hero .prod-tot-label { color: var(--paper-3); }
+.prod-tot-card.prod-tot-meta { background: var(--paper-2); }
+.prod-tot-label {
+  font-family: var(--font-mono); font-size: 10px;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--ink-4);
+}
+.prod-tot-value {
+  font-size: 28px; font-weight: 700; line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.prod-flow-wrap { overflow-x: auto; padding-bottom: 12px; }
+.prod-flow {
+  display: inline-flex; gap: 0; align-items: stretch;
+  min-width: 100%;
+}
+.prod-sector {
+  flex: 1; min-width: 160px;
+  background: var(--surface-2);
+  border: 1px solid var(--rule);
+  border-radius: 8px; padding: 12px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.prod-sector.has-data { border-top: 4px solid var(--accent); }
+.prod-sector.no-data { background: var(--paper-2); opacity: 0.7; }
+.prod-sector-head {
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 6px; margin-bottom: 4px;
+}
+.prod-sector-name {
+  font-family: var(--font-mono); font-size: 11px;
+  letter-spacing: 0.06em; font-weight: 600;
+  color: var(--ink-2);
+}
+.prod-sector-qty {
+  font-size: 22px; font-weight: 700; line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.prod-sector-stats {
+  font-family: var(--font-mono); font-size: 12px;
+  color: var(--ink-3); display: flex; gap: 6px;
+}
+.prod-sector-empty {
+  font-family: var(--font-mono); font-size: 11px;
+  color: var(--ink-4); padding: 8px 0;
+}
+
+.prod-machines {
+  display: flex; flex-direction: column; gap: 4px;
+  margin-top: 6px; padding-top: 6px;
+  border-top: 1px dashed var(--rule);
+}
+.prod-machine {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 6px; padding: 6px 8px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.prod-machine.empty { opacity: 0.5; }
+.prod-machine-code {
+  font-family: var(--font-mono); font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--ink-4); font-weight: 600;
+}
+.prod-machine-qty {
+  font-size: 14px; font-weight: 600; line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.prod-machine-stats {
+  font-family: var(--font-mono); font-size: 10px;
+  color: var(--ink-4); display: flex; gap: 6px; justify-content: space-between;
+}
+.prod-machine-empty {
+  font-family: var(--font-mono); font-size: 11px;
+  color: var(--ink-4);
+}
+
+.prod-arrow {
+  display: flex; align-items: center; justify-content: center;
+  padding: 0 6px; font-size: 18px; color: var(--ink-3);
+  font-weight: 600;
+}
+
+.prod-ops-bar {
+  display: flex; gap: 8px; margin-top: 24px;
+  flex-wrap: wrap;
+}
+.prod-ops-card {
+  flex: 1; min-width: 140px;
+  background: var(--surface-2);
+  border: 1px solid var(--rule);
+  border-radius: 8px; padding: 10px 14px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+
+@media (max-width: 768px) {
+  .prod-flow { flex-direction: column; }
+  .prod-arrow { transform: rotate(90deg); padding: 6px 0; }
+  .prod-totals { grid-template-columns: 1fr 1fr; }
+  .prod-tot-value { font-size: 22px; }
+}
+</style>
+
+{% endblock %}

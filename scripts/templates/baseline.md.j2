@@ -1,0 +1,58 @@
+# Baseline v0 — Phase 0
+
+**Generated:** {{ timestamp }} UTC
+**Run directory:** `{{ run_dir }}`
+**Model:** `{{ model }}`
+**Prompt versions:** {% for v in prompt_versions %}`{{ v[:12] }}`{% if not loop.last %}, {% endif %}{% endfor %}
+
+## Summary
+
+- Total sheets considered: **{{ total_sheets }}**
+- Sheets with a successful extraction: **{{ successful_sheets }}**
+- Average end-to-end latency: **{{ "%.0f"|format(average_latency_ms) }} ms** per sheet
+
+## Five metrics
+
+| Metric | Value |
+|---|---|
+| Field accuracy (global) | **{{ "%.1f"|format(metrics.field_accuracy * 100) }} %** |
+| Perfect-sheet rate | **{{ "%.1f"|format(metrics.perfect_sheet_rate * 100) }} %** |
+| Hallucination rate (expected-empty filled) | **{{ "%.1f"|format(metrics.hallucination_rate * 100) }} %** |
+| Critical-field accuracy (OF / MODELO / QTD) | **{{ "%.1f"|format(metrics.critical_field_accuracy * 100) }} %** |
+| Total field comparisons | {{ metrics.total_comparisons }} |
+
+## Accuracy by field
+
+| Field | Accuracy |
+|---|---|
+{% for field, acc in metrics.accuracy_by_field | dictsort -%}
+| `{{ field }}` | {{ "%.1f"|format(acc * 100) }} % |
+{% endfor %}
+
+## Top errors to eyeball
+
+{% if worst_errors %}{% for err in worst_errors -%}
+- **`{{ err.field_path }}`** in `{{ err.sheet }}`{% if err.is_critical %} *(critical)*{% endif %}{% if err.is_hallucination %} *(hallucination)*{% endif %}
+  - expected: `{{ err.expected or '<empty>' }}`
+  - actual:   `{{ err.actual or '<empty>' }}`
+{% endfor %}{% else %}
+*No mismatches — every comparison was a match.*
+{% endif %}
+{% if extraction_errors %}
+## Extraction failures
+
+{% for sheet, msg in extraction_errors -%}
+- `{{ sheet }}`: {{ msg }}
+{% endfor %}{% endif %}
+
+---
+
+## Notes for the next phase
+
+- Look at the *Top errors* section first; that points to which Phase 0.5
+  pre-processing step (deskew, dewarp, CLAHE, stain mask) or which
+  Phase 4 grammar (lexicon-constrained CLIENTE / OPERADOR / OF /
+  LOTE / MODELO) is likely to give the biggest lift.
+- Per-field accuracy below 80 % on a numeric or handwritten field
+  (LARG_MM, COMP_MM, QTD) is a strong signal that Phase 6 (operator
+  fine-tune of TrOCR for cells) should be prioritised.

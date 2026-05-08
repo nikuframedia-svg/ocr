@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% set live = true %}
+{% block title %}Histórico — Metalogalva OCR{% endblock %}
+{% block content %}
+<div class="page-h">
+  <div>
+    <div class="page-eyebrow">Chão de Fábrica · Histórico</div>
+    <h1 class="page-title">Folhas Kanban</h1>
+  </div>
+  <a class="btn primary" href="/capture">+ Nova captura</a>
+</div>
+
+<div id="dash-data" class="page-content"
+     hx-get="{{ request.url }}"
+     hx-trigger="every 30s"
+     hx-select="#dash-data"
+     hx-swap="outerHTML">
+  <div style="display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap; align-items:center;">
+    {% for opt, label in [('all','Todas'), ('extracted','Pendentes'), ('validated','Validadas'), ('error','Erro')] %}
+      <a href="/queue?{% if opt != 'all' %}status={{ opt }}&{% endif %}{% if of_filter %}of={{ of_filter|urlencode }}{% endif %}"
+         class="btn {% if status_filter == opt %}primary{% endif %}">{{ label }}</a>
+    {% endfor %}
+
+    {# Round 36 — OF filter #}
+    <form method="get" action="/queue"
+          style="display:inline-flex; gap:6px; align-items:center; margin-left:auto;">
+      {% if status_filter and status_filter != 'all' %}
+        <input type="hidden" name="status" value="{{ status_filter }}">
+      {% endif %}
+      <span class="lbl" style="margin:0;">OF</span>
+      <input type="text" name="of" value="{{ of_filter or '' }}"
+             class="kv-select" style="min-width:130px;"
+             placeholder="ex.: 261699">
+      <button class="btn" type="submit">Filtrar</button>
+      {% if of_filter %}
+        <a class="btn ghost" style="font-size:12px;"
+           href="/queue{% if status_filter and status_filter != 'all' %}?status={{ status_filter }}{% endif %}">✕</a>
+      {% endif %}
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Capturada</th>
+            <th>Operador</th>
+            <th>Estado</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in sheets %}
+          <tr>
+            <td class="mono"><b>{{ s.id }}</b></td>
+            <td class="muted tiny">{{ s.captured_at }}</td>
+            <td>{{ s.operador or '—' }}</td>
+            <td>
+              {% if s.status == 'validated' %}
+                <span class="pill ok">validada</span>
+              {% elif s.status == 'extracted' %}
+                <span class="pill warn">pendente</span>
+              {% elif s.status == 'error' %}
+                <span class="pill crit">erro</span>
+              {% else %}
+                <span class="pill neutral">{{ s.status }}</span>
+              {% endif %}
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/{{ s.id }}" class="btn ghost">abrir</a>
+              {% if s.status == 'validated' %}
+                <a href="/sheet/{{ s.id }}/csv" class="btn ghost">csv</a>
+              {% endif %}
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #{{ s.id }}? Acção irreversível.')) {
+                                fetch('/sheet/{{ s.id }}/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5" style="padding:32px; text-align:center;" class="muted">
+            Sem folhas. <a href="/capture" style="color:var(--accent-ink);">Captura a primeira</a>.
+          </td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
