@@ -8,9 +8,9 @@
       <div class="page-eyebrow">Chão de Fábrica · Captura</div>
       <h1 class="page-title">Capturar folhas</h1>
     </div>
-    <span x-show="streamReady" class="pill ok"><span class="dot ok"></span>LIGADO</span>
-    <span x-show="!streamReady && !streamErr" class="pill neutral">A iniciar câmara…</span>
-    <span x-show="streamErr" class="pill warn">Sem câmara</span>
+    <span x-show="stage === 'preview' && streamReady" class="pill ok"><span class="dot ok"></span>LIGADO</span>
+    <span x-show="stage === 'preview' && !streamReady && !streamErr" class="pill neutral">A iniciar câmara…</span>
+    <span x-show="stage === 'preview' && streamErr" class="pill warn">Sem câmara</span>
   </div>
 
   <!-- ============== STAGE: PREVIEW (camera live + thumb strip) ============== -->
@@ -350,11 +350,26 @@ function captureApp() {
           },
           audio: false,
         });
+        // R66 — the <video> element lives inside <template x-if="stage === 'preview'">.
+        // After a state transition (reset / backToPreview), Alpine re-renders the
+        // template asynchronously, so $refs.video may not be in the DOM yet. Wait
+        // up to ~1 s for it to appear, otherwise the stream gets orphaned (camera
+        // is granted — iOS green dot lights up — but the video never receives it,
+        // streamReady stays false, shutter stays disabled, looking like a freeze).
+        let attempts = 0;
+        while (!this.$refs.video && attempts < 20) {
+          await new Promise(r => setTimeout(r, 50));
+          attempts++;
+        }
         const v = this.$refs.video;
         if (v) {
           v.srcObject = this._stream;
           await v.play().catch(() => {});
           this.streamReady = true;
+        } else {
+          this.streamErr = 'Elemento de vídeo não montou — recarregar página.';
+          this._stream.getTracks().forEach(t => t.stop());
+          this._stream = null;
         }
       } catch (e) {
         this.streamErr = e.message || 'Sem acesso à câmara';
@@ -419,7 +434,10 @@ function captureApp() {
 
     backToPreview() {
       this.stage = 'preview';
-      this.start();
+      // R66 — wait for the preview template (with <video>) to mount before
+      // start() tries to attach the stream. Without this the stream is
+      // acquired but $refs.video is undefined → orphan stream.
+      this.$nextTick(() => this.start());
     },
 
     async uploadAll() {
@@ -552,7 +570,12 @@ function captureApp() {
       this._photoCounter = 0;
       this.streamErr = '';
       this.stage = 'preview';
-      this.start();
+      // R66 — defer start() to next tick so the <template x-if="stage==='preview'">
+      // mounts the <video x-ref="video"> element before we try to attach the
+      // MediaStream. Without this, the stream is acquired (iOS shows the green
+      // dot) but $refs.video is undefined → stream is orphaned, streamReady
+      // stays false, all buttons appear frozen (the symptom user reported).
+      this.$nextTick(() => this.start());
     },
   };
 }
