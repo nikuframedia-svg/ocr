@@ -1,0 +1,33 @@
+{# Round 56 — Cross-check color legend partial.
+   Include via `{% include "_legend.html" %}` in any template with a
+   cell-coloured data table. Single horizontal bar (~32px high).
+
+   Reuses .cc-* classes (background + ::before icons) — the swatch
+   itself is a 14×14 box with .legend-swatch + the cc-class. #}
+<div class="cc-legend"
+     style="display:flex; gap:14px 18px; flex-wrap:wrap;
+            align-items:center; font-size:11px; padding:8px 12px;
+            background:var(--paper); border:1px solid var(--rule);
+            border-radius:4px; margin-bottom:12px;">
+  <span class="lbl" style="margin:0;">LEGENDA</span>
+  <span style="display:inline-flex; align-items:center; gap:8px;">
+    <span class="legend-swatch cc-match"></span>
+    <span>MATCH — bate plan/SAP</span>
+  </span>
+  <span style="display:inline-flex; align-items:center; gap:8px;">
+    <span class="legend-swatch cc-warn"></span>
+    <span>Dim / Lote — verificar (Δ acima da tolerância ou lote ausente em SAP)</span>
+  </span>
+  <span style="display:inline-flex; align-items:center; gap:8px;">
+    <span class="legend-swatch cc-no-match"></span>
+    <span>NO_MATCH — operator ≠ ref</span>
+  </span>
+  <span style="display:inline-flex; align-items:center; gap:8px;">
+    <span class="legend-swatch cc-na-suspended"></span>
+    <span>Stub-accept — outros campos OK, este pendente</span>
+  </span>
+  <span style="display:inline-flex; align-items:center; gap:8px;">
+    <span class="legend-swatch cc-na"></span>
+    <span>NA — sem ref para validar</span>
+  </span>
+</div>

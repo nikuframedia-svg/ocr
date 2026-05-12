@@ -1,0 +1,25 @@
+{
+  "header": {
+    "operador": "VITOR CARVALHO",
+    "n_operador": "1391",
+    "setor_maquina": "BOBINE-FORMATO",
+    "data": "10-4-2026"
+  },
+  "rows": [
+    {"pri": "P2", "cliente": "DAV NORDIC", "ov": "2601106", "of": "261781", "modelo": "CA06F18D-N°1 CT012A4500", "qtd": "18", "comp_mm": "8000", "larg_mm": "910", "lote": "M24B07331", "coni": "TORRES", "esp": "3", "lbase": "635", "ltopo": "238"},
+    {"pri": "P5", "cliente": "HTG", "ov": "260013", "of": "269437", "modelo": "CRLS-N°1 CR1921A4505", "qtd": "26", "comp_mm": "9000", "larg_mm": "1075", "lote": "M24B11531", "coni": "TORRES", "esp": "3", "lbase": "702", "ltopo": "281"},
+    {"pri": "C6", "cliente": "STOCK MTG GMBH", "ov": "2511757", "of": "257370", "modelo": "CGC2E06Di-2ªPRIORIDADE", "qtd": "140", "comp_mm": "7000", "larg_mm": "1400", "lote": "M26B0273", "coni": "10", "esp": "2,6", "lbase": "450", "ltopo": "230"},
+    {"pri": "C11", "cliente": "LE HAVRE", "ov": "2601849", "of": "261767", "modelo": "CFH1F09Di", "qtd": "2", "comp_mm": "8600", "larg_mm": "800", "lote": "M26B0206", "coni": "12", "esp": "4", "lbase": "499", "ltopo": "176"},
+    {"pri": "C60", "cliente": "PONTIGGIA", "ov": "2504312", "of": "262154", "modelo": "CLC4F08Ri-V", "qtd": "2", "comp_mm": "7700", "larg_mm": "800", "lote": "M26B0206", "coni": "12", "esp": "4", "lbase": "516", "ltopo": "226"},
+    {"pri": "C60", "cliente": "STRASBOURG", "ov": "2601766", "of": "261773", "modelo": "CLC4F08Ri-V", "qtd": "2", "comp_mm": "7700", "larg_mm": "800", "lote": "M26B0206", "coni": "12", "esp": "4", "lbase": "516", "ltopo": "226"},
+    {"pri": "C60", "cliente": "STRASBOURG", "ov": "2601803", "of": "261784", "modelo": "CLC4F08Ri-V", "qtd": "2", "comp_mm": "7700", "larg_mm": "800", "lote": "M26B0206", "coni": "12", "esp": "4", "lbase": "516", "ltopo": "226"},
+    {"pri": "C13", "cliente": "BURRI", "ov": "2601271", "of": "261228", "modelo": "CGC2F04D5i-V", "qtd": "4", "comp_mm": "4800", "larg_mm": "1250", "lote": "M24B0698", "coni": "10", "esp": "3", "lbase": "380", "ltopo": "229"},
+    {"pri": "C61", "cliente": "ERS", "ov": "2602840", "of": "261995", "modelo": "CLCCF06Di-V", "qtd": "2", "comp_mm": "6000", "larg_mm": "800", "lote": "M26B0206", "coni": "12", "esp": "4", "lbase": "493", "ltopo": "267"},
+    {"pri": "C61", "cliente": "ELUMELEC", "ov": "2602315", "of": "262122", "modelo": "2315V500", "qtd": "6", "comp_mm": "6000", "larg_mm": "800", "lote": "M26B0206", "coni": "12", "esp": "4", "lbase": "493", "ltopo": "267"},
+    {"pri": "C60", "cliente": "LE HAVRE", "ov": "2601849", "of": "261765", "modelo": "CFHZF55Ri-V", "qtd": "2", "comp_mm": "5100", "larg_mm": "800", "lote": "M26B0206", "coni": "12", "esp": "4", "lbase": "418", "ltopo": "226"}
+  ],
+  "footer": {
+    "colunas_produzidas": "206",
+    "horas_trabalhadas": "8:00"
+  }
+}

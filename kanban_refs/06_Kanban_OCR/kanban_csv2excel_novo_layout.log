@@ -1,0 +1,36 @@
+2026-05-03 19:53:49  INFO      ============================================================
+2026-05-03 19:53:49  INFO      kanban_csv2excel_novo_layout.py — 2026-05-03 19:53:49
+2026-05-03 19:53:49  INFO      Raiz do projecto: C:\kanban\nifruka
+2026-05-03 19:53:49  INFO      ============================================================
+2026-05-03 19:53:49  INFO      A carregar StockSAP.xlsx...
+2026-05-03 19:53:55  INFO        StockSAP: 750 lotes carregados
+2026-05-03 19:53:55  INFO      A carregar plan_colunas_cpis.xlsx...
+2026-05-03 19:53:57  INFO        plan_colunas_cpis: 9657 OFs carregados
+2026-05-03 19:53:57  INFO      CSVs a processar (3):
+2026-05-03 19:53:57  INFO        AugustoMonteiro_2026.04.16.csv
+2026-05-03 19:53:57  INFO        JulioLima_2026.04.15.csv
+2026-05-03 19:53:57  INFO        VitorCarvalho_2026.04.17.csv
+2026-05-03 19:53:57  INFO      A abrir Excel: Kanbans_Producao_NOVO.xlsx
+2026-05-03 19:53:57  INFO      A processar: AugustoMonteiro_2026.04.16.csv
+2026-05-03 19:53:57  INFO        Formato B (###): 10 linha(s) | operador=AUGUSTO MONTEIRO | data=16/04/2026 | kanban=95
+2026-05-03 19:53:57  INFO        10 linha(s): 9 OK | 0 avisos | 1 divergências
+2026-05-03 19:53:57  INFO        Backup actualizado: Kanbans_Producao_NOVO.xlsx.bak
+2026-05-03 19:53:57  INFO        Excel guardado: Kanbans_Producao_NOVO.xlsx
+2026-05-03 19:53:57  INFO        CSV arquivado: imported/AugustoMonteiro_2026.04.16.csv
+2026-05-03 19:53:57  INFO      A processar: JulioLima_2026.04.15.csv
+2026-05-03 19:53:57  INFO        Formato B (###): 12 linha(s) | operador=JULIO LIMA | data=15/04/2026 | kanban=537
+2026-05-03 19:53:57  INFO        12 linha(s): 12 OK | 0 avisos | 0 divergências
+2026-05-03 19:53:57  INFO        Backup actualizado: Kanbans_Producao_NOVO.xlsx.bak
+2026-05-03 19:53:57  INFO        Excel guardado: Kanbans_Producao_NOVO.xlsx
+2026-05-03 19:53:57  INFO        CSV arquivado: imported/JulioLima_2026.04.15.csv
+2026-05-03 19:53:57  INFO      A processar: VitorCarvalho_2026.04.17.csv
+2026-05-03 19:53:57  INFO        Formato B (###): 5 linha(s) | operador=VITOR CARVALHO | data=17/04/2026 | kanban=1391
+2026-05-03 19:53:57  INFO        5 linha(s): 0 OK | 3 avisos | 2 divergências
+2026-05-03 19:53:57  INFO        Backup actualizado: Kanbans_Producao_NOVO.xlsx.bak
+2026-05-03 19:53:57  INFO        Excel guardado: Kanbans_Producao_NOVO.xlsx
+2026-05-03 19:53:57  INFO        CSV arquivado: imported/VitorCarvalho_2026.04.17.csv
+2026-05-03 19:53:57  INFO      ────────────────────────────────────────────────────────────
+2026-05-03 19:53:57  INFO      CONCLUÍDO — 21 OK  |  3 avisos  |  3 divergências
+2026-05-03 19:53:57  WARNING     3 linha(s) com DIVERGÊNCIA — verificar coluna 'Validação' no Excel.
+2026-05-03 19:53:57  INFO        3 linha(s) com AVISO/SEM MATCH — sem dados no plano ou lote.
+2026-05-03 19:53:57  INFO      Excel: C:\kanban\nifruka\02_Dados_Extraidos\Kanbans_Producao_NOVO.xlsx

@@ -1,0 +1,22 @@
+{
+  "header": {
+    "operador": "AUGUSTO MONTEIRO",
+    "n_operador": "95",
+    "setor_maquina": "BOBINE-FORMATO",
+    "data": "10-4-2026"
+  },
+  "rows": [
+    {"pri": "C24", "cliente": "MTG BELUX", "ov": "2602217", "of": "261730", "modelo": "CB04E63D", "qtd": "42", "comp_mm": "7400", "larg_mm": "800", "lote": "M26B0206", "coni": "OCT", "esp": "4", "lbase": "584", "ltopo": "181"},
+    {"pri": "C24", "cliente": "MTG BELUX", "ov": "2601648", "of": "261308", "modelo": "CB01E05D", "qtd": "4", "comp_mm": "6100", "larg_mm": "800", "lote": "M26B0206", "coni": "OCT", "esp": "4", "lbase": "532", "ltopo": "181"},
+    {"pri": "C24", "cliente": "MTG BELUX", "ov": "2601648", "of": "261309", "modelo": "CB01F05D", "qtd": "2", "comp_mm": "5100", "larg_mm": "800", "lote": "M26B0206", "coni": "OCT", "esp": "4", "lbase": "472", "ltopo": "181"},
+    {"pri": "C24", "cliente": "MTG BELUX", "ov": "2602637", "of": "261826", "modelo": "CBC9E08Di", "qtd": "84", "comp_mm": "9300", "larg_mm": "770", "lote": "M25B0588", "coni": "12", "esp": "2,6", "lbase": "544", "ltopo": "187"},
+    {"pri": "C24", "cliente": "MTG BELUX", "ov": "2601624", "of": "261320", "modelo": "CB06F04D", "qtd": "2", "comp_mm": "4100", "larg_mm": "770", "lote": "M25B0588", "coni": "OCT", "esp": "2,6", "lbase": "479", "ltopo": "187"},
+    {"pri": "C24", "cliente": "MTG BELUX", "ov": "2601624", "of": "261322", "modelo": "CB0663D", "qtd": "2", "comp_mm": "6400", "larg_mm": "770", "lote": "M25B0588", "coni": "OCT", "esp": "2,6", "lbase": "489", "ltopo": "187"},
+    {"pri": "C63", "cliente": "LE HAVRE", "ov": "2601849", "of": "261764", "modelo": "8615F00", "qtd": "8", "comp_mm": "5100", "larg_mm": "1175", "lote": "M26B0178", "coni": "12", "esp": "4", "lbase": "368", "ltopo": "176"},
+    {"pri": "C63", "cliente": "NOEL", "ov": "2602395", "of": "261855", "modelo": "CLC8F06Div", "qtd": "12", "comp_mm": "6000", "larg_mm": "1260", "lote": "M26B01341", "coni": "12", "esp": "4", "lbase": "408", "ltopo": "182"}
+  ],
+  "footer": {
+    "colunas_produzidas": "156",
+    "horas_trabalhadas": "6"
+  }
+}

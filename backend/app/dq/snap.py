@@ -162,6 +162,50 @@ def _build_ov_to_ofs_all(refs: dict) -> dict[str, tuple[str, ...]]:
 _OV_TO_OFS_ALL: dict[str, tuple[str, ...]] = _build_ov_to_ofs_all(_REFS)
 
 
+# Round 53 — field-agnostic candidate indexes for snap_of pool.
+# Used when OF/OV/cliente are ALL wrong but modelo/dims are correct.
+
+def _build_modelo_token_index(refs: dict) -> dict[str, frozenset[str]]:
+    """Map each alphanumeric token (≥5 chars) in plan designacao to
+    the set of OFs that contain it. Lets snap_of find candidates by
+    operator's modelo even when all identifiers are OCR garbage.
+    """
+    import re as _re
+    out: dict[str, set[str]] = {}
+    for of_str, entries in refs.get("of_to_entries", {}).items():
+        for e in entries:
+            des = (e.get("designacao") or "").upper()
+            for tok in _re.findall(r"[A-Z0-9]{5,}", des):
+                out.setdefault(tok, set()).add(of_str)
+    return {k: frozenset(v) for k, v in out.items()}
+
+
+_MODELO_TOKEN_TO_OFS: dict[str, frozenset[str]] = _build_modelo_token_index(_REFS)
+
+
+def _build_geometry_index(refs: dict) -> dict[tuple[int, int], frozenset[str]]:
+    """Bucket plan entries by (lbase//30, ltopo//30) — 30mm buckets.
+    Used to find candidates by geometric similarity when identifiers
+    are all wrong but lbase/ltopo are roughly correct.
+    """
+    out: dict[tuple[int, int], set[str]] = {}
+    for of_str, entries in refs.get("of_to_entries", {}).items():
+        for e in entries:
+            lb = e.get("lbase")
+            lt = e.get("ltopo")
+            if lb is None or lt is None:
+                continue
+            try:
+                key = (int(float(lb)) // 30, int(float(lt)) // 30)
+            except (ValueError, TypeError):
+                continue
+            out.setdefault(key, set()).add(of_str)
+    return {k: frozenset(v) for k, v in out.items()}
+
+
+_GEOMETRY_INDEX: dict[tuple[int, int], frozenset[str]] = _build_geometry_index(_REFS)
+
+
 def _to_num_local(v):
     if v is None or v == "":
         return None
@@ -432,6 +476,95 @@ def _score_of_for_row(of: str, row: dict) -> tuple[int, list[str], dict]:
     return (best_score, best_reasons, best_tb)
 
 
+def _num_or_none(v):
+    """Round 51 — float or None for safe arithmetic comparisons."""
+    if v is None or v == "":
+        return None
+    try:
+        return float(str(v).replace(",", ".").strip())
+    except (ValueError, TypeError):
+        return None
+
+
+def _score_of_holistic(of: str, row: dict) -> int:
+    """Round 51 — equal-weight 0-9 score: count of fields where the
+    operator's row matches plan/SAP canonical for this OF.
+
+    User principle: "os campos têm o mesmo peso, encontrar o melhor
+    match em TODOS os campos". Each verifiable field = +1 point.
+
+    9 fields scored (per-OF discriminating + per-lote informative):
+      1. cliente match (op vs plan[OF].cliente, alias-resolved)
+      2. ov match (op vs plan[OF].ov, exact)
+      3. modelo substring (op upper in plan.designacao upper)
+      4. comp ±50mm
+      5. lbase ±30mm
+      6. ltopo ±30mm
+      7. esp ±0.05
+      8. larg via SAP[op_lote].larg ±20mm
+      9. material consistency (plan[OF].material == SAP[op_lote].desc first token)
+
+    Fields 8/9 are tied to op_lote (same across all OF candidates) so
+    they don't discriminate between OFs but contribute to absolute score.
+    Use this score to compare candidates AND assess overall row quality.
+
+    Multiple plan entries per OF: returns max across entries.
+    Returns 0 if OF not in plan.
+    """
+    entries = _OF_TO_ENTRIES_FULL.get(of, ())
+    if not entries:
+        return 0
+
+    op_cli_raw = (row.get("cliente") or "").strip().upper()
+    op_cli = _CLIENTE_ALIASES.get(op_cli_raw, op_cli_raw)
+    op_ov = str(row.get("ov") or "").strip()
+    op_mod = (row.get("modelo") or "").strip().upper()
+    op_comp = _num_or_none(row.get("comp_mm"))
+    op_lb = _num_or_none(row.get("lbase"))
+    op_lt = _num_or_none(row.get("ltopo"))
+    op_esp = _num_or_none(row.get("esp"))
+    op_larg = _num_or_none(row.get("larg_mm"))
+    op_lote = (row.get("lote") or "").strip().upper()
+
+    sap_e = _REFS.get("lotes_sap_full", {}).get(op_lote) if op_lote else None
+    sap_larg = _num_or_none(sap_e.get("larg")) if sap_e else None
+    sap_desc_first = ""
+    if sap_e:
+        d = (sap_e.get("desc") or "").strip().upper()
+        sap_desc_first = d.split()[0] if d.split() else ""
+
+    best = 0
+    for e in entries:
+        s = 0
+        if op_cli and op_cli == (e.get("cliente") or "").strip().upper():
+            s += 1
+        if op_ov and op_ov == str(e.get("ov") or "").strip():
+            s += 1
+        des = (e.get("designacao") or "").upper()
+        if op_mod and len(op_mod) >= 4 and op_mod in des:
+            s += 1
+        plan_comp = _num_or_none(e.get("comp"))
+        if op_comp is not None and plan_comp is not None and abs(op_comp - plan_comp) <= 100:
+            s += 1  # R52: ±100mm matches engine.py TOL_COMP_MM
+        plan_lb = _num_or_none(e.get("lbase"))
+        if op_lb is not None and plan_lb is not None and abs(op_lb - plan_lb) <= 30:
+            s += 1
+        plan_lt = _num_or_none(e.get("ltopo"))
+        if op_lt is not None and plan_lt is not None and abs(op_lt - plan_lt) <= 30:
+            s += 1
+        plan_esp = _num_or_none(e.get("esp"))
+        if op_esp is not None and plan_esp is not None and abs(op_esp - plan_esp) <= 0.05:
+            s += 1
+        if sap_larg is not None and op_larg is not None and abs(op_larg - sap_larg) <= 20:
+            s += 1
+        plan_mat = (e.get("material") or "").strip().upper()
+        if plan_mat and sap_desc_first and plan_mat == sap_desc_first:
+            s += 1
+        if s > best:
+            best = s
+    return best
+
+
 def _conf_weighted_dist(a: str, b: str, max_dist: float = 1.0) -> float:
     """Levenshtein where substitutions present in confusion matrix
     cost 0.5 instead of 1.0. Returns ``inf`` if guaranteed to exceed
@@ -602,34 +735,47 @@ def snap_modelo(value: str, *, row_context: dict | None = None) -> SnapResult:
     # chars, preserve as-is (legacy Lev-2 cannot be trusted with them).
     _has_non_ascii = any(ord(c) > 127 for c in su)
 
-    # Round 43 Sol 8 part 1 — plan exact-FT first. If OCR equals (or is
-    # substring of) any plan designacao FT for this OF, that's the
-    # authoritative answer; do NOT extend via lexicon (which would
-    # produce e.g. `CFC5F45R` → `CFC5F45RiV` against plan FT `CFC5F45R`).
+    # Round 60 — unified longest-canonical-FT (replaces R43 Sol 8 exact
+    # + R42 prefix-superset for plan FTs). Collect ALL plan FTs that
+    # match OCR exactly OR have OCR as prefix, then snap to the LONGEST
+    # such FT (most canonical / specific name).
+    #
+    # Examples this resolves:
+    #   - OCR=`OMEGA606M`, plan has `OMEGA606M` AND `OMEGA606MABI` → snap
+    #     to `OMEGA606MABI` (operator wrote shorter form, plan has
+    #     longer canonical).
+    #   - OCR=`CFC5F45R`, plan has only `CFC5F45R` → exact, no-op
+    #     (R43 Sol 8 preserved — don't extend via lexicon when plan is
+    #     authoritative).
+    canonical_candidates: list[tuple[str, int, str]] = []  # (ft, length, kind)
     for d in designacoes:
         ft = d.split(" - ", 1)[0].strip()
         ft_up = ft.upper()
+        if not ft_up:
+            continue
         if ft_up == su:
-            return SnapResult(raw=raw, snapped=ft,
-                              rule="modelo.plan_ft_exact",
-                              distance=0.0,
-                              applied=raw.strip() != ft.strip())
+            canonical_candidates.append((ft, len(ft_up), "exact"))
+        elif ft_up.startswith(su) and len(ft_up) > len(su):
+            canonical_candidates.append((ft, len(ft_up), "prefix"))
+    if canonical_candidates:
+        # Longest FT wins (most canonical). Exact (==OCR) and prefix
+        # (extension of OCR) compete on length; longest is most specific.
+        canonical_candidates.sort(key=lambda x: -x[1])
+        best_ft, best_len, kind = canonical_candidates[0]
+        return SnapResult(raw=raw, snapped=best_ft,
+                          rule=f"modelo.plan_canonical_{kind}",
+                          distance=float(best_len - len(su)),
+                          applied=(raw.strip().upper() != best_ft.upper()),
+                          candidates=tuple(ft for ft, _, _ in canonical_candidates[:5]))
 
-    # Prefix-superset (R42): when OCR is prefix of plan FT or lexicon
-    # entry, snap to longer canonical. Plan FTs preferred; lexicon
-    # candidates only added as fallback.
-    superset_candidates: list[tuple[str, int, str]] = []  # (canonical, length, source)
-    for d in designacoes:
-        ft = d.split(" - ", 1)[0].strip()
-        ft_up = ft.upper()
-        if ft_up.startswith(su) and len(ft_up) > len(su):
-            superset_candidates.append((ft, len(ft_up), "plan"))
-    # Only fall back to lexicon if no plan FT extends OCR.
-    if not superset_candidates:
-        for canonical in _MODELOS_FULL:
-            c_up = canonical.upper().strip()
-            if c_up.startswith(su) and len(c_up) > len(su):
-                superset_candidates.append((canonical, len(c_up), "lex"))
+    # Lexicon prefix-superset fallback (R42) — only when NO plan FT
+    # matched above. Preserved verbatim for cases where OCR is partial
+    # form of a known lexicon entry but plan doesn't have it.
+    superset_candidates: list[tuple[str, int, str]] = []
+    for canonical in _MODELOS_FULL:
+        c_up = canonical.upper().strip()
+        if c_up.startswith(su) and len(c_up) > len(su):
+            superset_candidates.append((canonical, len(c_up), "lex"))
     if superset_candidates:
         superset_candidates.sort(key=lambda x: -x[1])
         best, _best_len, src = superset_candidates[0]
@@ -645,9 +791,30 @@ def snap_modelo(value: str, *, row_context: dict | None = None) -> SnapResult:
 
     # ── Stages P0–P2: OF-scoped against plan.designacao ──
     if designacoes:
-        # P0: already substring of any designacao? confirm no-op.
-        if any(su in d for d in designacoes):
-            return SnapResult(raw=raw, snapped=raw, rule="modelo.plan_substring",
+        # P0 (R60): OCR is substring of some plan designacao (anywhere,
+        # not just first-token — that was handled by the canonical block
+        # above). If the matched designacao's first-token differs from
+        # OCR, snap to the FT (plan canonical name). If OCR already IS
+        # the FT, no-op confirm.
+        # Example: OCR=`CD03P502` substring of `CD03P10A - CD03P502 +
+        # FURACAO...` → snap to `CD03P10A` (canonical primary code).
+        matched_designacao = None
+        for d in designacoes:
+            if su in d.upper():
+                matched_designacao = d
+                break
+        if matched_designacao is not None:
+            ft = matched_designacao.split(" - ", 1)[0].strip()
+            ft_up = ft.upper()
+            if ft_up != su:
+                return SnapResult(raw=raw, snapped=ft,
+                                  rule="modelo.plan_designacao_to_ft",
+                                  distance=float(abs(len(ft) - len(su))),
+                                  applied=True,
+                                  candidates=(ft,))
+            # OCR is already canonical (== FT) — no-op confirm
+            return SnapResult(raw=raw, snapped=raw,
+                              rule="modelo.plan_substring",
                               distance=0.0, applied=False)
         # P1: trailing punct strip
         su_stripped = su.rstrip(".,;:- ")
@@ -745,24 +912,21 @@ def snap_modelo(value: str, *, row_context: dict | None = None) -> SnapResult:
                         prev = cur
                 if best_len >= 6:
                     lcs_substring = a[best_a_end - best_len:best_a_end]
-                    # Find a snap target that the validator's substring check
-                    # will accept (must be substring of raw designacao, uppercase).
-                    # Strategy:
-                    #  1. If LCS verbatim is in raw designacao → use it
-                    #  2. If LCS is substring of first-token (after normalize)
-                    #     → use first-token (it's substring of designacao)
-                    #  3. Else, try shrinking LCS from front/back until it's
-                    #     substring of raw designacao
+                    # R60 — prefer first-token (canonical name) over LCS
+                    # substring whenever FT is at least as long as the LCS
+                    # and contains it (operator wrote partial form of FT).
+                    # Resolves OMEGA606M → OMEGA606MABI: LCS=OMEGA606M is
+                    # contained in FT=OMEGA606MABI; snap to FT.
+                    # Fallback: LCS-in-designacao (was R28 behavior).
                     target = None
                     d_upper = d.upper()
-                    if lcs_substring in d_upper:
-                        target = lcs_substring
+                    ft = d.split(" - ", 1)[0].strip()
+                    ft_norm = "".join(ch for ch in ft if ch.isalnum()).upper()
+                    if ft_norm and lcs_substring in ft_norm and len(ft_norm) >= len(lcs_substring):
+                        target = ft  # canonical first-token (R60)
+                    elif lcs_substring in d_upper:
+                        target = lcs_substring  # legacy: LCS as-is
                     else:
-                        ft = d.split(" - ", 1)[0].strip()
-                        ft_norm = "".join(ch for ch in ft if ch.isalnum())
-                        if lcs_substring in ft_norm:
-                            target = ft
-                        else:
                             # Try shrinking from both ends to find a substring
                             # that's actually in raw designacao
                             for trim_front in range(0, max(0, best_len - 5)):
@@ -818,7 +982,14 @@ def snap_modelo(value: str, *, row_context: dict | None = None) -> SnapResult:
         }
         if len(distinct_prefixes_4) >= 2 and len(su) >= 4:
             su_prefix = su[:4]
-            if su_prefix not in distinct_prefixes_4:
+            # R55 — skip the multi-prefix preserve guard when operator wrote
+            # a multi-token modelo (3+ alphanumeric tokens, e.g.
+            # "1045 V120 N:4 1045 V503"). The "first 4 chars" heuristic
+            # assumes a contiguous single-token code; multi-token writing
+            # is handled by Stage MT below.
+            import re as _re_r55
+            _op_tok_count = len(_re_r55.findall(r"[A-Z0-9]{4,}", su))
+            if su_prefix not in distinct_prefixes_4 and _op_tok_count < 3:
                 # OCR doesn't even share family with any plan FT — preserve
                 return SnapResult(raw=raw, snapped=raw,
                                   rule="modelo.plan_multi_prefix_preserve",
@@ -897,6 +1068,65 @@ def snap_modelo(value: str, *, row_context: dict | None = None) -> SnapResult:
                         rule="modelo.ov_unanimous",
                         distance=99.0, applied=True,
                         candidates=(target,),
+                    )
+
+    # Stage MT (R55): multi-token operator modelo → plan first-token.
+    # Catches operator compound modelos like "1045 V120 N:4 1045 V503"
+    # that don't match any single plan first-token via Lev/LCS but DO
+    # have coherent multi-token overlap with a plan designacao.
+    #
+    # Scoring (per plan designacao, per operator token ≥4 chars):
+    #   +5 if EXACT substring of any plan token (anchor — strong signal)
+    #   +2 if Lev-1 against any 4+ char SUBSTRING of a plan token
+    #      (sliding window — handles 1045 vs 1015 inside 1015VT20)
+    # Requires score >= 7 AND gap ≥ 2 vs runner-up.
+    # Conservative — leaves ambiguous rows as raw (cross-check flags them).
+    #
+    # Why high substring weight: an exact substring like V503 ⊂ 1015V503
+    # is a strong anchor uniquely identifying that plan entry, while
+    # Lev-1 matches like V503 vs V506 are weak and present across many
+    # designacoes (they all start with 1015). Without weighting the
+    # anchor, ambiguous rows tie and the snap can't disambiguate.
+    if designacoes:
+        import re as _re_r55
+        op_tokens = _re_r55.findall(r"[A-Z0-9]{4,}", su)
+        if len(op_tokens) >= 3:
+            scored: list[tuple[int, str, str]] = []
+            for d in designacoes:
+                plan_tokens = _re_r55.findall(r"[A-Z0-9]{4,}", d.upper())
+                if not plan_tokens:
+                    continue
+                score = 0
+                for ot in op_tokens:
+                    ot_score = 0
+                    for pt in plan_tokens:
+                        # Direct substring — strong anchor
+                        if ot in pt:
+                            ot_score = max(ot_score, 5)
+                            continue
+                        # Sliding window: |ot|-char window of pt
+                        if len(ot) <= len(pt):
+                            for i in range(len(pt) - len(ot) + 1):
+                                sub = pt[i:i+len(ot)]
+                                diffs = sum(1 for a, b in zip(ot, sub) if a != b)
+                                if diffs == 0:
+                                    ot_score = max(ot_score, 5)
+                                    break
+                                if diffs == 1:
+                                    ot_score = max(ot_score, 2)
+                    score += ot_score
+                scored.append((score, d.split(" - ", 1)[0].strip(), d))
+            if scored:
+                scored.sort(reverse=True)
+                best_score, best_ft, best_des = scored[0]
+                runner_score = scored[1][0] if len(scored) > 1 else 0
+                if best_score >= 7 and (best_score - runner_score) >= 2:
+                    return SnapResult(
+                        raw=raw, snapped=best_ft,
+                        rule="modelo.multi_token",
+                        distance=float(best_score),
+                        applied=True,
+                        candidates=tuple(ft for _, ft, _ in scored[:5]),
                     )
 
     # Stage 0: full-string Levenshtein-1 against GT modelo lexicon.
@@ -1192,344 +1422,229 @@ def snap_of(value: str, *, row_context: dict | None = None) -> SnapResult:
                 if len(cands) == 1:
                     row_context["ov"] = cands[0]  # use snapped OV for downstream
 
-    # Stage 0 (R37): format-clean. Strip non-digit chars and try lookup.
-    # OFs in plan are pure digits; OCR garbage like "2.6122A", "2575d4"
-    # has dots/letters/lowercase mixed in. Only snap if cleaned version
-    # is a real OF in plan (zero false positives).
-    if raw and re.search(r"[^\d]", raw):
-        cleaned = re.sub(r"\D", "", raw)
-        if cleaned and cleaned in _OFS_PLAN_STR:
-            return SnapResult(
-                raw=raw, snapped=cleaned, rule="of.format_clean",
-                distance=float(len(raw) - len(cleaned)), applied=True,
-            )
-        # Stage 0-bis (R43 Sol 10): format-clean + Lev-1 over plan OFs.
-        # When cleaned digits aren't in plan exactly but are 1 digit off
-        # from a unique candidate, snap. Catches `2.6122A` → `261229`
-        # (cleaned `26122` → Lev-1 unique → `261229`).
-        if cleaned and 5 <= len(cleaned) <= 7:
-            unique = _lev1_unique(cleaned, _OFS_PLAN_STR)
-            if unique:
-                return SnapResult(
-                    raw=raw, snapped=unique, rule="of.format_clean_lev1",
-                    distance=float(len(raw) - len(cleaned) + 1), applied=True,
-                )
-        # Stage 0d (R37 Group A): if cleaned isn't in plan, try OV→OF
-        # reverse before falling through to other stages. Saves cases
-        # like OF "2575d4" where cleaned "25754" isn't in plan but the
-        # row's OV is unambiguous.
-        if row_context:
-            ov = str(row_context.get("ov", "") or "").strip()
-            if ov and ov in _OV_TO_OF:
-                of_from_ov = _OV_TO_OF[ov]
-                return SnapResult(
-                    raw=raw, snapped=of_from_ov, rule="of.from_ov",
-                    distance=99.0, applied=True,
-                )
+    # ════════════════════════════════════════════════════════════════════
+    # Round 51 — Holistic best-match (campos com mesmo peso).
+    #
+    # User principle: "os campos têm o mesmo peso, encontrar o melhor
+    # match em TODOS os campos". Single pipeline replaces all early-
+    # return cascades (of.from_ov, of.plan_lev1_unique, etc.).
+    #
+    # Pipeline:
+    #   1. Pre-clean OCR (terminal-A, format-clean digits)
+    #   2. Build candidate pool (union of: OCR.of, OV→OF, OV cluster,
+    #      Lev-1 of OCR.of, top-K cliente-scoped)
+    #   3. Score each candidate via _score_of_holistic (0-9)
+    #   4. Pick winner; OCR.of preserved on tie at top
+    # ════════════════════════════════════════════════════════════════════
 
-    # Stage 0a: terminal A→1 (existing)
+    # 1. Pre-clean OCR
     pre_snapped = raw
     a_applied = False
     if re.match(r"^\d{5}A$", raw):
         pre_snapped = raw[:-1] + "1"
         a_applied = True
-
     raw_up = pre_snapped.strip()
+    cleaned = re.sub(r"\D", "", raw) if re.search(r"[^\d]", raw) else None
 
-    # Stage 0b: plan exact match
+    # 2. Build candidate pool
+    candidates: set[str] = set()
+    # 2a. OCR.of (raw + cleaned variants)
     if raw_up in _OFS_PLAN_STR:
-        # Round 49 — "best match holistic" semantics.
-        # User principle: "o sistema tem o único objectivo de encontrar
-        # a MELHOR correspondência, não a primeira, e correspondência é
-        # a nível de TODOS os campos". Algorithm:
-        #   1. Score every OF in OV-cluster across all 5 fields (continuous)
-        #   2. Pick THE best (no gap threshold)
-        #   3. Override to winner UNLESS OCR.of is in the top-tied set
-        #      (operator is a valid choice when equivalent alternatives exist)
-        #
-        # Sort key (lexicographic, lower wins after negation):
-        #   1. -primary_score      : 0-5 binary field matches (coarse)
-        #   2. -modelo_exact       : full designacao > first-token > Lev-1
-        #   3. -active             : fechado=0 > fechado=1
-        #   4. comp_delta          : continuous comp distance
-        #   5. lbase_delta         : continuous lbase distance
-        #   6. ltopo_delta         : continuous ltopo distance
-        #   7. of_char_diff        : OCR.of digit-distance (last tiebreaker —
-        #                            don't bias toward operator's input
-        #                            unless other signals tied)
-        if row_context:
-            ov_ctx = str(row_context.get("ov", "") or "").strip()
-            if ov_ctx:
-                ov_cluster = _ofs_for_ov(ov_ctx)
-                if len(ov_cluster) > 1:
-                    scored = []
-                    for o in ov_cluster:
-                        score, reasons, tb = _score_of_for_row(o, row_context)
-                        sort_key = (
-                            -score,
-                            -tb.get("modelo_exact", 0),
-                            -tb.get("active", 0),
-                            tb.get("comp_delta", 1e9),
-                            tb.get("lbase_delta", 1e9),
-                            tb.get("ltopo_delta", 1e9),
-                            tb.get("of_char_diff", 99),
+        candidates.add(raw_up)
+    if cleaned and cleaned in _OFS_PLAN_STR:
+        candidates.add(cleaned)
+    if row_context:
+        # 2b. OFs sharing operator's OV
+        ov_ctx = str(row_context.get("ov", "") or "").strip()
+        if ov_ctx:
+            candidates.update(_ofs_for_ov(ov_ctx))
+            # OV→OF reverse (when OV maps to single OF in plan)
+            if ov_ctx in _OV_TO_OF:
+                candidates.add(_OV_TO_OF[ov_ctx])
+        # 2c. Lev-1 candidates of OCR.of
+        if re.match(r"^\d{5,7}$", raw_up):
+            candidates.update(_lev1_candidates(raw_up, _OFS_PLAN_STR))
+        if cleaned and re.match(r"^\d{5,7}$", cleaned):
+            candidates.update(_lev1_candidates(cleaned, _OFS_PLAN_STR))
+        # 2d. Cliente-scoped top-K (filter score ≥ 4 to bound search)
+        cli_raw = str(row_context.get("cliente", "") or "").strip().upper()
+        cli = _CLIENTE_ALIASES.get(cli_raw, cli_raw)
+        if cli:
+            cli_scored: list[tuple[int, str]] = []
+            for cof, clis in _OF_TO_CLIENTES.items():
+                if cli in clis:
+                    s = _score_of_holistic(cof, row_context)
+                    if s >= 4:
+                        cli_scored.append((s, cof))
+            cli_scored.sort(reverse=True)
+            candidates.update(c for _, c in cli_scored[:20])
+
+        # 2e (R53): modelo-token index — find OFs whose plan designacao
+        # contains any token from operator's modelo. Catches cases where
+        # OF/OV/cliente are ALL OCR garbage but operator wrote a valid
+        # modelo. Skips tokens that appear in too many OFs (>50) — those
+        # are too common to discriminate.
+        op_mod = str(row_context.get("modelo", "") or "").upper().strip()
+        if op_mod:
+            for tok in re.findall(r"[A-Z0-9]{5,}", op_mod):
+                hits = _MODELO_TOKEN_TO_OFS.get(tok, frozenset())
+                if 0 < len(hits) <= 50:
+                    candidates.update(hits)
+
+        # 2f (R53): geometric index — find OFs with lbase/ltopo close to
+        # operator's. Only runs if pool still small (<10) to avoid bloat
+        # in common-dim cases (e.g. lbase~400mm is very frequent).
+        if len(candidates) < 10:
+            op_lb = _num_or_none(row_context.get("lbase"))
+            op_lt = _num_or_none(row_context.get("ltopo"))
+            if op_lb is not None and op_lt is not None:
+                base_b = int(op_lb) // 30
+                topo_b = int(op_lt) // 30
+                geom_hits: set[str] = set()
+                for db in (-1, 0, 1):
+                    for dt in (-1, 0, 1):
+                        geom_hits.update(
+                            _GEOMETRY_INDEX.get((base_b + db, topo_b + dt), frozenset())
                         )
-                        scored.append((sort_key, o, score, reasons, tb))
-                    scored.sort()
-                    # Top set defined by PRIMARY score only (5-field binary).
-                    # Tie-breakers (modelo_exact, deltas) refine the order
-                    # within ties but don't override OCR.of when it's
-                    # among the top-primary set — operator's input is a
-                    # valid choice when alternatives are equally explained
-                    # by the row's evidence at the field-match level.
-                    top_score = scored[0][2]
-                    top_set = [s[1] for s in scored if s[2] == top_score]
-                    cur_score = next(
-                        (s for _, o, s, _, _ in scored if o == raw_up), 0
+                # Geom can return 100s of OFs; pre-filter by score
+                if len(geom_hits) > 30:
+                    geom_scored = sorted(
+                        ((_score_of_holistic(o, row_context), o) for o in geom_hits),
+                        reverse=True,
                     )
-                    if raw_up not in top_set and top_score > cur_score:
-                        # OCR.of is NOT among the top-primary set; another
-                        # OF explains the row strictly better. Override
-                        # to the best (after tie-breakers).
-                        winner_of = scored[0][1]
-                        winner_score = scored[0][2]
-                        return SnapResult(
-                            raw=raw, snapped=winner_of,
-                            rule=f"of.best_match_{winner_score}vs{cur_score}",
-                            distance=99.0, applied=True,
-                            candidates=tuple(o for _, o, _, _, _ in scored[:5]),
-                        )
-                    # else: OCR.of is in top set OR tied at top → preserve
+                    candidates.update(
+                        o for s, o in geom_scored[:30] if s >= 4
+                    )
+                else:
+                    candidates.update(geom_hits)
+
+    # 3. If pool empty, preserve OCR (no signal to act on)
+    if not candidates:
+        if a_applied:
+            return SnapResult(
+                raw=raw, snapped=pre_snapped, rule="of.terminal_A_to_1",
+                distance=1.0, applied=True,
+            )
+        return SnapResult(
+            raw=raw, snapped=raw, rule="of.no_candidates",
+            distance=0.0, applied=False,
+        )
+
+    # 4. Score every candidate
+    if not row_context:
+        # Without row context, fall back to: prefer OCR.of if in pool,
+        # else any candidate (lev-1 single).
+        if raw_up in candidates:
+            return SnapResult(
+                raw=raw, snapped=raw_up,
+                rule="of.terminal_A_to_1" if a_applied else "of.plan_exact",
+                distance=1.0 if a_applied else 0.0,
+                applied=(pre_snapped != raw),
+            )
+        if len(candidates) == 1:
+            cand = next(iter(candidates))
+            return SnapResult(
+                raw=raw, snapped=cand, rule="of.no_context_lev1",
+                distance=1.0, applied=True,
+            )
+        return SnapResult(
+            raw=raw, snapped=raw, rule="of.no_context_ambiguous",
+            distance=float("inf"), applied=False,
+            candidates=tuple(sorted(candidates)[:8]),
+        )
+
+    # Tie-breakers when multiple candidates share top score:
+    #   1. Primary score DESC
+    #   2. OF Lev distance to OCR.of ASC (closer wins — operator's
+    #      digits matter when products are equal)
+    #   3. OF lexicographic ASC (deterministic last resort)
+    def _of_distance_to_ocr(of_str: str) -> int:
+        target = cleaned if cleaned else raw_up
+        if not target:
+            return 99
+        if len(of_str) == len(target):
+            return sum(1 for a, b in zip(of_str, target) if a != b)
+        return abs(len(of_str) - len(target)) + 5
+
+    scored = sorted(
+        ((_score_of_holistic(c, row_context), c) for c in candidates),
+        key=lambda x: (-x[0], _of_distance_to_ocr(x[1]), x[1]),
+    )
+    winner_score, winner_of = scored[0]
+    cur_score = (
+        _score_of_holistic(raw_up, row_context)
+        if raw_up in _OFS_PLAN_STR else 0
+    )
+
+    # 5. Decision
+    # OCR.of in top-tied set → normally preserve operator's input
+    # (operator is valid when alternatives are equally explained).
+    # R57: when tied, break ties by HIGH-SIGNAL score (cliente exact +
+    # ov exact + modelo substring). A challenger with strictly more
+    # high-signal matches than OCR.of wins. These 3 fields uniquely
+    # identify a plan row better than dim tolerances.
+    top_set = {c for s, c in scored if s == winner_score}
+    if raw_up in top_set:
+        # R57 tie-break — compute high-signal for OCR.of and challengers
+        from app.cross_check.holistic_score import score_high_signal
+        cur_hi = max(
+            (score_high_signal(e, row_context, _CLIENTE_ALIASES)
+             for e in _OF_TO_ENTRIES_FULL.get(raw_up, ())),
+            default=0,
+        )
+        challengers = top_set - {raw_up}
+        best_challenger = None
+        best_challenger_hi = -1
+        for c in challengers:
+            c_hi = max(
+                (score_high_signal(e, row_context, _CLIENTE_ALIASES)
+                 for e in _OF_TO_ENTRIES_FULL.get(c, ())),
+                default=0,
+            )
+            if c_hi > best_challenger_hi:
+                best_challenger_hi = c_hi
+                best_challenger = c
+        if best_challenger is not None and best_challenger_hi > cur_hi:
+            return SnapResult(
+                raw=raw, snapped=best_challenger,
+                rule=f"of.holistic_tiebreak_signal_{best_challenger_hi}vs{cur_hi}",
+                distance=99.0, applied=True,
+                candidates=tuple(c for _, c in scored[:5]),
+            )
         return SnapResult(
             raw=raw, snapped=pre_snapped,
-            rule="of.terminal_A_to_1" if a_applied else "of.plan_exact",
+            rule=(
+                "of.terminal_A_to_1" if a_applied
+                else f"of.holistic_top_{winner_score}"
+            ),
             distance=1.0 if a_applied else 0.0,
             applied=(pre_snapped != raw),
+            candidates=tuple(c for _, c in scored[:5]),
         )
-
-    # Stage 0b-prime (R37): OV→OF reverse derivation. Cheaper than Lev-1
-    # and handles cases where OCR misread is too big for Lev-1 (>1 char)
-    # OR where Lev-1 returns ambiguous candidates. Only fires when OV is
-    # in exactly 1 OF in plan (4677 unambiguous OVs out of ~5926 total).
-    if row_context:
-        ov_ctx = str(row_context.get("ov", "") or "").strip()
-        if ov_ctx and ov_ctx in _OV_TO_OF:
-            of_from_ov = _OV_TO_OF[ov_ctx]
-            if of_from_ov != raw_up:
-                return SnapResult(
-                    raw=raw, snapped=of_from_ov, rule="of.from_ov",
-                    distance=99.0, applied=True,
-                )
-
-    # Stage 0d (R39): OV → multiple candidate OFs → narrow by other
-    # row fields. When OV exists in plan but maps to N>1 OFs, score
-    # each candidate by cli/modelo/comp/lbase/ltopo match. Lower
-    # threshold than global because OV already restricts search.
-    if row_context:
-        ov_ctx = str(row_context.get("ov", "") or "").strip()
-        if ov_ctx and ov_ctx in _OV_TO_OFS_ALL:
-            cand_ofs = _OV_TO_OFS_ALL[ov_ctx]
-            if cand_ofs:
-                scored: list[tuple[int, str, list[str]]] = []
-                for plan_of in cand_ofs:
-                    for e in _OF_TO_ENTRIES_FULL.get(plan_of, ()):
-                        sc, reasons = _multifield_score(plan_of, e, row_context)
-                        scored.append((sc, plan_of, reasons))
-                scored.sort(reverse=True)
-                if scored:
-                    runner = scored[1][0] if len(scored) > 1 else 0
-                    if scored[0][0] >= 6 and (
-                        scored[0][0] - runner >= 2 or len(scored) == 1
-                    ):
-                        if scored[0][1] != raw_up:
-                            return SnapResult(
-                                raw=raw, snapped=scored[0][1],
-                                rule="of.from_ov_narrowed",
-                                distance=99.0, applied=True,
-                                candidates=tuple(of_ for _, of_, _ in scored[:5]),
-                            )
-
-    # Stage 0c: plan Lev-1 (numeric OFs only — skip non-numeric)
-    if re.match(r"^\d{5,7}$", raw_up):
-        candidates = _lev1_candidates(raw_up, _OFS_PLAN_STR)
-        if len(candidates) == 1:
-            cand = candidates[0]
-            # Round 50 — cliente consistency guard. Lev-1 OF snap is safe
-            # ONLY when the candidate's cliente matches what operator wrote.
-            # When clienta would change (e.g. SYNDICAT → MTG GMBH), SKIP
-            # this stage and FALL THROUGH to multifield_inferred which
-            # searches all OFs scoped by cliente — likely finds a better
-            # OF in the operator's actual cliente family.
-            cliente_ok = True
-            if row_context:
-                cli_ocr_raw = str(row_context.get("cliente", "") or "").strip().upper()
-                cli_ocr = _CLIENTE_ALIASES.get(cli_ocr_raw, cli_ocr_raw)
-                cand_clientes = _OF_TO_CLIENTES.get(cand, frozenset())
-                if cli_ocr and cand_clientes and cli_ocr not in cand_clientes:
-                    cliente_ok = False
-            if cliente_ok:
-                return SnapResult(
-                    raw=raw, snapped=cand, rule="of.plan_lev1_unique",
-                    distance=1.0 + (1.0 if a_applied else 0.0), applied=True,
-                )
-            # else: fall through to next stage (multifield_inferred etc.)
-        if len(candidates) > 1 and row_context:
-            ov = str(row_context.get("ov", "") or "").strip()
-            if ov:
-                # Filter candidates to those whose plan entries contain the row's OV
-                matching = [c for c in candidates if ov in _OF_TO_OVS.get(c, frozenset())]
-                if len(matching) == 1:
-                    return SnapResult(
-                        raw=raw, snapped=matching[0], rule="of.plan_lev1_ov_match",
-                        distance=1.0 + (1.0 if a_applied else 0.0), applied=True,
-                        candidates=tuple(candidates[:8]),
-                    )
-            # Stage 0d (Round 28): multi-field tie-break.
-            # When OV-match alone doesn't isolate a candidate, score each
-            # by additional row signals:
-            #   +2 if modelo (raw) is substring of any plan.designacao
-            #   +1 if comp_mm within ±50mm of any plan.comp
-            # Snap if winning candidate has >= +2 AND strictly higher score
-            # than runner-up.
-            modelo_raw = str(row_context.get("modelo", "") or "").upper().strip()
-            comp_str = str(row_context.get("comp_mm", "") or "").strip()
-            try:
-                comp_v = float(comp_str.replace(",", ".")) if comp_str else None
-            except ValueError:
-                comp_v = None
-            if modelo_raw or comp_v is not None:
-                scored: list[tuple[str, int]] = []
-                for cand in candidates:
-                    score = 0
-                    entries = _OF_TO_ENTRIES_FULL.get(cand, ())
-                    if modelo_raw:
-                        for e in entries:
-                            if modelo_raw in str(e.get("designacao", "")).upper():
-                                score += 2
-                                break
-                    if comp_v is not None:
-                        for e in entries:
-                            try:
-                                e_comp = float(str(e.get("comp", "")).replace(",", "."))
-                                if abs(e_comp - comp_v) < 50:
-                                    score += 1
-                                    break
-                            except (ValueError, TypeError):
-                                pass
-                    scored.append((cand, score))
-                scored.sort(key=lambda x: -x[1])
-                if scored and scored[0][1] >= 2 and (
-                    len(scored) == 1 or scored[0][1] > scored[1][1]
-                ):
-                    return SnapResult(
-                        raw=raw, snapped=scored[0][0],
-                        rule="of.plan_lev1_multifield",
-                        distance=1.0 + (1.0 if a_applied else 0.0),
-                        applied=True,
-                        candidates=tuple(c for c, _ in scored[:5]),
-                    )
-        # R39: when Lev-1 candidates exist but none uniquely matched,
-        # fall through to global multi-field stage 0e (more signals
-        # may discriminate, e.g. lbase/ltopo/of_lev1). Keep candidates
-        # in scope so we attach them to audit if final snap also fails.
-        _lev1_audit_candidates = candidates if candidates else None
-
-    # Stage 0e (R39, relaxed in R43 Sol 7): GLOBAL multi-field inference
-    # — last resort. When OF still unresolved, score every plan entry
-    # against row context. Threshold: ≥7 + gap ≥3 (was ≥9 + gap ≥3).
-    # Lower threshold trades a few more snaps for risk of false positives.
-    if row_context and raw_up not in _OFS_PLAN_STR:
-        global_scored: list[tuple[int, str, list[str]]] = []
-        for plan_of, entries in _OF_TO_ENTRIES_FULL.items():
-            for e in entries:
-                sc, reasons = _multifield_score(plan_of, e, row_context)
-                if sc >= 7:
-                    global_scored.append((sc, plan_of, reasons))
-        global_scored.sort(reverse=True)
-        if global_scored:
-            runner = global_scored[1][0] if len(global_scored) > 1 else 0
-            if global_scored[0][0] >= 7 and (
-                global_scored[0][0] - runner >= 3 or len(global_scored) == 1
-            ):
-                if global_scored[0][1] != raw_up:
-                    return SnapResult(
-                        raw=raw, snapped=global_scored[0][1],
-                        rule="of.multifield_inferred",
-                        distance=99.0, applied=True,
-                        candidates=tuple(of_ for _, of_, _ in global_scored[:5]),
-                    )
-        # Fall-through: attach global candidates to audit if any high-score
-        # near-misses found (helps supervisor see "could be 260078, 260938...")
-        if global_scored and not _lev1_audit_candidates:
-            _lev1_audit_candidates = [of_ for _, of_, _ in global_scored[:8]]
-
-        # Stage 0f (R50) — cliente-scoped best match. When global multifield
-        # didn't reach gap≥3 BUT the row has a strong cliente signal AND
-        # multiple plan OFs with same cliente score >=7, snap to the best
-        # one (tie-break by OV Lev distance, then OF Lev distance). This
-        # catches the case where operator wrote NEW OF/OV for an existing
-        # product/cliente — refs don't have it yet but the product family
-        # is unambiguously the operator's cliente.
-        cli_raw = str(row_context.get("cliente", "") or "").strip().upper()
-        cli_resolved = _CLIENTE_ALIASES.get(cli_raw, cli_raw)
-        if cli_resolved and global_scored:
-            cli_scoped = []
-            for sc, plan_of, reasons in global_scored:
-                if sc < 7:
-                    continue
-                if cli_resolved in _OF_TO_CLIENTES.get(plan_of, frozenset()):
-                    cli_scoped.append((sc, plan_of, reasons))
-            if cli_scoped:
-                cli_scoped.sort(reverse=True)
-                # Tie-break by OV Lev distance to operator's OV
-                ov_ocr = str(row_context.get("ov", "") or "").strip()
-
-                def _ov_distance(plan_of: str) -> int:
-                    if not ov_ocr:
-                        return 99
-                    best = 99
-                    for e in _OF_TO_ENTRIES_FULL.get(plan_of, ()):
-                        plan_ov = str(e.get("ov", "") or "").strip()
-                        if not plan_ov:
-                            continue
-                        if len(plan_ov) == len(ov_ocr):
-                            d = sum(1 for a, b in zip(plan_ov, ov_ocr) if a != b)
-                        else:
-                            d = abs(len(plan_ov) - len(ov_ocr)) + 5
-                        best = min(best, d)
-                    return best
-
-                def _of_distance(plan_of: str) -> int:
-                    if len(plan_of) == len(raw_up):
-                        return sum(1 for a, b in zip(plan_of, raw_up) if a != b)
-                    return abs(len(plan_of) - len(raw_up)) + 5
-
-                # Sort: highest score, then closest OV, then closest OF
-                cli_scoped.sort(key=lambda x: (-x[0], _ov_distance(x[1]), _of_distance(x[1])))
-                winner_score, winner_of, winner_reasons = cli_scoped[0]
-                if winner_of != raw_up:
-                    return SnapResult(
-                        raw=raw, snapped=winner_of,
-                        rule=f"of.cliente_scoped_best_match_{winner_score}",
-                        distance=99.0, applied=True,
-                        candidates=tuple(of_ for _, of_, _ in cli_scoped[:5]),
-                    )
-
-    # Fallback: terminal-A applied even if not in plan
-    if a_applied:
+    # Otherwise, override only if winner strictly beats current
+    if winner_score > cur_score:
         return SnapResult(
-            raw=raw, snapped=pre_snapped, rule="of.terminal_A_to_1",
-            distance=1.0, applied=True,
+            raw=raw, snapped=winner_of,
+            rule=f"of.holistic_best_{winner_score}vs{cur_score}",
+            distance=99.0, applied=True,
+            candidates=tuple(c for _, c in scored[:5]),
         )
-    # R39: if Lev-1 or global scoring found high-score near-misses but
-    # didn't reach snap threshold, expose them as audit candidates.
-    if _lev1_audit_candidates:
+    # Equal score, OCR.of NOT in pool (e.g. not in plan): pick winner
+    if cur_score == 0 and winner_score > 0:
         return SnapResult(
-            raw=raw, snapped=raw, rule="of.ambiguous_with_candidates",
-            distance=float("inf"), applied=False,
-            candidates=tuple(_lev1_audit_candidates[:8]),
+            raw=raw, snapped=winner_of,
+            rule=f"of.holistic_best_outsider_{winner_score}",
+            distance=99.0, applied=True,
+            candidates=tuple(c for _, c in scored[:5]),
         )
-    return SnapResult(raw=raw, snapped=raw, rule="of.no_snap", distance=0.0, applied=False)
+
+    # Truly no signal: preserve OCR with audit candidates
+    return SnapResult(
+        raw=raw, snapped=raw if not a_applied else pre_snapped,
+        rule="of.holistic_no_winner",
+        distance=float("inf"), applied=a_applied,
+        candidates=tuple(c for _, c in scored[:8]),
+    )
 
 
 def snap_ov(value: str, *, row_context: dict | None = None) -> SnapResult:

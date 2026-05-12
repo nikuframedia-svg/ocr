@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+{% set live = true %}
+{% block title %}Nesting (Gemini) — Dashboard{% endblock %}
+{% block content %}
+<div class="page-h">
+  <div>
+    <div class="page-eyebrow">Dashboard · Corte térmico (TPL102)</div>
+    <h1 class="page-title">Nesting</h1>
+  </div>
+  <div style="display:flex; gap:8px; align-items:center;">
+    <span class="pill neutral mono" style="font-size:11px;">GASPARINI</span>
+    <span class="pill neutral mono" style="font-size:11px;">HPE32</span>
+    <span class="pill neutral mono" style="font-size:11px;">HD36</span>
+  </div>
+</div>
+
+<div id="dash-data" class="page-content"
+     hx-get="{{ request.url }}"
+     hx-trigger="every 30s"
+     hx-select="#dash-data"
+     hx-swap="outerHTML">
+
+  {# ============== KPI cards ============== #}
+  <div class="kpi-grid" style="margin-bottom:16px;">
+    <div class="kpi">
+      <div class="kpi-l">M² PROCESSADOS</div>
+      <div class="kpi-v">{{ agg.total_m2 }}</div>
+      <div class="kpi-u muted">m²</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-l">PEÇAS</div>
+      <div class="kpi-v">{{ agg.total_qty }}</div>
+      <div class="kpi-u muted">unidades</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-l">FOLHAS</div>
+      <div class="kpi-v">{{ agg.n_sheets }}</div>
+      <div class="kpi-u muted">{{ agg.n_entries }} linhas</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-l">TEMPO TOTAL</div>
+      <div class="kpi-v">{{ agg.total_hours }}h</div>
+      <div class="kpi-u muted">{{ agg.total_minutes }} min</div>
+    </div>
+  </div>
+
+  {% if agg.n_entries == 0 %}
+    <div class="card" style="text-align:center; padding:48px;">
+      <div class="muted" style="font-size:14px;">
+        Sem registos de nesting ainda.<br>
+        Tira foto de um kanban <b>GASPARINI</b>, <b>HPE32</b> ou <b>HD36</b>
+        em <a href="/capture" style="color:var(--accent-ink);">/capture</a>
+        — o sistema deteta automaticamente o template e regista aqui.
+      </div>
+    </div>
+  {% else %}
+
+  <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px;">
+    {# ============== Por máquina ============== #}
+    <div class="card">
+      <div class="card-h">
+        <div class="card-h-title">Por máquina</div>
+        <div class="card-h-sub">{{ agg.by_machine|length }} activas</div>
+      </div>
+      <div class="scroll-x">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>Máquina</th>
+              <th style="text-align:right;">m²</th>
+              <th style="text-align:right;">Peças</th>
+              <th style="text-align:right;">Folhas</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for m in agg.by_machine %}
+            <tr>
+              <td><b>{{ m.name }}</b></td>
+              <td class="mono" style="text-align:right;">{{ m.m2 }}</td>
+              <td class="mono" style="text-align:right;">{{ m.qtd }}</td>
+              <td class="mono muted" style="text-align:right;">{{ m.sheets }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {# ============== Por operador ============== #}
+    <div class="card">
+      <div class="card-h">
+        <div class="card-h-title">Por operador</div>
+        <div class="card-h-sub">{{ agg.by_operador|length }} operadores</div>
+      </div>
+      <div class="scroll-x">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>Operador</th>
+              <th style="text-align:right;">m²</th>
+              <th style="text-align:right;">Peças</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for o in agg.by_operador %}
+            <tr>
+              <td>{{ o.operador }}</td>
+              <td class="mono" style="text-align:right;">{{ o.m2 }}</td>
+              <td class="mono" style="text-align:right;">{{ o.qtd }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  {# ============== Por cliente ============== #}
+  <div class="card" style="margin-top:16px;">
+    <div class="card-h">
+      <div class="card-h-title">Top clientes (por m²)</div>
+      <div class="card-h-sub">{{ agg.by_cliente|length }} no top</div>
+    </div>
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Cliente</th>
+            <th style="text-align:right;">m²</th>
+            <th style="text-align:right;">Peças</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in agg.by_cliente %}
+          <tr>
+            <td>{{ c.cliente }}</td>
+            <td class="mono" style="text-align:right;">{{ c.m2 }}</td>
+            <td class="mono" style="text-align:right;">{{ c.qtd }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {# ============== Lista de folhas ============== #}
+  <div class="card" style="margin-top:16px;">
+    <div class="card-h">
+      <div class="card-h-title">Folhas de nesting</div>
+      <div class="card-h-sub">{{ sheets|length }} folhas</div>
+    </div>
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Data</th>
+            <th>Máquina</th>
+            <th>Operador</th>
+            <th style="text-align:right;">Linhas</th>
+            <th style="text-align:right;">m²</th>
+            <th>Estado</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in sheets %}
+          {% set total_m2 = s.rows | map(attribute='m2_val') | reject('none') | sum %}
+          <tr>
+            <td class="mono"><b>{{ s.sheet_id }}</b></td>
+            <td>{{ s.sheet_date or '—' }}</td>
+            <td><b>{{ s.machine }}</b></td>
+            <td>{{ s.operador or '—' }}</td>
+            <td class="mono" style="text-align:right;">{{ s.rows|length }}</td>
+            <td class="mono" style="text-align:right;">{{ "%.1f"|format(total_m2) }}</td>
+            <td>
+              {% if s.status == 'validated' %}
+                <span class="pill ok">validada</span>
+              {% elif s.status == 'extracted' %}
+                <span class="pill warn">pendente</span>
+              {% elif s.status == 'error' %}
+                <span class="pill crit">erro</span>
+              {% else %}
+                <span class="pill neutral">{{ s.status }}</span>
+              {% endif %}
+            </td>
+            <td style="text-align:right;">
+              <a href="/sheet/{{ s.sheet_id }}" class="btn ghost">abrir</a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

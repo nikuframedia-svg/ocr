@@ -39,6 +39,10 @@
     </form>
   </div>
 
+  {# R58 — legenda das cores; ajuda o operador a entender cores ao
+     abrir cada folha. Mesmo partial usado em /sheet/{id} e /kanbans. #}
+  {% include "_legend.html" %}
+
   <div class="card">
     <div class="scroll-x">
       <table class="tbl">
@@ -47,6 +51,7 @@
             <th>#</th>
             <th>Capturada</th>
             <th>Operador</th>
+            <th>Template</th>
             <th>Estado</th>
             <th></th>
           </tr>
@@ -57,6 +62,17 @@
             <td class="mono"><b>{{ s.id }}</b></td>
             <td class="muted tiny">{{ s.captured_at }}</td>
             <td>{{ s.operador or '—' }}</td>
+            <td>
+              {# Round 54 — template badge: shows the template canonical
+                 name (e.g. bobine_formato → "Bobine-Formato"). Legacy
+                 sheets without explicit template_name still get a value
+                 because db.list_sheets COALESCEs from raw_extraction. #}
+              {% set tn = s.template_name or 'bobine_formato' %}
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: {{ s.setor_maquina or '' }}">
+                {{ tn.replace('_', ' ').replace('quinadora pav4 paragens', 'pav.4 paragens') }}
+              </span>
+            </td>
             <td>
               {% if s.status == 'validated' %}
                 <span class="pill ok">validada</span>
@@ -81,7 +97,7 @@
             </td>
           </tr>
           {% else %}
-          <tr><td colspan="5" style="padding:32px; text-align:center;" class="muted">
+          <tr><td colspan="6" style="padding:32px; text-align:center;" class="muted">
             Sem folhas. <a href="/capture" style="color:var(--accent-ink);">Captura a primeira</a>.
           </td></tr>
           {% endfor %}

@@ -1,0 +1,656 @@
+{
+  "sheet_id": 26,
+  "image_path": "images\\20260507_082129_845b4c25c47d764c.jpeg",
+  "operador": "VITOR GABRIEL",
+  "date": "2026-04-30",
+  "sheet_status": "extracted",
+  "checked_at": "2026-05-12T08:19:45+00:00",
+  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "summary": {
+    "match": 86,
+    "no_match": 0,
+    "na": 10,
+    "total": 96
+  },
+  "rows": [
+    {
+      "row_index": 0,
+      "fields": {
+        "of": {
+          "value": "261638",
+          "status": "MATCH",
+          "ref": "261638",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "MTG",
+          "status": "MATCH",
+          "ref": "MTG",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "260012",
+          "status": "MATCH",
+          "ref": "260012",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CFC5F12RI",
+          "status": "MATCH",
+          "ref": "CFC5F12RI",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "12000",
+          "status": "MATCH",
+          "ref": "12000",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M26B0213",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1020",
+          "status": "MATCH",
+          "ref": "1020",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "2,6",
+          "status": "MATCH",
+          "ref": "2.6",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "708",
+          "status": "MATCH",
+          "ref": "708.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "180",
+          "status": "MATCH",
+          "ref": "180.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 10,
+        "no_match": 0,
+        "na": 0
+      }
+    },
+    {
+      "row_index": 1,
+      "fields": {
+        "of": {
+          "value": "262088",
+          "status": "MATCH",
+          "ref": "262088",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "MTG BELUX",
+          "status": "MATCH",
+          "ref": "MTG BELUX",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2602503",
+          "status": "MATCH",
+          "ref": "2602503",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CBCCE06DI_V - PONTEIRA + BRACO + 2 SC",
+          "status": "MATCH",
+          "ref": "CBCCE06DI_V - PONTEIRA + BRACO + 2 SC",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "7000",
+          "status": "MATCH",
+          "ref": "7000",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M26B0213",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1020",
+          "status": "MATCH",
+          "ref": "1020",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "2,6",
+          "status": "MATCH",
+          "ref": "2.6",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "661",
+          "status": "MATCH",
+          "ref": "661.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "271",
+          "status": "MATCH",
+          "ref": "271.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 10,
+        "no_match": 0,
+        "na": 0
+      }
+    },
+    {
+      "row_index": 2,
+      "fields": {
+        "of": {
+          "value": "251469",
+          "status": "MATCH",
+          "ref": "251469",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "SYNDICAT",
+          "status": "MATCH",
+          "ref": "SYNDICAT",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2502317",
+          "status": "MATCH",
+          "ref": "2502317",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CLC8F08RI_V",
+          "status": "MATCH",
+          "ref": "CLC8F08RI_V",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "8000",
+          "status": "MATCH",
+          "ref": "8000",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M26B0220",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1500",
+          "status": "MATCH",
+          "ref": "1500",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "3",
+          "status": "MATCH",
+          "ref": "3",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "531",
+          "status": "MATCH",
+          "ref": "531.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "779",
+          "status": "NA",
+          "ref": "179.0",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        }
+      },
+      "summary": {
+        "match": 9,
+        "no_match": 0,
+        "na": 1
+      }
+    },
+    {
+      "row_index": 3,
+      "fields": {
+        "of": {
+          "value": "251469",
+          "status": "MATCH",
+          "ref": "251469",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "SYNDICAT",
+          "status": "MATCH",
+          "ref": "SYNDICAT",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2502317",
+          "status": "MATCH",
+          "ref": "2502317",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CLC8F08RI_V",
+          "status": "MATCH",
+          "ref": "CLC8F08RI_V",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "8000",
+          "status": "MATCH",
+          "ref": "8000",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M26B0220",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1500",
+          "status": "MATCH",
+          "ref": "1500",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "3",
+          "status": "MATCH",
+          "ref": "3",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "531",
+          "status": "MATCH",
+          "ref": "531.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "779",
+          "status": "NA",
+          "ref": "179.0",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        }
+      },
+      "summary": {
+        "match": 9,
+        "no_match": 0,
+        "na": 1
+      }
+    },
+    {
+      "row_index": 4,
+      "fields": {
+        "of": {
+          "value": "262009",
+          "status": "MATCH",
+          "ref": "262009",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "SDEC ENERGIE",
+          "status": "MATCH",
+          "ref": "SDEC ENERGIE",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2602883",
+          "status": "MATCH",
+          "ref": "2602883",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CLC6F04D_V - FURACAO",
+          "status": "MATCH",
+          "ref": "CLC6F04D_V - FURACAO",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "4000",
+          "status": "MATCH",
+          "ref": "4000",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M25B0746",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1190",
+          "status": "MATCH",
+          "ref": "1190",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "2,6",
+          "status": "MATCH",
+          "ref": "2.6",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "381",
+          "status": "MATCH",
+          "ref": "381.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "480",
+          "status": "NA",
+          "ref": "180.0",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        }
+      },
+      "summary": {
+        "match": 9,
+        "no_match": 0,
+        "na": 1
+      }
+    },
+    {
+      "row_index": 5,
+      "fields": {
+        "of": {
+          "value": "261628",
+          "status": "MATCH",
+          "ref": "261628",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "MTG",
+          "status": "MATCH",
+          "ref": "MTG",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "260012",
+          "status": "MATCH",
+          "ref": "260012",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CLC6F04D - ESP3",
+          "status": "MATCH",
+          "ref": "CLC6F04D - ESP3",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "4000",
+          "status": "MATCH",
+          "ref": "4000",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M24B0938",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1160",
+          "status": "MATCH",
+          "ref": "1160",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "3",
+          "status": "MATCH",
+          "ref": "3",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "330",
+          "status": "MATCH",
+          "ref": "330.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "479",
+          "status": "NA",
+          "ref": "179.0",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        }
+      },
+      "summary": {
+        "match": 9,
+        "no_match": 0,
+        "na": 1
+      }
+    },
+    {
+      "row_index": 6,
+      "fields": {
+        "of": {
+          "value": "261850",
+          "status": "MATCH",
+          "ref": "261850",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "LICHT NL",
+          "status": "MATCH",
+          "ref": "LICHT NL",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2602124",
+          "status": "MATCH",
+          "ref": "2602124",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CGC8E04DI_V",
+          "status": "MATCH",
+          "ref": "CGC8E04DI_V",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "4800",
+          "status": "MATCH",
+          "ref": "4800",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M25B0365",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1285",
+          "status": "MATCH",
+          "ref": "1285",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "2,6",
+          "status": "MATCH",
+          "ref": "2.6",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "436",
+          "status": "MATCH",
+          "ref": "436.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "180",
+          "status": "MATCH",
+          "ref": "180.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 10,
+        "no_match": 0,
+        "na": 0
+      }
+    },
+    {
+      "row_index": 7,
+      "fields": {
+        "of": {
+          "value": "261850",
+          "status": "MATCH",
+          "ref": "261850",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "LICHT NL",
+          "status": "MATCH",
+          "ref": "LICHT NL",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2602124",
+          "status": "MATCH",
+          "ref": "2602124",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CGC8E04DI_V",
+          "status": "MATCH",
+          "ref": "CGC8E04DI_V",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "4800",
+          "status": "MATCH",
+          "ref": "4800",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M26B0072",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1320",
+          "status": "MATCH",
+          "ref": "1320",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "2,6",
+          "status": "MATCH",
+          "ref": "2.6",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "436",
+          "status": "MATCH",
+          "ref": "436.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "180",
+          "status": "MATCH",
+          "ref": "180.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 10,
+        "no_match": 0,
+        "na": 0
+      }
+    },
+    {
+      "row_index": 8,
+      "fields": {
+        "of": {
+          "value": "251558",
+          "status": "MATCH",
+          "ref": "251558",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "PETITJEAN",
+          "status": "MATCH",
+          "ref": "PETITJEAN",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2502609",
+          "status": "MATCH",
+          "ref": "2502609",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "ALPHA 3M - 156ud",
+          "status": "MATCH",
+          "ref": "ALPHA 3M - 156ud",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "3000",
+          "status": "MATCH",
+          "ref": "3000",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M24B0928",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1070",
+          "status": "MATCH",
+          "ref": "1070",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "2,6",
+          "status": "MATCH",
+          "ref": "2.6",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "340",
+          "status": "MATCH",
+          "ref": "340.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "180",
+          "status": "MATCH",
+          "ref": "180.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 10,
+        "no_match": 0,
+        "na": 0
+      }
+    }
+  ],
+  "to_analisar": []
+}

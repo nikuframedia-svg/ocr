@@ -1,0 +1,74 @@
+{
+  "header": {
+    "operador": "JÚLIO LIMA",
+    "n_operador": "0537",
+    "setor_maquina": "BOBINE-FORMATO",
+    "data": "13-04-2026"
+  },
+  "rows": [
+    {
+      "pri": "62",
+      "cliente": "INEO",
+      "ov": "2602783",
+      "of": "261999",
+      "modelo": "CLCAF06DV",
+      "qtd": "16",
+      "comp_mm": "6000",
+      "larg_mm": "1415",
+      "lote": "M24B1402",
+      "coni": "12",
+      "esp": "3",
+      "lbase": "455",
+      "ltopo": "229"
+    },
+    {
+      "pri": "65",
+      "cliente": "DAV NORDIC",
+      "ov": "2602732",
+      "of": "262108",
+      "modelo": "CLC5E4SD",
+      "qtd": "28",
+      "comp_mm": "5300",
+      "larg_mm": "1190",
+      "lote": "M25B0746",
+      "coni": "12",
+      "esp": "2.6",
+      "lbase": "381",
+      "ltopo": "180"
+    },
+    {
+      "pri": "66",
+      "cliente": "DAV NORDIC",
+      "ov": "2602732",
+      "of": "262109",
+      "modelo": "CLC5E04D",
+      "qtd": "112",
+      "comp_mm": "4800",
+      "larg_mm": "1190",
+      "lote": "M25B0746",
+      "coni": "12",
+      "esp": "2.6",
+      "lbase": "362",
+      "ltopo": "180"
+    },
+    {
+      "pri": "1",
+      "cliente": "MTG",
+      "ov": "250010",
+      "of": "257179",
+      "modelo": "CA08E08B-149",
+      "qtd": "140",
+      "comp_mm": "8720",
+      "larg_mm": "875",
+      "lote": "M26B0307",
+      "coni": "OCT",
+      "esp": "2.6",
+      "lbase": "641",
+      "ltopo": "203"
+    }
+  ],
+  "footer": {
+    "colunas_produzidas": "296",
+    "horas_trabalhadas": "6 H"
+  }
+}

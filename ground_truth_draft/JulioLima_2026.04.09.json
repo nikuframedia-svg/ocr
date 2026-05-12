@@ -1,0 +1,19 @@
+{
+  "header": {
+    "operador": "JÚLIO LIMA",
+    "n_operador": "0537",
+    "setor_maquina": "BOBINE-FORMATO",
+    "data": "09-04-2026"
+  },
+  "rows": [
+    {"pri": "5", "cliente": "MTG.GMBH", "ov": "2601489", "of": "261124", "modelo": "CGC3E10D", "qtd": "42", "comp_mm": "11500", "larg_mm": "950", "lote": "M26B0058", "coni": "10", "esp": "4", "lbase": "587", "ltopo": "226"},
+    {"pri": "61", "cliente": "ILUMIBÉRICA", "ov": "2602203", "of": "261690", "modelo": "CONIPROT.", "qtd": "2", "comp_mm": "10000", "larg_mm": "950", "lote": "M26B0058", "coni": "12", "esp": "4", "lbase": "641", "ltopo": "267"},
+    {"pri": "61", "cliente": "SOVEC", "ov": "2602258", "of": "261704", "modelo": "CLCCFO9Di-V", "qtd": "2", "comp_mm": "9000", "larg_mm": "950", "lote": "M26B0058", "coni": "12", "esp": "4", "lbase": "606", "ltopo": "267"},
+    {"pri": "24", "cliente": "SONEPAR", "ov": "2601711", "of": "261678", "modelo": "CA02F08R", "qtd": "2", "comp_mm": "8000", "larg_mm": "950", "lote": "M26B0058", "coni": "OCT.", "esp": "4", "lbase": "645", "ltopo": "247"},
+    {"pri": "", "cliente": "", "ov": "", "of": "261888", "modelo": "BRAÇOS", "qtd": "6", "comp_mm": "4350", "larg_mm": "950", "lote": "M26B0058", "coni": "", "esp": "4", "lbase": "305", "ltopo": "188"}
+  ],
+  "footer": {
+    "colunas_produzidas": "54",
+    "horas_trabalhadas": "3:00"
+  }
+}

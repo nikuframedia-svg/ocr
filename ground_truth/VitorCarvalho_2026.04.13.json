@@ -1,0 +1,44 @@
+{
+  "header": {
+    "operador": "VITOR CARVALHO",
+    "n_operador": "1391",
+    "setor_maquina": "BOBINE-FORMATO",
+    "data": "13-04-2026"
+  },
+  "rows": [
+    {
+      "pri": "C1",
+      "cliente": "MTG",
+      "ov": "250010",
+      "of": "257179",
+      "modelo": "CA08E08B-1ªPRIORIDADE",
+      "qtd": "24",
+      "comp_mm": "8720",
+      "larg_mm": "875",
+      "lote": "M26B0307",
+      "coni": "OCT",
+      "esp": "2,6",
+      "lbase": "641",
+      "ltopo": "203"
+    },
+    {
+      "pri": "C65",
+      "cliente": "FEDERATION",
+      "ov": "2602456",
+      "of": "262055",
+      "modelo": "CLCEF06RIV",
+      "qtd": "2",
+      "comp_mm": "6000",
+      "larg_mm": "875",
+      "lote": "M26B0307",
+      "coni": "12",
+      "esp": "2,6",
+      "lbase": "406",
+      "ltopo": "181"
+    }
+  ],
+  "footer": {
+    "colunas_produzidas": "26",
+    "horas_trabalhadas": "8:00"
+  }
+}

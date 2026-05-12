@@ -157,6 +157,46 @@ def update_extraction(
         _sync_production_rows(c, sheet_id, sheet_data)
 
 
+def get_sheet_template_name(sheet: dict | int) -> str:
+    """Round 54 — return the canonical template name for a sheet.
+
+    Backward-compatible with legacy sheets (pre-R54) that have no
+    ``template_name`` in their sheet_data: falls back to inference
+    via the setor_maquina header field. Final fallback is
+    ``"bobine_formato"`` (the default template).
+
+    Accepts either a sheet dict (output of get_sheet) or a sheet_id.
+    """
+    if isinstance(sheet, int):
+        s = get_sheet(sheet)
+        if s is None:
+            return "bobine_formato"
+    else:
+        s = sheet
+
+    sd_raw = s.get("sheet_data")
+    if not sd_raw:
+        return "bobine_formato"
+    try:
+        sd = json.loads(sd_raw) if isinstance(sd_raw, str) else sd_raw
+    except (json.JSONDecodeError, TypeError):
+        return "bobine_formato"
+
+    # Explicit template_name persisted by R54+ uploads
+    tname = sd.get("template_name")
+    if tname:
+        return str(tname)
+
+    # Legacy sheets — infer from header.setor_maquina
+    setor = ((sd.get("header") or {}).get("setor_maquina") or "").strip()
+    if setor:
+        # Lazy import to avoid circular dependency
+        from app.templates_registry import detect_template
+        return detect_template(setor).name
+
+    return "bobine_formato"
+
+
 # ---- production_rows sync ----
 
 def _parse_int(s: Any) -> int | None:
@@ -315,7 +355,16 @@ def get_sheet(sheet_id: int) -> dict | None:
 
 
 def list_sheets(status: str | None = None, limit: int = 100) -> list[dict]:
-    sql = "SELECT id, captured_at, status, operador, validated_at, image_path FROM sheets"
+    # Round 54 — also pull template_name + setor_maquina for badge rendering.
+    # json_extract is sqlite native + indexed via the sheet_data BLOB so no
+    # extra cost vs the legacy SELECT.
+    sql = """
+        SELECT id, captured_at, status, operador, validated_at, image_path,
+               COALESCE(json_extract(sheet_data, '$.template_name'),
+                        json_extract(raw_extraction, '$.template_name')) AS template_name,
+               json_extract(sheet_data, '$.header.setor_maquina') AS setor_maquina
+        FROM sheets
+    """
     params: tuple = ()
     if status:
         sql += " WHERE status = ?"
@@ -611,7 +660,10 @@ def list_sheets_filtered(
         SELECT id, captured_at, status, operador, validated_at, image_path,
                json_extract(sheet_data, '$.header.operador') AS sheet_operador,
                json_extract(sheet_data, '$.header.data') AS sheet_data_str,
-               json_extract(sheet_data, '$.header.setor_maquina') AS sheet_setor
+               json_extract(sheet_data, '$.header.setor_maquina') AS sheet_setor,
+               COALESCE(json_extract(sheet_data, '$.template_name'),
+                        json_extract(raw_extraction, '$.template_name')) AS template_name,
+               json_extract(sheet_data, '$.header.setor_maquina') AS setor_maquina
           FROM sheets
          WHERE status IN ({placeholders})
            AND sheet_data IS NOT NULL

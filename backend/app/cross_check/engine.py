@@ -46,6 +46,7 @@ Output JSON shape (per row):
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -56,7 +57,7 @@ CROSS_CHECK_STATUSES = ("MATCH", "NO_MATCH", "NA")
 # user accepted small OCR misreads (5-15mm) as MATCH provided they're
 # geometrically consistent (ltotal sanity check below).
 TOL_LARG_MM = 20      # ±20mm (was 0 exact); widening per Round 43 Sol 3
-TOL_COMP_MM = 50      # comp tolerated ±50mm (unchanged)
+TOL_COMP_MM = 100     # comp tolerated ±100mm (R52: user requested widening from ±50mm)
 TOL_ESP = 0.01        # esp essentially equal
 
 # Fields explicitly ignored — user said "caga" + no useful ref
@@ -73,6 +74,241 @@ TOL_LTOTAL_SANITY = 5        # |sum_ocr - sum_plan| must be ≤ this for OUTER t
 TOL_LBASE_LTOPO = TOL_LBASE_LTOPO_INNER
 
 
+def _longest_common_substring(a: str, b: str) -> int:
+    """Round 62 — length of longest contiguous substring shared by a and b.
+
+    Standard 2-row DP, O(|a|·|b|). Used as a safety guard for the
+    row-context modelo MATCH path: if operator's modelo shares ≥4
+    consecutive alphanum chars with the plan FT, the plan entry can
+    be trusted as canonical for that cell (other fields already
+    confirmed the row).
+    """
+    if not a or not b:
+        return 0
+    la, lb = len(a), len(b)
+    best = 0
+    dp = [0] * (lb + 1)
+    for i in range(1, la + 1):
+        prev = 0
+        for j in range(1, lb + 1):
+            cur = dp[j]
+            if a[i - 1] == b[j - 1]:
+                dp[j] = prev + 1
+                if dp[j] > best:
+                    best = dp[j]
+            else:
+                dp[j] = 0
+            prev = cur
+    return best
+
+
+def _count_row_confirmation(
+    row: dict,
+    plan_entry: dict | None,
+    sap_entry: dict | None,
+) -> int:
+    """Round 62 — count of non-modelo row fields that MATCH the picked
+    plan_entry / sap_entry. Used to gate the row-context modelo MATCH.
+
+    Compares 8 fields with the same tolerances as _check_row's main
+    block: cliente, ov, comp_mm, larg_mm, lote, esp, lbase, ltopo.
+    `of` is implicit (matched_entry only exists if OF in plan).
+    """
+    if not plan_entry:
+        return 0
+    n = 0
+    # cliente — exact upper match
+    cli_op = str(row.get("cliente") or "").strip().upper()
+    cli_plan = str(plan_entry.get("cliente") or "").strip().upper()
+    if cli_op and cli_plan and cli_op == cli_plan:
+        n += 1
+    # ov — exact string
+    ov_op = str(row.get("ov") or "").strip()
+    ov_plan = str(plan_entry.get("ov") or "").strip()
+    if ov_op and ov_plan and ov_op == ov_plan:
+        n += 1
+    # comp_mm — ±TOL_COMP_MM
+    comp_op = _num(row.get("comp_mm"))
+    comp_plan = _num(plan_entry.get("comp"))
+    if comp_op is not None and comp_plan is not None and abs(comp_op - comp_plan) <= TOL_COMP_MM:
+        n += 1
+    # lbase — INNER tolerance only (conservative)
+    lb_op = _num(row.get("lbase"))
+    lb_plan = _num(plan_entry.get("lbase"))
+    if lb_op is not None and lb_plan is not None and abs(lb_op - lb_plan) <= TOL_LBASE_LTOPO_INNER:
+        n += 1
+    # ltopo — same
+    lt_op = _num(row.get("ltopo"))
+    lt_plan = _num(plan_entry.get("ltopo"))
+    if lt_op is not None and lt_plan is not None and abs(lt_op - lt_plan) <= TOL_LBASE_LTOPO_INNER:
+        n += 1
+    # esp — SAP or plan
+    esp_op = _num(row.get("esp"))
+    if esp_op is not None:
+        sap_esp = _num(sap_entry.get("esp")) if sap_entry else None
+        plan_esp = _num(plan_entry.get("esp"))
+        if sap_esp is not None and abs(esp_op - sap_esp) <= TOL_ESP:
+            n += 1
+        elif plan_esp is not None and abs(esp_op - plan_esp) <= TOL_ESP:
+            n += 1
+    # larg_mm — SAP only (plan doesn't have larg)
+    larg_op = _num(row.get("larg_mm"))
+    if larg_op is not None and sap_entry:
+        sap_larg = _num(sap_entry.get("larg"))
+        if sap_larg is not None and abs(larg_op - sap_larg) <= TOL_LARG_MM:
+            n += 1
+    # lote — sap_entry presence is the match signal
+    lote_op = str(row.get("lote") or "").strip().upper()
+    if lote_op and sap_entry is not None:
+        n += 1
+    return n
+
+
+def _lev_indel(a: str, b: str, max_dist: int = 1) -> int:
+    """Round 61 — Levenshtein distance with insertion/deletion/substitution.
+
+    Standard 2-row DP. Returns min(distance, max_dist + 1) — early-exit
+    when distance is guaranteed to exceed max_dist. Used by
+    _modelo_fuzzy_match sub-rule (c) to catch operator OCR missing or
+    with extra digit vs plan token (e.g. CFH2F2RI ↔ CFH2F12RI).
+    """
+    if a == b:
+        return 0
+    la, lb = len(a), len(b)
+    if abs(la - lb) > max_dist:
+        return max_dist + 1
+    if la == 0:
+        return lb if lb <= max_dist else max_dist + 1
+    if lb == 0:
+        return la if la <= max_dist else max_dist + 1
+    # 2-row DP
+    prev = list(range(lb + 1))
+    cur = [0] * (lb + 1)
+    for i in range(1, la + 1):
+        cur[0] = i
+        row_min = cur[0]
+        for j in range(1, lb + 1):
+            cost = 0 if a[i - 1] == b[j - 1] else 1
+            cur[j] = min(
+                prev[j] + 1,          # deletion
+                cur[j - 1] + 1,       # insertion
+                prev[j - 1] + cost,   # substitution
+            )
+            if cur[j] < row_min:
+                row_min = cur[j]
+        if row_min > max_dist:
+            return max_dist + 1
+        prev, cur = cur, prev
+    return prev[lb]
+
+
+def _modelo_tokens(text: str) -> list[str]:
+    """R52 F2 — extract alphanumeric tokens >= 4 chars from arbitrary text.
+
+    Used for token-fuzzy matching when operator writes modelo in long form
+    (e.g. `1045 V66 N:4 A573V500`) and plan has the canonical code embedded
+    in a multi-token description (`1015VF06 - Nº1 A573U500`).
+    """
+    return [m.group().upper() for m in re.finditer(r"[A-Z0-9]{4,}", text.upper())]
+
+
+def _modelo_fuzzy_match(op_modelo: str, plan_designacao: str) -> bool:
+    """R52 F2 + R55 — bidirectional fuzzy token match.
+
+    True when:
+      a) any operator token (≥5 chars) is within Lev-1 (Lev-2 for ≥7
+         chars) of any plan token of same length. [R52 F2 — long-form
+         single-token codes like `A573V500` ↔ `A573U500`]
+      b) (R55) operator's compound modelo has ≥2 tokens (4+ chars) that
+         match plan via substring OR Lev-1 (same-length), AND ≥40% of
+         operator tokens match. [Catches multi-token operator writing
+         like `1045 V120 N:4 1045 V503` ↔ `1015VT20 - Nº1 1015V503`
+         where V503 substring + 1045 Lev-1 of 1015 anchors the match.]
+
+    Does NOT match (legit OCR errors that should stay NO_MATCH):
+      - Different-length single tokens that share no substring
+      - Operator with only 1 short token (no multi-token signal)
+    """
+    if not op_modelo or not plan_designacao:
+        return False
+    op_toks = _modelo_tokens(op_modelo)
+    plan_toks = _modelo_tokens(plan_designacao)
+    if not op_toks or not plan_toks:
+        return False
+
+    # (a) R52 F2 — same-length Lev for long tokens
+    for ot in op_toks:
+        if len(ot) < 5:
+            continue
+        for pt in plan_toks:
+            if len(pt) < 5:
+                continue
+            if ot == pt:
+                return True
+            if len(ot) != len(pt):
+                continue
+            diffs = sum(1 for a, b in zip(ot, pt) if a != b)
+            if diffs <= 1:
+                return True
+            if diffs <= 2 and len(ot) >= 7:
+                return True
+
+    # (b) R55 — multi-token coherence. Each operator token (≥4 chars)
+    # is matched against plan tokens via:
+    #   - Direct substring (ot ⊂ pt) — e.g. V503 inside 1015V503
+    #   - Sliding-window Lev-1 — operator's |ot|-char run differs by 1
+    #     char from a same-length window of pt (e.g. 1045 vs 1015 inside
+    #     1015VT20). Catches OCR character confusions in compound codes.
+    matched_count = 0
+    for ot in op_toks:
+        if len(ot) < 4:
+            continue
+        for pt in plan_toks:
+            if len(pt) < 4:
+                continue
+            # Direct substring
+            if ot in pt:
+                matched_count += 1
+                break
+            # Sliding window: check every |ot|-char window of pt
+            if len(ot) <= len(pt):
+                matched_window = False
+                for i in range(len(pt) - len(ot) + 1):
+                    sub = pt[i:i+len(ot)]
+                    diffs = sum(1 for a, b in zip(ot, sub) if a != b)
+                    if diffs == 1:
+                        matched_count += 1
+                        matched_window = True
+                        break
+                if matched_window:
+                    break
+    if matched_count >= 2 and matched_count / len(op_toks) >= 0.4:
+        return True
+
+    # (c) R61 — alphanum-normalized Lev-1 with insertion/deletion.
+    # Catches operator OCR with missing or extra digit vs plan token,
+    # which (a) and (b) miss because they require same-length comparison.
+    # Example resolved:
+    #   op `CFH2F2RI-V1` → alphanum `CFH2F2RIV1` (10 chars)
+    #   plan `CFH2F12RI_V1 - FL PL + ...` → segments [CFH2F12RIV1 (11),
+    #   FLPL (4), BASEINOX (8), FURACAO (7), TOPO (4)]
+    #   Lev-1 indel(`CFH2F2RIV1`, `CFH2F12RIV1`) = 1 (insert `1` at pos 5) → MATCH
+    # Conservative: min 6 alphanum chars, ±1 length, dist ≤ 1.
+    op_alnum = "".join(ch for ch in op_modelo.upper() if ch.isalnum())
+    if len(op_alnum) >= 6:
+        # Plan designacao may be compound ("FT - suffix1 - suffix2");
+        # split and test each segment that's ≥6 alphanum chars.
+        for seg in plan_designacao.split(" - "):
+            plan_alnum = "".join(ch for ch in seg.upper() if ch.isalnum())
+            if len(plan_alnum) < 6:
+                continue
+            if abs(len(op_alnum) - len(plan_alnum)) > 1:
+                continue
+            if _lev_indel(op_alnum, plan_alnum, max_dist=1) <= 1:
+                return True
+    return False
+
+
 def _num(v) -> float | None:
     if v is None or v == "":
         return None
@@ -82,18 +318,40 @@ def _num(v) -> float | None:
         return None
 
 
-def _best_plan_entry(entries: list[dict], modelo_ocr: str, comp_ocr: float | None) -> dict | None:
-    """Mirror of factory validator's _melhor_entrada — pick the plan
-    row whose designacao contains the modelo, else closest comp.
+def _best_plan_entry(entries: list[dict], modelo_ocr: str, comp_ocr: float | None,
+                     row: dict | None = None, refs: dict | None = None) -> dict | None:
+    """Pick the best plan entry for a row.
+
+    Round 57: when `row` and `refs` are provided, use HOLISTIC field
+    scoring (9 fields, equal weight) to pick the entry that maximizes
+    matches across ALL operator fields. Tie-break: prefer active
+    (fechado='0'), then high-signal (cliente+ov+modelo exact).
+
+    Legacy fallback (when row/refs not given): substring(modelo) →
+    closest comp → first. Used by older call-sites that don't pass
+    the full row context.
 
     Round 43 Sol 2: when multiple entries exist for an OF, prefer those
-    with fechado='0' (active) over fechado='1' (closed). Operators
-    typically reference active orders. Falls back to all entries if
-    no active ones match the modelo/comp criteria.
+    with fechado='0' (active) over fechado='1' (closed).
     """
     if not entries:
         return None
-    # Filter to active first; fall back to all if no active or no match
+
+    # R57 — holistic scoring path. Used by _check_row which has full
+    # row + refs context.
+    if row is not None and refs is not None:
+        from .holistic_score import score_entry, score_high_signal
+        scored = []
+        for e in entries:
+            s = score_entry(e, row, refs)
+            hs = score_high_signal(e, row)
+            is_active = str(e.get("fechado", "0")) == "0"
+            scored.append((s, int(is_active), hs, e))
+        # Sort: max score, then active, then max high-signal
+        scored.sort(key=lambda x: (-x[0], -x[1], -x[2]))
+        return scored[0][3]
+
+    # Legacy path — substring + comp fallback
     active = [e for e in entries if str(e.get("fechado", "0")) == "0"]
     pool = active if active else entries
     if modelo_ocr:
@@ -125,7 +383,12 @@ def _check_row(
 
     modelo_raw = str(row.get("modelo") or "").strip()
     comp_v = _num(row.get("comp_mm"))
-    matched_entry = _best_plan_entry(plan_entries, modelo_raw, comp_v) if in_plan else None
+    # R57: pass full row + refs to enable holistic scoring across all
+    # entries (9 fields equal weight, max-% wins). Falls back to legacy
+    # substring+comp logic if refs not threaded through (defensive).
+    matched_entry = _best_plan_entry(
+        plan_entries, modelo_raw, comp_v, row=row, refs=refs,
+    ) if in_plan else None
 
     lote_raw = str(row.get("lote") or "").strip()
     sap_lotes = refs.get("lotes_sap", frozenset())
@@ -187,12 +450,48 @@ def _check_row(
         _record("modelo", "NA", modelo_raw, reason="OF não no plan")
     else:
         plan_des = str(matched_entry.get("designacao", "")).strip()
+        matched = False
+        match_reason = ""
+        # Stage 1: substring (operator IN plan designacao)
         if plan_des and modelo_raw.upper() in plan_des.upper():
-            _record("modelo", "MATCH", modelo_raw, ref=plan_des, ref_source="plan")
+            matched = True
+            match_reason = "substring"
+        # Stage 2 (R52 F2): token-fuzzy match across ALL plan entries for
+        # this OF. Catches long-form modelos where operator writes the
+        # plan content with OCR errors scattered (e.g. `1045 V66 N:4 A573V500`
+        # ↔ `1015VF06 - Nº1 A573U500`).
+        if not matched and plan_entries:
+            for e in plan_entries:
+                des = str(e.get("designacao", "")).strip()
+                if _modelo_fuzzy_match(modelo_raw, des):
+                    matched = True
+                    match_reason = "token_fuzzy"
+                    plan_des = des  # use the matched entry's designacao as ref
+                    break
+        # Stage 3 (R62): row-context confirmation. When the matched_entry
+        # is strongly confirmed by other row fields (≥4 of 8 non-modelo
+        # MATCH) AND operator's modelo shares ≥4 consecutive alphanum
+        # chars with the plan FT (safety guard against garbage OCR),
+        # accept as MATCH and emit plan FT as canonical ref.
+        # Examples resolved:
+        #   `guilha` (6) + 5/8 fields confirm `guilhametro` → MATCH
+        #   `xyz` (3) + 5/8 confirm `guilhametro` → NO_MATCH (LCS=0 < 4)
+        if not matched and matched_entry:
+            confirmation_score = _count_row_confirmation(row, matched_entry, sap_entry)
+            if confirmation_score >= 4:
+                ft = plan_des.split(" - ", 1)[0].strip()
+                op_alnum = "".join(ch for ch in modelo_raw.upper() if ch.isalnum())
+                ft_alnum = "".join(ch for ch in ft.upper() if ch.isalnum())
+                if op_alnum and ft_alnum and _longest_common_substring(op_alnum, ft_alnum) >= 4:
+                    matched = True
+                    match_reason = f"row_context_{confirmation_score}of8"
+        if matched:
+            _record("modelo", "MATCH", modelo_raw, ref=plan_des,
+                    ref_source="plan", reason=match_reason)
         else:
             _record("modelo", "NO_MATCH", modelo_raw, ref=plan_des[:50] or "(vazio)",
                     ref_source="plan",
-                    reason=f"modelo '{modelo_raw}' não é substring de designacao")
+                    reason=f"modelo '{modelo_raw}' não bate plan (substring nem fuzzy)")
 
     # --- comp_mm (vs plan.comp ±50mm) ---
     comp_raw = str(row.get("comp_mm") or "").strip()
@@ -552,8 +851,18 @@ _STUB_VARIANTS: dict[str, list[tuple]] = {
         ("larg_mm", ("of", "cliente", "modelo"), 3, None),
     ],
     # W13 — v13 + W1 + W4 + W6 (defensible combo) ⭐
+    # R52 F3: removed lote stub-accept (lote not-in-SAP must stay visible
+    # via NO_MATCH/cc-warn). Lote no longer downgraded silently.
+    # R55: re-introduced lote 4-of-4 (modelo+of+cliente+esp) — user
+    # explicit ask after seeing 103 NO_MATCH lotes pending SAP refresh.
+    # R57: + larg_mm "promote NA-no-ref → NA-suspended" when row context
+    # confirms (4+ of of/cliente/modelo/esp/comp_mm MATCH). User principle:
+    # "9 cells equal weight, winning row = max %". When lote is missing
+    # from SAP, larg can't be directly validated — but row coherence
+    # implies operator's larg is trustworthy → yellow soft (verify) not
+    # grey (unknown).
     "w13": [
-        ("lote", ("of", "cliente", "comp_mm"), 3, None),  # W4 relax
+        ("lote", ("of", "cliente", "modelo", "esp"), 4, None),
         ("cliente", ("of", "ov", "modelo", "comp_mm"), 4, None),
         ("modelo", ("of", "cliente", "ov", "comp_mm"), 4, None),
         ("esp", ("of", "cliente", "modelo", "comp_mm"), 4, None),
@@ -571,6 +880,9 @@ _STUB_VARIANTS: dict[str, list[tuple]] = {
         ("ltopo", (), 0, None, "any_dim_sibling_match"),
         ("comp_mm", (), 0, None, "any_dim_sibling_match"),
         ("larg_mm", (), 0, None, "any_dim_sibling_match"),
+        # R57 — larg_mm row-coherence promotion (NA-no-ref → NA-suspended)
+        ("larg_mm", ("of", "cliente", "modelo", "esp", "comp_mm"), 4,
+         None, "promote_na_if_lote_missing"),
     ],
     # W14 — v13 + W2 (row-level dim downgrade)
     "w14": [
@@ -690,8 +1002,44 @@ def _apply_stub_accept(fields: dict, summary: dict) -> None:
         else:
             continue
         cell = fields.get(target)
-        if cell is None or cell.get("status") != "NO_MATCH":
+        if cell is None:
             continue
+        # R57: "promote_na_*" conditions act on NA cells (no-ref) and
+        # upgrade them to NA-suspended when row context confirms.
+        # All other rules act on NO_MATCH cells (downgrade to NA-suspended).
+        is_promote = condition.startswith("promote_na_")
+        target_status = "NA" if is_promote else "NO_MATCH"
+        if cell.get("status") != target_status:
+            continue
+        # For promote rules, require the cell to currently lack a ref
+        # (i.e. it's NA because SAP/plan didn't have the data, not because
+        # operator left it blank). Use the existing 'reason' as proxy.
+        if is_promote:
+            reason = (cell.get("reason") or "").lower()
+            # Skip if cell is NA because operator wrote nothing (vazio)
+            if "vazio" in reason:
+                continue
+            # promote_na_if_lote_missing: only fire if cell is NA because
+            # SAP doesn't have the lote (which is the main use case)
+            if condition == "promote_na_if_lote_missing":
+                if "sap" not in reason and "lote" not in reason:
+                    continue
+        # R57 — promote_na rules: gate-count required, status stays NA but
+        # gets suspended_by_stub flag for distinct UI colour. No
+        # decrement of no_match because the cell wasn't NO_MATCH to begin
+        # with — already in summary['na'].
+        if is_promote:
+            n_match = sum(1 for f in gates
+                          if fields.get(f, {}).get("status") == "MATCH")
+            if n_match >= min_gates:
+                cell["reason"] = (
+                    f"stub-accept {variant} ({condition}, "
+                    f"{n_match}/{len(gates)} {','.join(gates)} MATCH)"
+                )
+                cell["suspended_by_stub"] = True
+                # NA count unchanged — cell already NA
+            continue
+
         # delta cap check
         if max_delta is not None:
             try:
@@ -708,6 +1056,7 @@ def _apply_stub_accept(fields: dict, summary: dict) -> None:
             # Condition rules don't require gate count; downgrade directly
             cell["status"] = "NA"
             cell["reason"] = f"stub-accept {variant} ({condition})"
+            cell["suspended_by_stub"] = True  # R52 F4: differentiate UI color
             summary["no_match"] = max(0, summary.get("no_match", 0) - 1)
             summary["na"] = summary.get("na", 0) + 1
             continue
@@ -720,6 +1069,7 @@ def _apply_stub_accept(fields: dict, summary: dict) -> None:
                 f"stub-accept {variant} "
                 f"({n_match}/{len(gates)} {','.join(gates)} MATCH)"
             )
+            cell["suspended_by_stub"] = True  # R52 F4
             summary["no_match"] = max(0, summary.get("no_match", 0) - 1)
             summary["na"] = summary.get("na", 0) + 1
 
@@ -739,13 +1089,23 @@ def cross_check_sheet(
           "header": {field: {value, status}},
           "footer": {field: {value, status}},
           "to_analisar": list of NO_MATCH cells (for inbox),
-          "refs_loaded_at": ...
+          "refs_loaded_at": ...,
+          "template_name": str
         }
 
     Round 33 changes (vs Round 32):
     - No more `corrections` list — engine doesn't trigger any writes.
     - No PREENCHIDO/CORRIGIDO_PLAN — pure MATCH/NO_MATCH/NA.
     - Caller (main.py) no longer apply_edits — just stores the JSON.
+
+    Round 54 changes:
+    - template-aware: per-row fields filtered to ``template.cross_check_fields``.
+      Fields absent from the template (e.g. ``lote`` in Guilhotina) get
+      no status in the output (not even NA) — the UI shouldn't render
+      them, and the summary doesn't count them.
+    - Paragens (``has_production_rows=False``): no row checks against
+      plan/SAP; rows return empty field maps so UI shows neutral cells.
+    - Footer_fields driven by template (paragens has none).
     """
     if not sheet_data:
         return {
@@ -756,37 +1116,84 @@ def cross_check_sheet(
             "footer": {},
             "to_analisar": [],
             "refs_loaded_at": refs.get("loaded_at"),
+            "template_name": "bobine_formato",
         }
+
+    # Round 54 — derive template. Lazy import to avoid circular dep.
+    from app.templates_registry import DEFAULT_TEMPLATE, detect_template, get_template
+    tname = sheet_data.get("template_name")
+    if tname:
+        template = get_template(tname)
+    else:
+        setor = (sheet_data.get("header") or {}).get("setor_maquina", "")
+        template = detect_template(setor) if setor else DEFAULT_TEMPLATE
 
     rows = sheet_data.get("rows", []) or []
     rows_out = []
     to_analisar: list[dict] = []
     overall = {"match": 0, "no_match": 0, "na": 0}
 
-    for i, row in enumerate(rows):
-        result = _check_row(row, refs)
-        rows_out.append({"row_index": i, **result})
-        for field, info in result["fields"].items():
-            if info["status"] == "NO_MATCH":
-                to_analisar.append({
-                    "row_index": i,
-                    "field": field,
-                    "value": info["value"],
-                    "ref": info.get("ref"),
-                    "ref_source": info.get("ref_source"),
-                    "reason": info.get("reason", ""),
-                })
-        for k, v in result["summary"].items():
-            overall[k] += v
+    if template.has_production_rows:
+        # Standard production template — run full _check_row, then keep
+        # only the fields that belong to this template's cross_check_fields.
+        cc_fields = set(template.cross_check_fields)
+        for i, row in enumerate(rows):
+            full = _check_row(row, refs)
+            if cc_fields:
+                # Filter to only the fields that exist in this template
+                kept_fields = {
+                    f: info for f, info in full["fields"].items() if f in cc_fields
+                }
+            else:
+                # Empty cross_check_fields means template doesn't validate
+                # any rows against refs (paragens path, but also a safety
+                # net for templates we don't know how to check yet).
+                kept_fields = {}
 
-    # Header / footer: NA for everything (operator/system metadata)
+            # Recompute summary from kept fields
+            row_summary = {"match": 0, "no_match": 0, "na": 0}
+            for info in kept_fields.values():
+                key = info.get("status", "").lower()
+                if key in row_summary:
+                    row_summary[key] += 1
+
+            rows_out.append({
+                "row_index": i,
+                "fields": kept_fields,
+                "summary": row_summary,
+            })
+            for field, info in kept_fields.items():
+                if info["status"] == "NO_MATCH":
+                    to_analisar.append({
+                        "row_index": i,
+                        "field": field,
+                        "value": info["value"],
+                        "ref": info.get("ref"),
+                        "ref_source": info.get("ref_source"),
+                        "reason": info.get("reason", ""),
+                    })
+            for k, v in row_summary.items():
+                overall[k] += v
+    else:
+        # Paragens template (or any non-production template) — no refs
+        # to validate against. Return per-row empty field maps so the UI
+        # can iterate template.row_fields and render neutral cells.
+        for i, _row in enumerate(rows):
+            rows_out.append({
+                "row_index": i,
+                "fields": {},
+                "summary": {"match": 0, "no_match": 0, "na": 0},
+            })
+
+    # Header — same 4 fields for every template (operator/system metadata).
     header_fields = {
         f: {"value": (sheet_data.get("header") or {}).get(f, ""), "status": "NA"}
-        for f in ("operador", "n_operador", "setor_maquina", "data")
+        for f in template.header_fields
     }
+    # Footer — template-driven (paragens has none).
     footer_fields = {
         f: {"value": (sheet_data.get("footer") or {}).get(f, ""), "status": "NA"}
-        for f in ("colunas_produzidas", "horas_trabalhadas")
+        for f in template.footer_fields
     }
     overall["na"] += len(header_fields) + len(footer_fields)
 
@@ -800,4 +1207,5 @@ def cross_check_sheet(
         "footer": footer_fields,
         "to_analisar": to_analisar,
         "refs_loaded_at": refs.get("loaded_at"),
+        "template_name": template.name,
     }

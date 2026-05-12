@@ -1,0 +1,715 @@
+{
+  "sheet_id": 4,
+  "image_path": "images\\20260503_221659_b112acfc9c5dab72.jpeg",
+  "operador": "JÚLIO LIMA",
+  "date": "2026-04-15",
+  "sheet_status": "extracted",
+  "checked_at": "2026-05-04T11:21:24+00:00",
+  "refs_loaded_at": "2026-05-04T11:21:24+00:00",
+  "summary": {
+    "ok": 89,
+    "corrigido": 7,
+    "preenchido": 0,
+    "analisar": 8,
+    "missing": 0,
+    "total": 104
+  },
+  "rows": [
+    {
+      "row_index": 0,
+      "fields": {
+        "of": {
+          "value": "254707",
+          "status": "OK"
+        },
+        "ov": {
+          "value": "2507714",
+          "status": "OK"
+        },
+        "cliente": {
+          "value": "TECPOLES",
+          "status": "ANALISAR",
+          "plan_value": "TECPOLES GMBH",
+          "reason": "cliente OCR 'TECPOLES' ≠ plan 'TECPOLES GMBH'"
+        },
+        "modelo": {
+          "value": "0854U554",
+          "status": "CORRIGIDO"
+        },
+        "lote": {
+          "value": "M25B0898",
+          "status": "OK"
+        },
+        "qtd": {
+          "value": "20",
+          "status": "OK"
+        },
+        "comp_mm": {
+          "value": "9300",
+          "status": "ANALISAR",
+          "plan_value": "9196",
+          "reason": "comp_mm=9300 ≠ plan=9196"
+        },
+        "larg_mm": {
+          "value": "1500",
+          "status": "OK"
+        },
+        "esp": {
+          "value": "5",
+          "status": "OK"
+        },
+        "lbase": {
+          "value": "1424",
+          "status": "OK"
+        },
+        "ltopo": {
+          "value": "941",
+          "status": "OK"
+        },
+        "coni": {
+          "value": "T",
+          "status": "OK"
+        },
+        "pri": {
+          "value": "P4",
+          "status": "OK"
+        }
+      },
+      "filled": [],
+      "summary": {
+        "ok": 10,
+        "corrigido": 1,
+        "preenchido": 0,
+        "analisar": 2,
+        "missing": 0
+      },
+      "of_status": "in_plan",
+      "lote_status": "in_sap",
+      "matched_plan_entry": {
+        "of": 254707,
+        "cliente": "TECPOLES GMBH",
+        "ov": "2507714",
+        "designacao": "0854UJ54 - Nº2 0854U554 1/2",
+        "esp": 5,
+        "lbase": 1424,
+        "ltopo": 941,
+        "ltotal": 2365,
+        "comp": 9196
+      }
+    },
+    {
+      "row_index": 1,
+      "fields": {
+        "of": {
+          "value": "261731",
+          "status": "OK"
+        },
+        "ov": {
+          "value": "2602217",
+          "status": "OK"
+        },
+        "cliente": {
+          "value": "MTG BELUX",
+          "status": "OK"
+        },
+        "modelo": {
+          "value": "CBO4F63D",
+          "status": "CORRIGIDO"
+        },
+        "lote": {
+          "value": "M26B0206",
+          "status": "OK"
+        },
+        "qtd": {
+          "value": "2",
+          "status": "OK"
+        },
+        "comp_mm": {
+          "value": "6400",
+          "status": "OK"
+        },
+        "larg_mm": {
+          "value": "800",
+          "status": "OK"
+        },
+        "esp": {
+          "value": "4",
+          "status": "OK"
+        },
+        "lbase": {
+          "value": "529",
+          "status": "OK"
+        },
+        "ltopo": {
+          "value": "181",
+          "status": "OK"
+        },
+        "coni": {
+          "value": "OCT",
+          "status": "OK"
+        },
+        "pri": {
+          "value": "22",
+          "status": "OK"
+        }
+      },
+      "filled": [],
+      "summary": {
+        "ok": 12,
+        "corrigido": 1,
+        "preenchido": 0,
+        "analisar": 0,
+        "missing": 0
+      },
+      "of_status": "in_plan",
+      "lote_status": "in_sap",
+      "matched_plan_entry": {
+        "of": 261731,
+        "cliente": "MTG BELUX",
+        "ov": "2602217",
+        "designacao": "CBO4F63D - CI6617A4500 - FL PL + PORTA VENT",
+        "esp": 4,
+        "lbase": 529,
+        "ltopo": 181,
+        "ltotal": 709.414,
+        "comp": 6400
+      }
+    },
+    {
+      "row_index": 2,
+      "fields": {
+        "of": {
+          "value": "261416",
+          "status": "OK"
+        },
+        "ov": {
+          "value": "2601860",
+          "status": "OK"
+        },
+        "cliente": {
+          "value": "MTG BELUX",
+          "status": "OK"
+        },
+        "modelo": {
+          "value": "CBO1F08D",
+          "status": "CORRIGIDO"
+        },
+        "lote": {
+          "value": "M26B0178",
+          "status": "OK"
+        },
+        "qtd": {
+          "value": "2",
+          "status": "OK"
+        },
+        "comp_mm": {
+          "value": "8000",
+          "status": "OK"
+        },
+        "larg_mm": {
+          "value": "1175",
+          "status": "OK"
+        },
+        "esp": {
+          "value": "4",
+          "status": "OK"
+        },
+        "lbase": {
+          "value": "628",
+          "status": "OK"
+        },
+        "ltopo": {
+          "value": "313",
+          "status": "OK"
+        },
+        "coni": {
+          "value": "OCT",
+          "status": "OK"
+        },
+        "pri": {
+          "value": "10",
+          "status": "OK"
+        }
+      },
+      "filled": [],
+      "summary": {
+        "ok": 12,
+        "corrigido": 1,
+        "preenchido": 0,
+        "analisar": 0,
+        "missing": 0
+      },
+      "of_status": "in_plan",
+      "lote_status": "in_sap",
+      "matched_plan_entry": {
+        "of": 261416,
+        "cliente": "MTG BELUX",
+        "ov": "2601860",
+        "designacao": "CBO1F08D - CI6815A4500 - FL PL + CUTELOS + PONTEIRA + PORT VENT",
+        "esp": 4,
+        "lbase": 628,
+        "ltopo": 313,
+        "ltotal": 941.366,
+        "comp": 8000
+      }
+    },
+    {
+      "row_index": 3,
+      "fields": {
+        "of": {
+          "value": "261491",
+          "status": "OK"
+        },
+        "ov": {
+          "value": "2601396",
+          "status": "OK"
+        },
+        "cliente": {
+          "value": "ESOM",
+          "status": "ANALISAR",
+          "plan_value": "ESOM SAS",
+          "reason": "cliente OCR 'ESOM' ≠ plan 'ESOM SAS'"
+        },
+        "modelo": {
+          "value": "CAO2F12R",
+          "status": "CORRIGIDO"
+        },
+        "lote": {
+          "value": "M26B0178",
+          "status": "OK"
+        },
+        "qtd": {
+          "value": "2",
+          "status": "OK"
+        },
+        "comp_mm": {
+          "value": "11800",
+          "status": "OK"
+        },
+        "larg_mm": {
+          "value": "1175",
+          "status": "OK"
+        },
+        "esp": {
+          "value": "4",
+          "status": "OK"
+        },
+        "lbase": {
+          "value": "834",
+          "status": "OK"
+        },
+        "ltopo": {
+          "value": "247",
+          "status": "OK"
+        },
+        "coni": {
+          "value": "OCT",
+          "status": "OK"
+        },
+        "pri": {
+          "value": "10",
+          "status": "OK"
+        }
+      },
+      "filled": [],
+      "summary": {
+        "ok": 11,
+        "corrigido": 1,
+        "preenchido": 0,
+        "analisar": 1,
+        "missing": 0
+      },
+      "of_status": "in_plan",
+      "lote_status": "in_sap",
+      "matched_plan_entry": {
+        "of": 261491,
+        "cliente": "ESOM SAS",
+        "ov": "2601396",
+        "designacao": "CAO2F12R - FL PL - REV A",
+        "esp": 4,
+        "lbase": 834,
+        "ltopo": 247,
+        "ltotal": 1081,
+        "comp": 11800
+      }
+    },
+    {
+      "row_index": 4,
+      "fields": {
+        "of": {
+          "value": "261558",
+          "status": "OK"
+        },
+        "ov": {
+          "value": "2602142",
+          "status": "OK"
+        },
+        "cliente": {
+          "value": "MTG BELUX",
+          "status": "OK"
+        },
+        "modelo": {
+          "value": "CBO3E10B",
+          "status": "CORRIGIDO"
+        },
+        "lote": {
+          "value": "M26B0178",
+          "status": "OK"
+        },
+        "qtd": {
+          "value": "14",
+          "status": "OK"
+        },
+        "comp_mm": {
+          "value": "12850",
+          "status": "ANALISAR",
+          "plan_value": "12757",
+          "reason": "comp_mm=12850 ≠ plan=12757"
+        },
+        "larg_mm": {
+          "value": "1175",
+          "status": "OK"
+        },
+        "esp": {
+          "value": "4",
+          "status": "OK"
+        },
+        "lbase": {
+          "value": "775",
+          "status": "OK"
+        },
+        "ltopo": {
+          "value": "227",
+          "status": "OK"
+        },
+        "coni": {
+          "value": "OCT",
+          "status": "OK"
+        },
+        "pri": {
+          "value": "10",
+          "status": "OK"
+        }
+      },
+      "filled": [],
+      "summary": {
+        "ok": 11,
+        "corrigido": 1,
+        "preenchido": 0,
+        "analisar": 1,
+        "missing": 0
+      },
+      "of_status": "in_plan",
+      "lote_status": "in_sap",
+      "matched_plan_entry": {
+        "of": 261558,
+        "cliente": "MTG BELUX",
+        "ov": "2602142",
+        "designacao": "CBO3E10B - B10S200 - CI7415A4503 - 2 SC + PORTA VENT + CINTRE R1500",
+        "esp": 4,
+        "lbase": 775,
+        "ltopo": 227,
+        "ltotal": 1002.004,
+        "comp": 12757
+      }
+    },
+    {
+      "row_index": 5,
+      "fields": {
+        "of": {
+          "value": "261318",
+          "status": "OK"
+        },
+        "ov": {
+          "value": "2601624",
+          "status": "OK"
+        },
+        "cliente": {
+          "value": "MTG BELUX",
+          "status": "OK"
+        },
+        "modelo": {
+          "value": "CBO6E10D",
+          "status": "CORRIGIDO"
+        },
+        "lote": {
+          "value": "M26B0178",
+          "status": "OK"
+        },
+        "qtd": {
+          "value": "2",
+          "status": "OK"
+        },
+        "comp_mm": {
+          "value": "11600",
+          "status": "ANALISAR",
+          "plan_value": "11500",
+          "reason": "comp_mm=11600 ≠ plan=11500"
+        },
+        "larg_mm": {
+          "value": "1175",
+          "status": "OK"
+        },
+        "esp": {
+          "value": "4",
+          "status": "OK"
+        },
+        "lbase": {
+          "value": "674",
+          "status": "OK"
+        },
+        "ltopo": {
+          "value": "313",
+          "status": "OK"
+        },
+        "coni": {
+          "value": "OCT",
+          "status": "OK"
+        },
+        "pri": {
+          "value": "10",
+          "status": "OK"
+        }
+      },
+      "filled": [],
+      "summary": {
+        "ok": 11,
+        "corrigido": 1,
+        "preenchido": 0,
+        "analisar": 1,
+        "missing": 0
+      },
+      "of_status": "in_plan",
+      "lote_status": "in_sap",
+      "matched_plan_entry": {
+        "of": 261318,
+        "cliente": "MTG BELUX",
+        "ov": "2601624",
+        "designacao": "CBO6E10D - PONTEIRA",
+        "esp": 4,
+        "lbase": 674,
+        "ltopo": 313,
+        "ltotal": 987.756,
+        "comp": 11500
+      }
+    },
+    {
+      "row_index": 6,
+      "fields": {
+        "of": {
+          "value": "261319",
+          "status": "OK"
+        },
+        "ov": {
+          "value": "2601624",
+          "status": "OK"
+        },
+        "cliente": {
+          "value": "MTG BELUX",
+          "status": "OK"
+        },
+        "modelo": {
+          "value": "CBO6E08D",
+          "status": "CORRIGIDO"
+        },
+        "lote": {
+          "value": "M24B0673A",
+          "status": "ANALISAR",
+          "reason": "lote 'M24B0673A' não está em StockSAP (rotação stock?)"
+        },
+        "qtd": {
+          "value": "2",
+          "status": "OK"
+        },
+        "comp_mm": {
+          "value": "9500",
+          "status": "OK"
+        },
+        "larg_mm": {
+          "value": "1050",
+          "status": "OK"
+        },
+        "esp": {
+          "value": "3",
+          "status": "OK"
+        },
+        "lbase": {
+          "value": "692",
+          "status": "OK"
+        },
+        "ltopo": {
+          "value": "318",
+          "status": "OK"
+        },
+        "coni": {
+          "value": "OCT",
+          "status": "OK"
+        },
+        "pri": {
+          "value": "5",
+          "status": "OK"
+        }
+      },
+      "filled": [],
+      "summary": {
+        "ok": 11,
+        "corrigido": 1,
+        "preenchido": 0,
+        "analisar": 1,
+        "missing": 0
+      },
+      "of_status": "in_plan",
+      "lote_status": "not_in_sap",
+      "matched_plan_entry": {
+        "of": 261319,
+        "cliente": "MTG BELUX",
+        "ov": "2601624",
+        "designacao": "CBO6E08D - PONTEIRA",
+        "esp": 3,
+        "lbase": 692,
+        "ltopo": 318,
+        "ltotal": 1010.047,
+        "comp": 9500
+      }
+    },
+    {
+      "row_index": 7,
+      "fields": {
+        "of": {
+          "value": "260617",
+          "status": "OK"
+        },
+        "ov": {
+          "value": "260006",
+          "status": "OK"
+        },
+        "cliente": {
+          "value": "MTG",
+          "status": "OK"
+        },
+        "modelo": {
+          "value": "LMF1861T",
+          "status": "OK"
+        },
+        "lote": {
+          "value": "M24B0673A",
+          "status": "ANALISAR",
+          "reason": "lote 'M24B0673A' não está em StockSAP (rotação stock?)"
+        },
+        "qtd": {
+          "value": "2",
+          "status": "OK"
+        },
+        "comp_mm": {
+          "value": "8100",
+          "status": "OK"
+        },
+        "larg_mm": {
+          "value": "1050",
+          "status": "OK"
+        },
+        "esp": {
+          "value": "3",
+          "status": "OK"
+        },
+        "lbase": {
+          "value": "643",
+          "status": "ANALISAR",
+          "plan_value": "613",
+          "reason": "lbase=643 ≠ plan=613"
+        },
+        "ltopo": {
+          "value": "318",
+          "status": "OK"
+        },
+        "coni": {
+          "value": "OCT",
+          "status": "OK"
+        },
+        "pri": {
+          "value": "5",
+          "status": "OK"
+        }
+      },
+      "filled": [],
+      "summary": {
+        "ok": 11,
+        "corrigido": 0,
+        "preenchido": 0,
+        "analisar": 2,
+        "missing": 0
+      },
+      "of_status": "in_plan",
+      "lote_status": "not_in_sap",
+      "matched_plan_entry": {
+        "of": 260617,
+        "cliente": "MTG",
+        "ov": "260006",
+        "designacao": "CR15LF01 - LMF1861T - CR1516A4500 - SUP DEGRAUS + SUP LV - USAR 12 STOCK",
+        "esp": 3,
+        "lbase": 613,
+        "ltopo": 318,
+        "ltotal": 930.521,
+        "comp": 8100
+      }
+    }
+  ],
+  "to_analisar": [
+    {
+      "row_index": 0,
+      "field": "cliente",
+      "value": "TECPOLES",
+      "reason": "cliente OCR 'TECPOLES' ≠ plan 'TECPOLES GMBH'",
+      "plan_value": "TECPOLES GMBH"
+    },
+    {
+      "row_index": 0,
+      "field": "comp_mm",
+      "value": "9300",
+      "reason": "comp_mm=9300 ≠ plan=9196",
+      "plan_value": "9196"
+    },
+    {
+      "row_index": 3,
+      "field": "cliente",
+      "value": "ESOM",
+      "reason": "cliente OCR 'ESOM' ≠ plan 'ESOM SAS'",
+      "plan_value": "ESOM SAS"
+    },
+    {
+      "row_index": 4,
+      "field": "comp_mm",
+      "value": "12850",
+      "reason": "comp_mm=12850 ≠ plan=12757",
+      "plan_value": "12757"
+    },
+    {
+      "row_index": 5,
+      "field": "comp_mm",
+      "value": "11600",
+      "reason": "comp_mm=11600 ≠ plan=11500",
+      "plan_value": "11500"
+    },
+    {
+      "row_index": 6,
+      "field": "lote",
+      "value": "M24B0673A",
+      "reason": "lote 'M24B0673A' não está em StockSAP (rotação stock?)",
+      "plan_value": null
+    },
+    {
+      "row_index": 7,
+      "field": "lote",
+      "value": "M24B0673A",
+      "reason": "lote 'M24B0673A' não está em StockSAP (rotação stock?)",
+      "plan_value": null
+    },
+    {
+      "row_index": 7,
+      "field": "lbase",
+      "value": "643",
+      "reason": "lbase=643 ≠ plan=613",
+      "plan_value": "613"
+    }
+  ]
+}

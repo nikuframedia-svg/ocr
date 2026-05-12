@@ -52,6 +52,32 @@ ROW_FIELDS = (
 HEADER_FIELDS = ("operador", "n_operador", "setor_maquina", "data")
 FOOTER_FIELDS = ("colunas_produzidas", "horas_trabalhadas")
 
+
+# Round 54 — per-sheet template context. Looks up the TemplateSpec for
+# a sheet so the UI iterates the right row_fields / footer_fields.
+# Legacy sheets (no template_name) fall back to bobine_formato via
+# db.get_sheet_template_name's inference rules.
+def _template_ctx_for_sheet(sheet: dict | None) -> dict:
+    """Build template-aware context vars for rendering a sheet.
+
+    Always returns keys: ``template`` (TemplateSpec or None),
+    ``template_name``, ``row_fields``, ``footer_fields``, ``header_fields``.
+    Backward-compat: if sheet is None, returns bobine_formato fields.
+    """
+    from app.templates_registry import DEFAULT_TEMPLATE, get_template
+    if sheet is None:
+        tpl = DEFAULT_TEMPLATE
+    else:
+        tname = db.get_sheet_template_name(sheet)
+        tpl = get_template(tname)
+    return {
+        "template": tpl,
+        "template_name": tpl.name,
+        "row_fields": tpl.row_fields,
+        "footer_fields": tpl.footer_fields,
+        "header_fields": tpl.header_fields,
+    }
+
 app = FastAPI(title="Metalogalva OCR — MVP")
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
@@ -186,19 +212,70 @@ async def upload(
 
 # --- Cross-check helper (Round 33: pure verification) ---
 
+# R61 — name-like fields that get auto-overwritten when cross-check
+# finds a MATCH and the value differs from the plan canonical. NEVER
+# overwrite identifiers (of/ov/lote) or physical measurements (dim).
+_AUTO_OVERWRITE_FIELDS = ("modelo", "cliente")
+
+
+def _apply_auto_overwrites(sheet_id: int, result: dict) -> int:
+    """R61 — for modelo + cliente cells with MATCH status, overwrite
+    sheet_data when the operator's value differs from the plan canonical.
+
+    For modelo: canonical = first-token of matched designacao.
+    For cliente: canonical = plan.cliente verbatim.
+
+    Returns count of edits applied.
+    """
+    n_applied = 0
+    for row_r in result.get("rows", []):
+        i = row_r.get("row_index")
+        if i is None:
+            continue
+        fields = row_r.get("fields", {})
+        for fn in _AUTO_OVERWRITE_FIELDS:
+            cell = fields.get(fn) or {}
+            if cell.get("status") != "MATCH":
+                continue
+            value = (cell.get("value") or "").strip()
+            ref = (cell.get("ref") or "").strip()
+            if not value or not ref:
+                continue
+            # R63 — modelo usa designacao completa (não só FT) por
+            # pedido explícito do user: operador e supervisor vêem
+            # exactamente o que está no plan (e.g.,
+            # "CFH2F12RI_V1 - FL PL + BASE INOX + FURACAO - TOPO").
+            canonical = ref.strip()
+            if not canonical:
+                continue
+            if value.upper() == canonical.upper():
+                continue
+            field_path = f"rows[{i}].{fn}"
+            try:
+                db.apply_edit(sheet_id, field_path, canonical)
+                n_applied += 1
+            except (ValueError, Exception):  # noqa: BLE001
+                continue
+    return n_applied
+
+
 def _run_and_store_cross_check(sheet_id: int) -> dict | None:
     """Round 33 — invisible verification inline in /upload pipeline.
 
-    Pure verification only — does NOT modify sheet_data. Each cell tagged
-    MATCH (green) / NO_MATCH (red) / NA (neutral). UI consumes the JSON
-    to render colors. The supervisor is the one who decides whether to
-    correct the data manually based on what's flagged.
+    Round 61 — for modelo + cliente cells, AUTO-OVERWRITE the operator's
+    value when cross-check finds a MATCH and the value differs from the
+    plan canonical. Targeted (only name-like fields), not the R32
+    aggressive auto-fill (which was reverted in R33).
+
+    Identifiers (of/ov/lote) and physical measurements (comp/larg/esp/
+    lbase/ltopo) are NEVER touched — operator's input authoritative.
 
     Steps:
       1. Run cross_check_sheet → per-cell status against refs
-      2. Persist JSON to ``C:\\kanban\\nifruka\\03_Cross_Check\\``
-
-    No apply_edit, no auto-overwrite, no factory CSV re-deposit.
+      2. R61: apply_auto_overwrites (modelo+cliente when MATCH ≠ canonical)
+      3. If any overwrites were applied, re-run cross_check_sheet on
+         updated sheet_data so the persisted JSON reflects final state
+      4. Persist JSON to ``C:\\kanban\\nifruka\\03_Cross_Check\\``
     """
     sheet = db.get_sheet(sheet_id)
     if sheet is None or not sheet.get("sheet_data"):
@@ -209,6 +286,18 @@ def _run_and_store_cross_check(sheet_id: int) -> dict | None:
 
     result = cross_check_sheet(sheet["sheet_data"], sheet.get("dq_audit"), refs)
 
+    # R61 — auto-overwrite modelo/cliente when MATCH but value diverges
+    n_overwritten = _apply_auto_overwrites(sheet_id, result)
+    if n_overwritten > 0:
+        # Re-fetch sheet (sheet_data was modified by apply_edit) and
+        # re-run cross-check to refresh statuses against new values
+        refreshed = db.get_sheet(sheet_id)
+        if refreshed is not None and refreshed.get("sheet_data"):
+            sheet = refreshed
+            result = cross_check_sheet(sheet["sheet_data"], sheet.get("dq_audit"), refs)
+
+    if sheet is None or not sheet.get("sheet_data"):
+        return result  # defensive — should not happen
     header = sheet["sheet_data"].get("header", {}) or {}
     operador = header.get("operador") or sheet.get("operador") or "?"
     date_pt = (header.get("data") or "").strip()
@@ -245,16 +334,18 @@ def sheet_page(request: Request, sheet_id: int, view: str | None = None) -> Resp
         # Show original OCR — disable cross-check colors (they validate
         # the post-snap values, not raw)
         src = sheet["raw_extraction"]
-        cc_status_by_path, cc_ref_by_path = ({}, {})
+        cc_status_by_path, cc_ref_by_path, cc_suspended_by_path = ({}, {}, {})
     else:
         src = sheet.get("sheet_data") or {}
-        cc_status_by_path, cc_ref_by_path = _build_cc_maps(sheet_id)
+        cc_status_by_path, cc_ref_by_path, cc_suspended_by_path = _build_cc_maps(sheet_id)
 
     rows = src.get("rows", []) or []
     header = src.get("header", {}) or {}
     footer = src.get("footer", {}) or {}
 
     flagged = sum(1 for c in cells_by_path.values() if c.get("requires_review"))
+
+    tpl_ctx = _template_ctx_for_sheet(sheet)
 
     return templates.TemplateResponse(
         request,
@@ -267,26 +358,30 @@ def sheet_page(request: Request, sheet_id: int, view: str | None = None) -> Resp
             "cells_by_path": cells_by_path,
             "cc_status_by_path": cc_status_by_path,
             "cc_ref_by_path": cc_ref_by_path,
-            "header_fields": HEADER_FIELDS,
-            "row_fields": ROW_FIELDS,
-            "footer_fields": FOOTER_FIELDS,
+            "cc_suspended_by_path": cc_suspended_by_path,
             "operadores": OPERADORES,
             "flagged_count": flagged,
             "view_mode": view_mode,
+            **tpl_ctx,  # template, template_name, row/footer/header_fields
         },
     )
 
 
-def _build_cc_maps(sheet_id: int) -> tuple[dict[str, str], dict[str, str]]:
+def _build_cc_maps(sheet_id: int) -> tuple[dict[str, str], dict[str, str], dict[str, bool]]:
     """Round 33: load cross-check JSON for sheet, build {field_path: status}
     + {field_path: ref} maps for template rendering of green/red cell colors.
-    Returns ({}, {}) if no cross-check data available."""
+
+    R52 F4: also returns {field_path: suspended_by_stub} for distinguishing
+    NA from stub-accept (amarelo soft) vs NA from no-ref (cinza).
+
+    Returns ({}, {}, {}) if no cross-check data available."""
     from app.cross_check.storage import load_sheet_cross_check
     cc = load_sheet_cross_check(sheet_id)
     if not cc:
-        return {}, {}
+        return {}, {}, {}
     status_map: dict[str, str] = {}
     ref_map: dict[str, str] = {}
+    suspended_map: dict[str, bool] = {}
     for r in cc.get("rows", []):
         i = r.get("row_index")
         for f, info in (r.get("fields") or {}).items():
@@ -295,7 +390,9 @@ def _build_cc_maps(sheet_id: int) -> tuple[dict[str, str], dict[str, str]]:
             ref = info.get("ref")
             if ref is not None:
                 ref_map[path] = str(ref)
-    return status_map, ref_map
+            if info.get("suspended_by_stub"):
+                suspended_map[path] = True
+    return status_map, ref_map, suspended_map
 
 
 @app.post("/sheet/{sheet_id}/edit", response_class=HTMLResponse)
@@ -329,7 +426,7 @@ async def sheet_edit(
     except Exception as cc_err:  # noqa: BLE001
         print(f"[cross-check] sheet {sheet_id} edit: {cc_err}", file=sys.stderr)
     cells_by_path = (sheet.get("dq_audit") or {}).get("cells", {})
-    cc_status_by_path, cc_ref_by_path = _build_cc_maps(sheet_id)
+    cc_status_by_path, cc_ref_by_path, cc_suspended_by_path = _build_cc_maps(sheet_id)
     return templates.TemplateResponse(
         request,
         "_cell.html",
@@ -341,6 +438,7 @@ async def sheet_edit(
             "edited": old != new,
             "cc_status_by_path": cc_status_by_path,
             "cc_ref_by_path": cc_ref_by_path,
+            "cc_suspended_by_path": cc_suspended_by_path,
             "sheet_status": sheet.get("status"),
         },
     )
@@ -631,6 +729,42 @@ def sheet_delete(sheet_id: int, request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "removed": result})
 
 
+@app.post("/sheet/{sheet_id}/reprocess")
+def sheet_reprocess(sheet_id: int) -> RedirectResponse:
+    """Round 59 — Re-run OCR on a sheet that previously errored.
+
+    Reuses the original uploaded image; no need to re-take photo. Triggered
+    by the "↻ Re-processar OCR" button on the error banner in /sheet/{id}.
+    """
+    sheet = db.get_sheet(sheet_id)
+    if sheet is None:
+        raise HTTPException(404, f"sheet {sheet_id} not found")
+    img_path = _DATA_DIR / sheet["image_path"]
+    if not img_path.exists():
+        raise HTTPException(404, "image file missing")
+    try:
+        result = ocr_runner.run_pipeline(img_path)
+        db.update_extraction(
+            sheet_id=sheet_id,
+            raw_extraction=result["raw"],
+            dq_audit=result["dq"],
+            sheet_data=result["current"],
+        )
+        try:
+            _run_and_store_cross_check(sheet_id)
+        except Exception as cc_err:  # noqa: BLE001
+            print(f"[reprocess cross-check] sheet {sheet_id}: {cc_err}", file=sys.stderr)
+        try:
+            _deposit_csv_to_factory(sheet_id)
+        except Exception as dep_err:  # noqa: BLE001
+            print(f"[reprocess deposit] sheet {sheet_id}: {dep_err}", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001
+        error_msg = f"{type(e).__name__}: {e}"
+        db.update_error(sheet_id, error_msg)
+        traceback.print_exc()
+    return RedirectResponse(f"/sheet/{sheet_id}", status_code=303)
+
+
 @app.post("/sheet/{sheet_id}/rotate")
 def sheet_rotate(sheet_id: int, request: Request) -> JSONResponse:
     """Round 34c — rotate the served image 90° CW per click. Desktop only.
@@ -791,13 +925,11 @@ def kanban_viewer(
                 "header": {},
                 "rows": [],
                 "footer": {},
-                "header_fields": HEADER_FIELDS,
-                "row_fields": ROW_FIELDS,
-                "footer_fields": FOOTER_FIELDS,
                 "cells_by_path": {},
                 "cc_status_by_path": {},
                 "cc_ref_by_path": {},
                 "valid_operadores": OPERADORES,
+                **_template_ctx_for_sheet(None),  # bobine_formato defaults
             },
         )
 
@@ -848,9 +980,9 @@ def kanban_viewer(
     footer = (sheet.get("sheet_data") or {}).get("footer", {}) if sheet else {}
 
     # Round 33: cross-check colors per cell
-    cc_status_by_path, cc_ref_by_path = ({}, {})
+    cc_status_by_path, cc_ref_by_path, cc_suspended_by_path = ({}, {}, {})
     if sheet:
-        cc_status_by_path, cc_ref_by_path = _build_cc_maps(sheet["id"])
+        cc_status_by_path, cc_ref_by_path, cc_suspended_by_path = _build_cc_maps(sheet["id"])
 
     return templates.TemplateResponse(
         request, "kanban_viewer.html",
@@ -868,13 +1000,12 @@ def kanban_viewer(
             "header": header,
             "rows": rows,
             "footer": footer,
-            "header_fields": HEADER_FIELDS,
-            "row_fields": ROW_FIELDS,
-            "footer_fields": FOOTER_FIELDS,
             "cells_by_path": cells_by_path,
             "cc_status_by_path": cc_status_by_path,
             "cc_ref_by_path": cc_ref_by_path,
+            "cc_suspended_by_path": cc_suspended_by_path,
             "valid_operadores": OPERADORES,
+            **_template_ctx_for_sheet(sheet),  # per-current-sheet template
         },
     )
 
@@ -1011,6 +1142,54 @@ def dashboard_production(
     )
 
 
+@app.get("/dashboard/nesting", response_class=HTMLResponse)
+def dashboard_nesting(request: Request) -> Response:
+    """Round 54 Fase 7 — Gemini (TPL102) nesting dashboard.
+
+    Aggregates m²/qty across all 3 Gemini machines (GASPARINI / HPE32 /
+    HD36). Domain is chapa nesting, distinct from column production —
+    deserves its own KPI page.
+    """
+    from app.gemini import list_gemini_sheets, aggregate_gemini
+    db_path = _DATA_DIR / "app.db"
+    sheets = list_gemini_sheets(db_path)
+    agg = aggregate_gemini(sheets)
+    return templates.TemplateResponse(
+        request,
+        "dashboard_nesting.html",
+        {
+            "sheets": sheets,
+            "agg": agg,
+            "active_tab": "nesting",
+        },
+    )
+
+
+@app.get("/dashboard/downtime", response_class=HTMLResponse)
+def dashboard_downtime(request: Request) -> Response:
+    """Round 54 Fase 6 — Paragens (downtime) dashboard.
+
+    Pulls all paragens sheets (template_name=quinadora_pav4_paragens or
+    legacy sheets with setor=QUINADORA PAV.4) and aggregates total
+    minutes by operador / motivo / resolved status.
+
+    Empty state when no paragens sheets exist yet.
+    """
+    from app.downtime import list_downtime_sheets, aggregate_downtime
+    db_path = _DATA_DIR / "app.db"
+    sheets = list_downtime_sheets(db_path)
+    agg = aggregate_downtime(sheets)
+    return templates.TemplateResponse(
+        request,
+        "dashboard_downtime.html",
+        {
+            "sheets": sheets,
+            "agg": agg,
+            "active_tab": "downtime",
+        },
+    )
+
+
 @app.get("/dashboard/workers", response_class=HTMLResponse)
 def dashboard_workers(request: Request) -> Response:
     workers = kpis.workers_summary()
@@ -1097,15 +1276,43 @@ def pair_page(request: Request) -> Response:
 # ----- CSV builder (mirrors ocr6.write_csv but to string) -----
 
 def _to_3block_csv(filename: str, data: dict) -> str:
-    """Produce CSV string in the Metalogalva 3-block format."""
+    """Produce CSV string in the Metalogalva 3-block format.
+
+    Round 54 — template-aware. The block headers + column lists are
+    derived from the TemplateSpec for this sheet:
+      - block 2 heading: ``template.csv_block_label`` (e.g. "TABELA DE
+        PRODUÇÃO" for bobine, "TABELA DE PARAGENS" for paragens,
+        "TABELA DE NESTING" for Gemini).
+      - block 2 columns: ``template.row_fields`` (uppercased).
+      - block 3 (footer) columns: ``template.footer_fields``. Templates
+        with no footer (paragens) omit the block entirely.
+
+    For BOBINE-FORMATO this produces byte-identical output to the prior
+    R53 implementation so the factory validator (which knows only this
+    schema) keeps parsing legacy + new bobine sheets identically.
+    """
     import csv
     import io
+
+    # Lazy import — avoids circular if templates_registry ever imports main
+    from app.templates_registry import (
+        DEFAULT_TEMPLATE, detect_template, get_template,
+    )
+
+    # Resolve template — explicit > inferred > default
+    tname = (data or {}).get("template_name")
+    if tname:
+        template = get_template(tname)
+    else:
+        setor = ((data or {}).get("header") or {}).get("setor_maquina", "")
+        template = detect_template(setor) if setor else DEFAULT_TEMPLATE
 
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=";", lineterminator="\r\n")
     h = data.get("header", {}) or {}
     f_ = data.get("footer", {}) or {}
 
+    # --- Block 1: CABEÇALHO (identical for all templates) ---
     w.writerow(["### CABEÇALHO"])
     w.writerow(["FICHEIRO", "DATA", "OPERADOR", "N_OPERADOR", "SETOR_MAQUINA"])
     w.writerow([
@@ -1114,32 +1321,29 @@ def _to_3block_csv(filename: str, data: dict) -> str:
     ])
     w.writerow([])
 
-    w.writerow(["### TABELA DE PRODUÇÃO"])
-    w.writerow([
-        "FICHEIRO", "DATA", "OPERADOR",
-        "PRI", "CLIENTE", "OV", "OF", "MODELO",
-        "QTD", "COMP_MM", "LARG_MM", "LOTE", "CONI", "ESP", "LBASE", "LTOPO",
-    ])
+    # --- Block 2: TABELA (per-template label + columns) ---
+    w.writerow([f"### {template.csv_block_label}"])
+    # Column header — common prefix (FICHEIRO/DATA/OPERADOR) + template fields
+    column_header = ["FICHEIRO", "DATA", "OPERADOR"] + [
+        f.upper() for f in template.row_fields
+    ]
+    w.writerow(column_header)
     for row in data.get("rows", []) or []:
-        w.writerow([
-            filename, h.get("data", ""), h.get("operador", ""),
-            row.get("pri", ""), row.get("cliente", ""),
-            row.get("ov", ""), row.get("of", ""),
-            row.get("modelo", ""), row.get("qtd", ""),
-            row.get("comp_mm", ""), row.get("larg_mm", ""),
-            row.get("lote", ""), row.get("coni", ""),
-            row.get("esp", ""), row.get("lbase", ""),
-            row.get("ltopo", ""),
-        ])
+        row_out = [filename, h.get("data", ""), h.get("operador", "")]
+        row_out.extend(str(row.get(f, "") or "") for f in template.row_fields)
+        w.writerow(row_out)
     w.writerow([])
 
-    w.writerow(["### RODAPÉ"])
-    w.writerow([
-        "FICHEIRO", "DATA", "OPERADOR",
-        "COLUNAS_PRODUZIDAS", "HORAS_TRABALHADAS",
-    ])
-    w.writerow([
-        filename, h.get("data", ""), h.get("operador", ""),
-        f_.get("colunas_produzidas", ""), f_.get("horas_trabalhadas", ""),
-    ])
+    # --- Block 3: RODAPÉ (skipped when template has no footer fields) ---
+    if template.footer_fields:
+        w.writerow(["### RODAPÉ"])
+        footer_header = ["FICHEIRO", "DATA", "OPERADOR"] + [
+            f.upper() for f in template.footer_fields
+        ]
+        w.writerow(footer_header)
+        footer_row = [filename, h.get("data", ""), h.get("operador", "")]
+        footer_row.extend(str(f_.get(f, "") or "") for f in template.footer_fields)
+        w.writerow(footer_row)
+
+    # UTF-8 BOM prefix (Excel friendly) — preserved from R53.
     return "﻿" + buf.getvalue()

@@ -51,6 +51,14 @@
     {% if view_mode == 'raw' %}
       <span class="pill warn" title="Valores antes de DQ snap + cross-check">OCR original</span>
     {% endif %}
+    {# Round 54 — template badge: visible reminder of which kanban schema
+       is being rendered. Tooltip shows the canonical setor + phase. #}
+    {% if template %}
+      <span class="pill neutral mono" style="font-size:11px;"
+            title="{{ template.description }}{% if template.phase %} · {{ template.phase }}{% endif %}">
+        {{ template_name.replace('_', ' ') }}
+      </span>
+    {% endif %}
     {% if sheet.status == 'error' %}
       <span class="pill crit">Erro</span>
     {% elif flagged_count > 0 and view_mode != 'raw' %}
@@ -78,8 +86,17 @@
   <div class="alert crit" style="margin-bottom:16px;">
     <div>
       <b>Erro na extracção</b><br>
-      <span style="font-size:12px;">{{ sheet.error_message }}</span><br>
-      <a href="/capture" style="color:var(--accent-ink); margin-top:6px; display:inline-block;">→ Tirar nova foto</a>
+      <span style="font-size:12px;">{{ sheet.error_message }}</span>
+      <div style="margin-top:10px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+        {# Round 59 — re-run OCR on the same uploaded image. Useful when
+           the LLM produced malformed JSON (non-deterministic) or other
+           transient failure — operator avoids re-taking the photo. #}
+        <form method="post" action="/sheet/{{ sheet.id }}/reprocess"
+              style="display:inline; margin:0;">
+          <button type="submit" class="btn primary">↻ Re-processar OCR</button>
+        </form>
+        <a href="/capture" style="color:var(--accent-ink);">→ Ou tirar nova foto</a>
+      </div>
     </div>
   </div>
 {% endif %}
@@ -112,6 +129,8 @@
 
   <!-- Tabela editável (Round 36 — cabeçalho movido para banner) -->
   <div style="display:flex; flex-direction:column; gap:12px;">
+    {# R56 — color legend for the cross-check status of each cell. #}
+    {% include "_legend.html" %}
     <!-- Rows -->
     <div class="card">
       <div class="card-h">
@@ -179,6 +198,9 @@
     <div class="sheet-modal">
       <div class="lbl" x-text="label"></div>
       <div style="font-size:16px; font-weight:600;">Editar valor</div>
+      <div class="muted tiny" style="margin-top:2px; font-size:11px;">
+        Dica: duplo-toque numa célula abre com input vazio.
+      </div>
       <form :action="'/sheet/' + sheet_id + '/edit'" method="post"
             @submit.prevent="submit()">
         <input type="hidden" name="field_path" :value="field_path">
@@ -215,7 +237,9 @@ function cellEditor() {
     open(detail) {
       this.sheet_id = detail.sheet_id;
       this.field_path = detail.field_path;
-      this.value = detail.value || '';
+      // R58 — duplo-toque na célula abre modal com input vazio para
+      // escrever novo valor de raiz sem ter de apagar com o dedo.
+      this.value = detail.clearValue ? '' : (detail.value || '');
       this.label = detail.label || '';
       this.cell_id = detail.cell_id;
       this.active = true;

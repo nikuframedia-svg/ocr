@@ -1,0 +1,864 @@
+{
+  "sheet_id": 56,
+  "image_path": "images\\20260511_101358_a0e36af05b747e01.jpeg",
+  "operador": "VITOR CARVALHO",
+  "date": "2026-04-21",
+  "sheet_status": "extracted",
+  "checked_at": "2026-05-12T08:19:43+00:00",
+  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "summary": {
+    "match": 115,
+    "no_match": 0,
+    "na": 11,
+    "total": 126
+  },
+  "rows": [
+    {
+      "row_index": 0,
+      "fields": {
+        "of": {
+          "value": "261791",
+          "status": "MATCH",
+          "ref": "261791",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "COLMAR",
+          "status": "MATCH",
+          "ref": "COLMAR",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2601009",
+          "status": "MATCH",
+          "ref": "2601009",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CFC3F07RI_V - FL PL",
+          "status": "MATCH",
+          "ref": "CFC3F07RI_V - FL PL",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "7000",
+          "status": "MATCH",
+          "ref": "7000",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M26B0206",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "800",
+          "status": "MATCH",
+          "ref": "800",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "4",
+          "status": "MATCH",
+          "ref": "4",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "534",
+          "status": "MATCH",
+          "ref": "534.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "226",
+          "status": "MATCH",
+          "ref": "226.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 10,
+        "no_match": 0,
+        "na": 0
+      }
+    },
+    {
+      "row_index": 1,
+      "fields": {
+        "of": {
+          "value": "257079",
+          "status": "MATCH",
+          "ref": "257079",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "MTG",
+          "status": "MATCH",
+          "ref": "MTG",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "250051",
+          "status": "MATCH",
+          "ref": "250051",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CLC8F05Ri",
+          "status": "MATCH",
+          "ref": "CLC8F05RI",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "5000",
+          "status": "MATCH",
+          "ref": "5000",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M24B1446",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "7200",
+          "status": "NA",
+          "ref": "1200",
+          "ref_source": "sap",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        },
+        "esp": {
+          "value": "3",
+          "status": "MATCH",
+          "ref": "3",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "399",
+          "status": "MATCH",
+          "ref": "399.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "179",
+          "status": "MATCH",
+          "ref": "179.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 9,
+        "no_match": 0,
+        "na": 1
+      }
+    },
+    {
+      "row_index": 2,
+      "fields": {
+        "of": {
+          "value": "261316",
+          "status": "MATCH",
+          "ref": "261316",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "MTG BELUX",
+          "status": "MATCH",
+          "ref": "MTG BELUX",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2601624",
+          "status": "MATCH",
+          "ref": "2601624",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CBC8F08D - FL PL + PORTA VENT + PONTEIRA",
+          "status": "MATCH",
+          "ref": "CBC8F08D - FL PL + PORTA VENT + PONTEIRA",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "8000",
+          "status": "MATCH",
+          "ref": "8000",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M25B0815",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1035",
+          "status": "MATCH",
+          "ref": "1035",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "4",
+          "status": "MATCH",
+          "ref": "4",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "647",
+          "status": "MATCH",
+          "ref": "647.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "327",
+          "status": "MATCH",
+          "ref": "327.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 10,
+        "no_match": 0,
+        "na": 0
+      }
+    },
+    {
+      "row_index": 3,
+      "fields": {
+        "of": {
+          "value": "261768",
+          "status": "MATCH",
+          "ref": "261768",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "LE HAVRE",
+          "status": "MATCH",
+          "ref": "LE HAVRE",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2601849",
+          "status": "MATCH",
+          "ref": "2601849",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CFH2F09RI - BASE INOX - TOPO",
+          "status": "MATCH",
+          "ref": "CFH2F09RI - BASE INOX - TOPO",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "8600",
+          "status": "MATCH",
+          "ref": "8600",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M26B0058",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "950",
+          "status": "MATCH",
+          "ref": "950",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "4",
+          "status": "MATCH",
+          "ref": "4",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "604",
+          "status": "MATCH",
+          "ref": "604.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "226",
+          "status": "MATCH",
+          "ref": "226.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 10,
+        "no_match": 0,
+        "na": 0
+      }
+    },
+    {
+      "row_index": 4,
+      "fields": {
+        "of": {
+          "value": "260109",
+          "status": "MATCH",
+          "ref": "260109",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "LE HAVRE",
+          "status": "MATCH",
+          "ref": "LE HAVRE",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2512130",
+          "status": "MATCH",
+          "ref": "2512130",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CFC5F04Ri",
+          "status": "NA",
+          "ref": "CFH2F09RI_V1 - BASE INOX + FURACAO - TOPO",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (4/4 of,cliente,ov,comp_mm MATCH)",
+          "suspended_by_stub": true
+        },
+        "comp_mm": {
+          "value": "8600",
+          "status": "MATCH",
+          "ref": "8600",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M26B0058",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "950",
+          "status": "MATCH",
+          "ref": "950",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "4",
+          "status": "MATCH",
+          "ref": "4",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "604",
+          "status": "MATCH",
+          "ref": "604.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "226",
+          "status": "MATCH",
+          "ref": "226.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 9,
+        "no_match": 0,
+        "na": 1
+      }
+    },
+    {
+      "row_index": 5,
+      "fields": {
+        "of": {
+          "value": "260109",
+          "status": "MATCH",
+          "ref": "260109",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "LE HAVRE",
+          "status": "MATCH",
+          "ref": "LE HAVRE",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2512130",
+          "status": "MATCH",
+          "ref": "2512130",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CFC5F04Ri",
+          "status": "NA",
+          "ref": "CFH2F09RI_V1 - BASE INOX + FURACAO - TOPO",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (4/4 of,cliente,ov,comp_mm MATCH)",
+          "suspended_by_stub": true
+        },
+        "comp_mm": {
+          "value": "8600",
+          "status": "MATCH",
+          "ref": "8600",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M26B0058",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "950",
+          "status": "MATCH",
+          "ref": "950",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "4",
+          "status": "MATCH",
+          "ref": "4",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "604",
+          "status": "MATCH",
+          "ref": "604.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "226",
+          "status": "MATCH",
+          "ref": "226.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 9,
+        "no_match": 0,
+        "na": 1
+      }
+    },
+    {
+      "row_index": 6,
+      "fields": {
+        "of": {
+          "value": "260109",
+          "status": "MATCH",
+          "ref": "260109",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "LE HAVRE",
+          "status": "MATCH",
+          "ref": "LE HAVRE",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2512130",
+          "status": "MATCH",
+          "ref": "2512130",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CFC5F04Ri",
+          "status": "NA",
+          "ref": "CFH2F09RI_V1 - BASE INOX + FURACAO - TOPO",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (4/4 of,cliente,ov,comp_mm MATCH)",
+          "suspended_by_stub": true
+        },
+        "comp_mm": {
+          "value": "8600",
+          "status": "MATCH",
+          "ref": "8600",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M26B0058",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "950",
+          "status": "MATCH",
+          "ref": "950",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "4",
+          "status": "MATCH",
+          "ref": "4",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "604",
+          "status": "MATCH",
+          "ref": "604.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "226",
+          "status": "MATCH",
+          "ref": "226.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 9,
+        "no_match": 0,
+        "na": 1
+      }
+    },
+    {
+      "row_index": 7,
+      "fields": {
+        "of": {
+          "value": "261317",
+          "status": "MATCH",
+          "ref": "261317",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "MTG BELUX",
+          "status": "MATCH",
+          "ref": "MTG BELUX",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2601624",
+          "status": "MATCH",
+          "ref": "2601624",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CBC8E08D - PORTA VENT + PONTEIRA",
+          "status": "MATCH",
+          "ref": "CBC8E08D - PORTA VENT + PONTEIRA",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "9500",
+          "status": "MATCH",
+          "ref": "9500",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M26B0178",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1175",
+          "status": "MATCH",
+          "ref": "1175",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "4",
+          "status": "MATCH",
+          "ref": "4",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "707",
+          "status": "MATCH",
+          "ref": "707.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "327",
+          "status": "MATCH",
+          "ref": "327.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 10,
+        "no_match": 0,
+        "na": 0
+      }
+    },
+    {
+      "row_index": 8,
+      "fields": {
+        "of": {
+          "value": "261388",
+          "status": "MATCH",
+          "ref": "261388",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "MTG BELUX",
+          "status": "MATCH",
+          "ref": "MTG BELUX",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2601779",
+          "status": "MATCH",
+          "ref": "2601779",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CBC8E08D - PORTA VENT + PONTEIRA",
+          "status": "MATCH",
+          "ref": "CBC8E08D - PORTA VENT + PONTEIRA",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "9500",
+          "status": "MATCH",
+          "ref": "9500",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M26B0178",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1175",
+          "status": "MATCH",
+          "ref": "1175",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "4",
+          "status": "MATCH",
+          "ref": "4",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "707",
+          "status": "MATCH",
+          "ref": "707.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "327",
+          "status": "MATCH",
+          "ref": "327.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 10,
+        "no_match": 0,
+        "na": 0
+      }
+    },
+    {
+      "row_index": 9,
+      "fields": {
+        "of": {
+          "value": "261433",
+          "status": "MATCH",
+          "ref": "261433",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "MTG GMBH",
+          "status": "MATCH",
+          "ref": "MTG GMBH",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2601167",
+          "status": "MATCH",
+          "ref": "2601167",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "M2-124V501",
+          "status": "NA",
+          "ref": "1167VP18 - Nº2 1167V501 1/2",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (4/4 of,cliente,ov,comp_mm MATCH)",
+          "suspended_by_stub": true
+        },
+        "comp_mm": {
+          "value": "8540",
+          "status": "MATCH",
+          "ref": "8540",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M26B0178",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1175",
+          "status": "MATCH",
+          "ref": "1175",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "4",
+          "status": "MATCH",
+          "ref": "4",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "652",
+          "status": "MATCH",
+          "ref": "652.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "432",
+          "status": "MATCH",
+          "ref": "432.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 9,
+        "no_match": 0,
+        "na": 1
+      }
+    },
+    {
+      "row_index": 10,
+      "fields": {
+        "of": {
+          "value": "262284",
+          "status": "MATCH",
+          "ref": "262284",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "EFACEC",
+          "status": "MATCH",
+          "ref": "EFACEC",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2600884",
+          "status": "MATCH",
+          "ref": "2600884",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CEC1F10D_V2 - FL PL + FURACAO",
+          "status": "MATCH",
+          "ref": "CEC1F10D_V2 - FL PL + FURACAO",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "10000",
+          "status": "MATCH",
+          "ref": "10000",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M25B0442",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "865",
+          "status": "MATCH",
+          "ref": "865",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "3",
+          "status": "MATCH",
+          "ref": "3",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "593",
+          "status": "MATCH",
+          "ref": "593.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "179",
+          "status": "MATCH",
+          "ref": "179.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 10,
+        "no_match": 0,
+        "na": 0
+      }
+    },
+    {
+      "row_index": 11,
+      "fields": {
+        "of": {
+          "value": "262284",
+          "status": "MATCH",
+          "ref": "262284",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "EFACEC",
+          "status": "MATCH",
+          "ref": "EFACEC",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2600884",
+          "status": "MATCH",
+          "ref": "2600884",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CEC1F10D_V3 - FL PL + FURACAO",
+          "status": "MATCH",
+          "ref": "CEC1F10D_V3 - FL PL + FURACAO",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "10000",
+          "status": "MATCH",
+          "ref": "10000",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M25B0442",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "865",
+          "status": "MATCH",
+          "ref": "865",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "3",
+          "status": "MATCH",
+          "ref": "3",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "593",
+          "status": "MATCH",
+          "ref": "593.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "179",
+          "status": "MATCH",
+          "ref": "179.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 10,
+        "no_match": 0,
+        "na": 0
+      }
+    }
+  ],
+  "to_analisar": []
+}

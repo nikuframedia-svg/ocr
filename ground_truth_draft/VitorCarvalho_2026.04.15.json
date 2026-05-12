@@ -1,0 +1,19 @@
+{
+  "header": {
+    "operador": "VITOR CARVALHO",
+    "n_operador": "1391",
+    "setor_maquina": "BOBINE-FORMATO",
+    "data": "15-4-2026"
+  },
+  "rows": [
+    {"pri": "C2", "cliente": "ENEDIS", "ov": "2601161", "of": "261221", "modelo": "CD02P11B-CD02P503", "qtd": "4", "comp_mm": "11000", "larg_mm": "1100", "lote": "M26B0003", "coni": "OCT", "esp": "3", "lbase": "724", "ltopo": "301"},
+    {"pri": "C2", "cliente": "ENEDIS", "ov": "2602634", "of": "262120", "modelo": "CD02P11B-CD02P503", "qtd": "4", "comp_mm": "11000", "larg_mm": "1100", "lote": "M26B0003", "coni": "OCT", "esp": "3", "lbase": "724", "ltopo": "301"},
+    {"pri": "", "cliente": "HTG", "ov": "260004", "of": "260727", "modelo": "BSBCA0066", "qtd": "315", "comp_mm": "4145", "larg_mm": "1200", "lote": "M24B1446", "coni": "TORRES", "esp": "3", "lbase": "228", "ltopo": "228"},
+    {"pri": "C23", "cliente": "RODEL", "ov": "26000885", "of": "261985", "modelo": "CL02F10B", "qtd": "96", "comp_mm": "9543", "larg_mm": "875", "lote": "M26B0291", "coni": "OCT", "esp": "2,6", "lbase": "536", "ltopo": "204"},
+    {"pri": "C20", "cliente": "HTG BELUX", "ov": "2602076", "of": "261516", "modelo": "CBCAF08UI", "qtd": "8", "comp_mm": "9600", "larg_mm": "875", "lote": "M26B0291", "coni": "14", "esp": "2,6", "lbase": "601", "ltopo": "180"}
+  ],
+  "footer": {
+    "colunas_produzidas": "427",
+    "horas_trabalhadas": "8:00"
+  }
+}

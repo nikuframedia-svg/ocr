@@ -33,7 +33,9 @@ from typing import Any
 from PIL import Image
 
 # ── Configuração ──────────────────────────────────────────────────────────────
-OLLAMA_URL = "http://localhost:11434"
+# R64 — OLLAMA_URL is overridable via env var so the laptop runtime can
+# point at a remote Ollama (e.g. the desktop PC on the same LAN).
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 # MODEL is overridable via OCR_MODEL env var so we can benchmark different
 # Ollama models without forking the script. Default = qwen3.5:9b (Round 20:
 # beats qwen2.5vl:7b by +6.9pp field, +9.9pp critical, half hallucination
@@ -382,13 +384,43 @@ def process_image(image_path: Path, idx: int, total: int) -> ExtractionResult:
 
     result.raw_response = raw
 
-    try:
-        extracted = clean_json(raw)
-    except (json.JSONDecodeError, ValueError) as e:
+    # Round 59 — auto-retry on JSON parse failure. LLMs (qwen3.5:9b)
+    # occasionally produce malformed JSON (missing comma, unescaped
+    # quote) even at temperature=0 due to sampling state. The same
+    # input retried often succeeds on attempt 2/3.
+    extracted = None
+    last_err: Exception | None = None
+    for json_attempt in range(MAX_RETRIES + 1):
+        try:
+            extracted = clean_json(raw)
+            break
+        except (json.JSONDecodeError, ValueError) as e:
+            last_err = e
+            if json_attempt < MAX_RETRIES:
+                log.warning(
+                    f"  JSON parse failed (attempt {json_attempt + 1}/"
+                    f"{MAX_RETRIES + 1}): {e}; retrying OCR..."
+                )
+                time.sleep(1)
+                raw, telemetria = ollama_request(image_b64)
+                if raw is None:
+                    log.error(f"  retry Ollama call returned None: {telemetria.get('error', '')}")
+                    break
+                result.raw_response = raw
+                metrics.retries = json_attempt + 1
+                # Refresh telemetry counters from latest call
+                metrics.eval_count = int(telemetria.get("eval_count") or metrics.eval_count)
+                metrics.eval_duration_ms = int(
+                    telemetria.get("eval_duration_ms") or metrics.eval_duration_ms
+                )
+
+    if extracted is None:
         metrics.status = "erro_json"
-        metrics.error = f"{type(e).__name__}: {e}"
-        log.error(f"  ✗ erro_json: {e}")
-        log.debug(f"  raw[:300]: {raw[:300]}")
+        metrics.error = (
+            f"{type(last_err).__name__}: {last_err}" if last_err else "unknown"
+        )
+        log.error(f"  ✗ erro_json após {MAX_RETRIES + 1} tentativas: {last_err}")
+        log.debug(f"  raw[:300]: {raw[:300] if raw else '(no raw)'}")
         return result
 
     normalized = normalize_extraction(extracted)

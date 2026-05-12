@@ -1,0 +1,74 @@
+{
+  "header": {
+    "operador": "VITOR CARVALHO",
+    "n_operador": "1391",
+    "setor_maquina": "BOBINE-FORMATO",
+    "data": "09-04-2026"
+  },
+  "rows": [
+    {
+      "pri": "REP. C9",
+      "cliente": "PLURALUZ",
+      "ov": "2511478",
+      "of": "260639",
+      "modelo": "CLO2E10B",
+      "qtd": "2",
+      "comp_mm": "10957",
+      "larg_mm": "875",
+      "lote": "M26B0307",
+      "coni": "OCT",
+      "esp": "2,6",
+      "lbase": "591",
+      "ltopo": "204"
+    },
+    {
+      "pri": "C16",
+      "cliente": "MTG GMBH",
+      "ov": "2601489",
+      "of": "261122",
+      "modelo": "CGC2E10D",
+      "qtd": "16",
+      "comp_mm": "11500",
+      "larg_mm": "900",
+      "lote": "M25B0417",
+      "coni": "10",
+      "esp": "2,6",
+      "lbase": "592",
+      "ltopo": "230"
+    },
+    {
+      "pri": "C16",
+      "cliente": "MTG GMBH",
+      "ov": "2601489",
+      "of": "261122",
+      "modelo": "CGC2E10D",
+      "qtd": "104",
+      "comp_mm": "11500",
+      "larg_mm": "900",
+      "lote": "M25B0420",
+      "coni": "10",
+      "esp": "2,6",
+      "lbase": "592",
+      "ltopo": "230"
+    },
+    {
+      "pri": "C18",
+      "cliente": "MTG",
+      "ov": "260011",
+      "of": "261423",
+      "modelo": "CAE3F05D",
+      "qtd": "54",
+      "comp_mm": "5000",
+      "larg_mm": "935",
+      "lote": "M25B0282",
+      "coni": "10",
+      "esp": "2",
+      "lbase": "339",
+      "ltopo": "182"
+    }
+  ],
+  "footer": {
+    "colunas_produzidas": "176",
+    "horas_trabalhadas": "8:00"
+  }
+}

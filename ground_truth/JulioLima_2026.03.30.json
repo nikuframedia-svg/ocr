@@ -1,0 +1,19 @@
+{
+  "header": {
+    "operador": "JÚLIO LIMA",
+    "n_operador": "0537",
+    "setor_maquina": "BOBINE-FORMATO",
+    "data": "30-03-2026"
+  },
+  "rows": [
+    {"pri": "4", "cliente": "MTG", "ov": "260012", "of": "261630", "modelo": "CFC5F06D", "qtd": "204", "comp_mm": "6000", "larg_mm": "1320", "lote": "M26B0071", "coni": "14", "esp": "2,6", "lbase": "444", "ltopo": "180"},
+    {"pri": "5", "cliente": "MTG", "ov": "260012", "of": "261631", "modelo": "CFC5F06R", "qtd": "96", "comp_mm": "6000", "larg_mm": "1320", "lote": "M26B0071", "coni": "14", "esp": "2,6", "lbase": "444", "ltopo": "180"},
+    {"pri": "5", "cliente": "MTG", "ov": "260012", "of": "261631", "modelo": "CFC5F06R", "qtd": "108", "comp_mm": "6000", "larg_mm": "1320", "lote": "M26B0072", "coni": "14", "esp": "2,6", "lbase": "444", "ltopo": "180"},
+    {"pri": "2", "cliente": "ECLIPSE", "ov": "2602376", "of": "261710", "modelo": "CLC9F12Ri", "qtd": "2", "comp_mm": "12000", "larg_mm": "1075", "lote": "M24B11531", "coni": "12", "esp": "3", "lbase": "722", "ltopo": "270"},
+    {"pri": "1", "cliente": "MTG.GMBH", "ov": "2600793", "of": "260886", "modelo": "CGCAE12D-V", "qtd": "4", "comp_mm": "13600", "larg_mm": "1075", "lote": "M24B11531", "coni": "12", "esp": "3", "lbase": "741", "ltopo": "229"}
+  ],
+  "footer": {
+    "colunas_produzidas": "410",
+    "horas_trabalhadas": "8:00"
+  }
+}

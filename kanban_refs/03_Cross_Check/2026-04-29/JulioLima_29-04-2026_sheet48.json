@@ -1,0 +1,823 @@
+{
+  "sheet_id": 48,
+  "image_path": "images\\20260511_094954_565f483a1d34f083.jpeg",
+  "operador": "JULIO LIMA",
+  "date": "2026-04-29",
+  "sheet_status": "extracted",
+  "checked_at": "2026-05-12T08:19:44+00:00",
+  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "summary": {
+    "match": 92,
+    "no_match": 0,
+    "na": 24,
+    "total": 116
+  },
+  "rows": [
+    {
+      "row_index": 0,
+      "fields": {
+        "of": {
+          "value": "252314",
+          "status": "MATCH",
+          "ref": "252314",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "LUMINOTECHNIQUE",
+          "status": "MATCH",
+          "ref": "LUMINOTECHNIQUE",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2503845",
+          "status": "MATCH",
+          "ref": "2503845",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CLC8F07Ri",
+          "status": "MATCH",
+          "ref": "CLC8F07RI",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "7000",
+          "status": "MATCH",
+          "ref": "7000",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M24B1414",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1380",
+          "status": "MATCH",
+          "ref": "1380",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "3",
+          "status": "MATCH",
+          "ref": "3",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "487",
+          "status": "MATCH",
+          "ref": "487.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "179",
+          "status": "MATCH",
+          "ref": "179.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 10,
+        "no_match": 0,
+        "na": 0
+      }
+    },
+    {
+      "row_index": 1,
+      "fields": {
+        "of": {
+          "value": "252314",
+          "status": "MATCH",
+          "ref": "252314",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "LUMINOTECHNIQUE",
+          "status": "MATCH",
+          "ref": "LUMINOTECHNIQUE",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2503845",
+          "status": "MATCH",
+          "ref": "2503845",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CLC8F07RI",
+          "status": "MATCH",
+          "ref": "CLC8F07RI",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "7000",
+          "status": "MATCH",
+          "ref": "7000",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M24B1414",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1380",
+          "status": "MATCH",
+          "ref": "1380",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "3",
+          "status": "MATCH",
+          "ref": "3",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "487",
+          "status": "MATCH",
+          "ref": "487.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "179",
+          "status": "MATCH",
+          "ref": "179.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 10,
+        "no_match": 0,
+        "na": 0
+      }
+    },
+    {
+      "row_index": 2,
+      "fields": {
+        "of": {
+          "value": "252770",
+          "status": "MATCH",
+          "ref": "252770",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "CEGELEC PARIS",
+          "status": "MATCH",
+          "ref": "CEGELEC PARIS",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2504613",
+          "status": "MATCH",
+          "ref": "2504613",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CLC8F07RI_V - USAR MATERIAL STOCK + PORTA BASC",
+          "status": "MATCH",
+          "ref": "CLC8F07RI_V - USAR MATERIAL STOCK + PORTA BASC",
+          "ref_source": "plan",
+          "reason": "token_fuzzy"
+        },
+        "comp_mm": {
+          "value": "8000",
+          "status": "MATCH",
+          "ref": "8000",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M26B0241",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1490",
+          "status": "NA",
+          "ref": "1320",
+          "ref_source": "sap",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        },
+        "esp": {
+          "value": "4",
+          "status": "NA",
+          "ref": "4.8",
+          "ref_source": "sap",
+          "reason": "stub-accept w13 (4/4 of,cliente,modelo,comp_mm MATCH)",
+          "suspended_by_stub": true
+        },
+        "lbase": {
+          "value": "534",
+          "status": "NA",
+          "ref": "531.0",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        },
+        "ltopo": {
+          "value": "182",
+          "status": "NA",
+          "ref": "179.0",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        }
+      },
+      "summary": {
+        "match": 6,
+        "no_match": 0,
+        "na": 4
+      }
+    },
+    {
+      "row_index": 3,
+      "fields": {
+        "of": {
+          "value": "252770",
+          "status": "MATCH",
+          "ref": "252770",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "CEGELEC PARIS",
+          "status": "MATCH",
+          "ref": "CEGELEC PARIS",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2504613",
+          "status": "MATCH",
+          "ref": "2504613",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CLC8F07RI_V - USAR MATERIAL STOCK + PORTA BASC",
+          "status": "MATCH",
+          "ref": "CLC8F07RI_V - USAR MATERIAL STOCK + PORTA BASC",
+          "ref_source": "plan",
+          "reason": "token_fuzzy"
+        },
+        "comp_mm": {
+          "value": "8000",
+          "status": "MATCH",
+          "ref": "8000",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M26B0241",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1490",
+          "status": "NA",
+          "ref": "1320",
+          "ref_source": "sap",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        },
+        "esp": {
+          "value": "4",
+          "status": "NA",
+          "ref": "4.8",
+          "ref_source": "sap",
+          "reason": "stub-accept w13 (4/4 of,cliente,modelo,comp_mm MATCH)",
+          "suspended_by_stub": true
+        },
+        "lbase": {
+          "value": "534",
+          "status": "NA",
+          "ref": "531.0",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        },
+        "ltopo": {
+          "value": "182",
+          "status": "NA",
+          "ref": "179.0",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        }
+      },
+      "summary": {
+        "match": 6,
+        "no_match": 0,
+        "na": 4
+      }
+    },
+    {
+      "row_index": 4,
+      "fields": {
+        "of": {
+          "value": "252770",
+          "status": "MATCH",
+          "ref": "252770",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "CEGELEC PARIS",
+          "status": "MATCH",
+          "ref": "CEGELEC PARIS",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2504613",
+          "status": "MATCH",
+          "ref": "2504613",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CLC8F07RI_V - USAR MATERIAL STOCK + PORTA BASC",
+          "status": "MATCH",
+          "ref": "CLC8F07RI_V - USAR MATERIAL STOCK + PORTA BASC",
+          "ref_source": "plan",
+          "reason": "token_fuzzy"
+        },
+        "comp_mm": {
+          "value": "8000",
+          "status": "MATCH",
+          "ref": "8000",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M26B0241",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1490",
+          "status": "NA",
+          "ref": "1320",
+          "ref_source": "sap",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        },
+        "esp": {
+          "value": "4",
+          "status": "NA",
+          "ref": "4.8",
+          "ref_source": "sap",
+          "reason": "stub-accept w13 (4/4 of,cliente,modelo,comp_mm MATCH)",
+          "suspended_by_stub": true
+        },
+        "lbase": {
+          "value": "534",
+          "status": "NA",
+          "ref": "531.0",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        },
+        "ltopo": {
+          "value": "182",
+          "status": "NA",
+          "ref": "179.0",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        }
+      },
+      "summary": {
+        "match": 6,
+        "no_match": 0,
+        "na": 4
+      }
+    },
+    {
+      "row_index": 5,
+      "fields": {
+        "of": {
+          "value": "243346",
+          "status": "MATCH",
+          "ref": "243346",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "LTX",
+          "status": "MATCH",
+          "ref": "LTX",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2403226",
+          "status": "MATCH",
+          "ref": "2403226",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CEC1E06D",
+          "status": "MATCH",
+          "ref": "CEC1E06D",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "7400",
+          "status": "NA",
+          "ref": "7100",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        },
+        "lote": {
+          "value": "M24B1164",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1340",
+          "status": "MATCH",
+          "ref": "1340",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "3",
+          "status": "MATCH",
+          "ref": "3",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "468",
+          "status": "MATCH",
+          "ref": "468.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "176",
+          "status": "MATCH",
+          "ref": "176.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 9,
+        "no_match": 0,
+        "na": 1
+      }
+    },
+    {
+      "row_index": 6,
+      "fields": {
+        "of": {
+          "value": "237133",
+          "status": "MATCH",
+          "ref": "237133",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "CUNHA BASTOS",
+          "status": "MATCH",
+          "ref": "CUNHA BASTOS",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2313469",
+          "status": "MATCH",
+          "ref": "2313469",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CEC1E06D",
+          "status": "MATCH",
+          "ref": "CEC1E06D",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "7400",
+          "status": "NA",
+          "ref": "7100",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        },
+        "lote": {
+          "value": "M24B1164",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1340",
+          "status": "MATCH",
+          "ref": "1340",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "3",
+          "status": "MATCH",
+          "ref": "3",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "468",
+          "status": "MATCH",
+          "ref": "468.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "176",
+          "status": "MATCH",
+          "ref": "176.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 9,
+        "no_match": 0,
+        "na": 1
+      }
+    },
+    {
+      "row_index": 7,
+      "fields": {
+        "of": {
+          "value": "262056",
+          "status": "MATCH",
+          "ref": "262056",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "FLOSEL",
+          "status": "MATCH",
+          "ref": "FLOSEL",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2602805",
+          "status": "MATCH",
+          "ref": "2602805",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CFC2F04D",
+          "status": "MATCH",
+          "ref": "CFC2F04D",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "4000",
+          "status": "MATCH",
+          "ref": "4000",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M24B1164",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1340",
+          "status": "MATCH",
+          "ref": "1340",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "3",
+          "status": "MATCH",
+          "ref": "3",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "405",
+          "status": "MATCH",
+          "ref": "405.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "229",
+          "status": "MATCH",
+          "ref": "229.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 10,
+        "no_match": 0,
+        "na": 0
+      }
+    },
+    {
+      "row_index": 8,
+      "fields": {
+        "of": {
+          "value": "257563",
+          "status": "MATCH",
+          "ref": "257563",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "J DA SILVA FARIA LDA",
+          "status": "MATCH",
+          "ref": "J DA SILVA FARIA LDA",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2512226",
+          "status": "MATCH",
+          "ref": "2512226",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CEC1F06D",
+          "status": "MATCH",
+          "ref": "CEC1F06D",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "6000",
+          "status": "MATCH",
+          "ref": "6100",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M24B1164",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1340",
+          "status": "MATCH",
+          "ref": "1340",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "3",
+          "status": "MATCH",
+          "ref": "3",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "443",
+          "status": "NA",
+          "ref": "427.0",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        },
+        "ltopo": {
+          "value": "176",
+          "status": "MATCH",
+          "ref": "176.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 9,
+        "no_match": 0,
+        "na": 1
+      }
+    },
+    {
+      "row_index": 9,
+      "fields": {
+        "of": {
+          "value": "245462",
+          "status": "MATCH",
+          "ref": "245462",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "PLURALUZ",
+          "status": "MATCH",
+          "ref": "PLURALUZ",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2409720",
+          "status": "MATCH",
+          "ref": "2409720",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CLCAE08R",
+          "status": "MATCH",
+          "ref": "CLCAE08R",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "800",
+          "status": "NA",
+          "ref": "9200",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        },
+        "lote": {
+          "value": "M24B0880",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "865",
+          "status": "MATCH",
+          "ref": "865",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "3",
+          "status": "MATCH",
+          "ref": "3",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "581",
+          "status": "NA",
+          "ref": "575.0",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        },
+        "ltopo": {
+          "value": "229",
+          "status": "MATCH",
+          "ref": "229.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 8,
+        "no_match": 0,
+        "na": 2
+      }
+    },
+    {
+      "row_index": 10,
+      "fields": {
+        "of": {
+          "value": "257205",
+          "status": "MATCH",
+          "ref": "257205",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "BURRI",
+          "status": "MATCH",
+          "ref": "BURRI",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2511243",
+          "status": "MATCH",
+          "ref": "2511243",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "G075149750-30",
+          "status": "NA",
+          "ref": "6194T500 - FUSTES - 1 PRIORIDADE - 100ud",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (4/4 of,cliente,ov,comp_mm MATCH)",
+          "suspended_by_stub": true
+        },
+        "comp_mm": {
+          "value": "5000",
+          "status": "MATCH",
+          "ref": "5000",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M25B0901",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1000",
+          "status": "MATCH",
+          "ref": "1000",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "3,5",
+          "status": "MATCH",
+          "ref": "3.5",
+          "ref_source": "sap"
+        },
+        "lbase": {
+          "value": "397",
+          "status": "MATCH",
+          "ref": "397.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "177",
+          "status": "MATCH",
+          "ref": "177.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 9,
+        "no_match": 0,
+        "na": 1
+      }
+    }
+  ],
+  "to_analisar": []
+}

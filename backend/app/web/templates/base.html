@@ -24,6 +24,8 @@
 {% set is_jobs = active_tab is defined and active_tab == 'jobs' %}
 {% set is_trends = active_tab is defined and active_tab == 'trends' %}
 {% set is_alerts = active_tab is defined and active_tab == 'alerts' %}
+{% set is_downtime = active_tab is defined and active_tab == 'downtime' %}
+{% set is_nesting = active_tab is defined and active_tab == 'nesting' %}
 <div class="app">
   {% if not is_mobile %}
   <aside class="sidebar">
@@ -74,6 +76,14 @@
     <a class="sb-item {% if is_trends %}active{% endif %}" href="/dashboard/trends">
       <span class="sb-num">06</span>
       <span>Tendências</span>
+    </a>
+    <a class="sb-item {% if is_downtime %}active{% endif %}" href="/dashboard/downtime">
+      <span class="sb-num">⏸</span>
+      <span>Paragens</span>
+    </a>
+    <a class="sb-item {% if is_nesting %}active{% endif %}" href="/dashboard/nesting">
+      <span class="sb-num">▱</span>
+      <span>Nesting</span>
     </a>
 
     <div class="sb-section">Notificações</div>

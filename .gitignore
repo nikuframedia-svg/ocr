@@ -4,41 +4,48 @@
 *.pem
 *.key
 
-# Customer-sensitive material — never commit
-inputs/
-processados/
-data/app.db
-data/app.db-*
-data/images/
+# R64 — customer-data files are NOW tracked (private repo).
+# Migration to laptop requires DB state, photos, refs all in git.
+# Previously gitignored, now allowed:
+#   data/app.db (sheet state)
+#   data/images/ (uploaded photos)
+#   inputs/ (test images)
+#   ground_truth/, ground_truth_draft/, ground_truth_humano_raw/
+#   *.xlsx (StockSAP, plan_colunas, ReportKanbansDigitais)
+#   lexicons/sap_plan_mined.json, learned.json
+#   data/cross_sheet.json
+#   kanban_refs/ (copy of C:\kanban\nifruka\ for portable runtime)
+
+# Still ignored (regenerable / process state)
 data/scans/
 data/_logs/*.log
 data/_logs/*.err
 data/_logs/*.pid
 data/_logs/tunnel_url.txt
 data/dossier_pages/
-data/cross_sheet.json
 data/_design_ref/
 data/_design_ref_v2/
-ground_truth/
-ground_truth_draft/
-ground_truth_humano_raw/
+
+# Processed photos (move artifacts — regenerable)
+processados/
 
 # Claude Code local state
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
 
-# Mined refs derived from customer XLSX — sensitive
-lexicons/sap_plan_mined.json
-lexicons/learned.json
-*.xlsx
-
-# Reports — runs are noisy; keep only the curated baseline_v0.md
+# Reports — runs are noisy; baseline_v0.md curated lives in main branch
 reports/runs/
 reports/extractions_*/
 reports/sap_validation/
 reports/dq_index/
 reports/r42_baseline.json
 reports/round43_variants_results.json
+
+# Local screenshot/zip scratch (not part of repo)
+_captura_extract/
+_correcoes.xlsx
+_shot_*.png
+_screenshot_*.png
 
 # Python
 __pycache__/

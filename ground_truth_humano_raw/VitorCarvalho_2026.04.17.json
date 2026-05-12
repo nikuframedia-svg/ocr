@@ -1,0 +1,89 @@
+{
+  "header": {
+    "operador": "VITOR CARVALHO",
+    "n_operador": "1391",
+    "setor_maquina": "BOBINE-FORMATO",
+    "data": "17-04-2026"
+  },
+  "rows": [
+    {
+      "pri": "C1",
+      "cliente": "PETITJEAN",
+      "ov": "2601032",
+      "of": "260772",
+      "modelo": "OMEGA60-6M",
+      "qtd": "232",
+      "comp_mm": "6000",
+      "larg_mm": "1270",
+      "lote": "H25B0356",
+      "coni": "14",
+      "esp": "2,6",
+      "lbase": "444",
+      "ltopo": "180"
+    },
+    {
+      "pri": "C1",
+      "cliente": "PETITJEAN",
+      "ov": "2601032",
+      "of": "260772",
+      "modelo": "OMEGA60-6M",
+      "qtd": "140",
+      "comp_mm": "6000",
+      "larg_mm": "1270",
+      "lote": "H25B0503",
+      "coni": "14",
+      "esp": "2,6",
+      "lbase": "444",
+      "ltopo": "180"
+    },
+    {
+      "pri": "C1",
+      "cliente": "PETITJEAN",
+      "ov": "2601129",
+      "of": "260916",
+      "modelo": "OMEGA60-6M",
+      "qtd": "372",
+      "comp_mm": "6000",
+      "larg_mm": "1270",
+      "lote": "H25B0503",
+      "coni": "14",
+      "esp": "2,6",
+      "lbase": "444",
+      "ltopo": "180"
+    },
+    {
+      "pri": "C9",
+      "cliente": "STOCK MTG GMBH",
+      "ov": "2511757",
+      "of": "257372",
+      "modelo": "CGC2E08Di",
+      "qtd": "80",
+      "comp_mm": "9200",
+      "larg_mm": "800",
+      "lote": "H26B0327",
+      "coni": "10",
+      "esp": "2,6",
+      "lbase": "519",
+      "ltopo": "230"
+    },
+    {
+      "pri": "C18",
+      "cliente": "MTG",
+      "ov": "250010",
+      "of": "257504",
+      "modelo": "CA08E10B",
+      "qtd": "52",
+      "comp_mm": "11020",
+      "larg_mm": "1060",
+      "lote": "H26B0292",
+      "coni": "OCT",
+      "esp": "2,6",
+      "lbase": "754",
+      "ltopo": "203"
+    }
+  ],
+  "footer": {
+    "colunas_produzidas": "876",
+    "horas_trabalhadas": "10:00"
+  }
+}

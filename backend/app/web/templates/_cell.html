@@ -17,10 +17,15 @@
 {% set cc_status = cc_status_by_path.get(field_path, 'NA') if cc_status_by_path is defined else 'NA' %}
 {% set _is_dim_field = field_path.endswith('.esp') or field_path.endswith('.larg_mm')
                       or field_path.endswith('.lbase') or field_path.endswith('.ltopo')
-                      or field_path.endswith('.comp_mm') %}
+                      or field_path.endswith('.comp_mm')
+                      or field_path.endswith('.lote') %}{# R52 F3: lote NO_MATCH amarelo (warn) — não em SAP é review, não erro crítico #}
+{# R52 F4: NA from stub-accept (suspended_by_stub) → cc-na-suspended (amarelo soft)
+   to distinguish from NA sem-ref (qtd/coni/pri/etc — cinza neutro). #}
+{% set _is_suspended = cc_suspended_by_path is defined and cc_suspended_by_path.get(field_path) %}
 {% if cc_status == 'MATCH' %}{% set cc_class = 'cc-match' %}
 {% elif cc_status == 'NO_MATCH' and _is_dim_field %}{% set cc_class = 'cc-warn' %}
 {% elif cc_status == 'NO_MATCH' %}{% set cc_class = 'cc-no-match' %}
+{% elif cc_status == 'NA' and _is_suspended %}{% set cc_class = 'cc-na-suspended' %}
 {% else %}{% set cc_class = 'cc-na' %}
 {% endif %}
 {% set cell_id = 'cell-' ~ field_path|replace('.','-')|replace('[','-')|replace(']','') %}
@@ -46,19 +51,24 @@
     x-data='{
       editing: false,
       original: {{ value | tojson }},
+      lastTap: 0,
       isMobile() { return window.innerWidth <= 768; },
       handleClick() {
-        if (this.isMobile()) {
-          this.$dispatch("open-cell-editor", {
-            sheet_id: {{ sheet_id }},
-            field_path: {{ field_path | tojson }},
-            value: this.original,
-            label: {{ field_label | tojson }},
-            cell_id: {{ cell_id | tojson }}
-          });
-        } else {
-          this.editing = true;
-        }
+        if (!this.isMobile()) { this.editing = true; return; }
+        // R58 — duplo-toque (<400ms) abre o modal com input vazio para
+        // o operador poder escrever o novo valor de raiz, sem ter de
+        // apagar o existente.
+        const now = Date.now();
+        const isDoubleTap = (now - this.lastTap) < 400;
+        this.lastTap = now;
+        this.$dispatch("open-cell-editor", {
+          sheet_id: {{ sheet_id }},
+          field_path: {{ field_path | tojson }},
+          value: this.original,
+          label: {{ field_label | tojson }},
+          cell_id: {{ cell_id | tojson }},
+          clearValue: isDoubleTap
+        });
       }
     }'
     {% endif %}

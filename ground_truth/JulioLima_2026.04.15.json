@@ -1,0 +1,119 @@
+{
+  "header": {
+    "operador": "JULIO LIMA",
+    "n_operador": "0537",
+    "setor_maquina": "BOBINE-FORMATO",
+    "data": "15-04-2020"
+  },
+  "rows": [
+    {
+      "pri": "12",
+      "cliente": "ENEDIS",
+      "ov": "2602276",
+      "of": "261861",
+      "modelo": "CD03P503",
+      "qtd": "2",
+      "comp_mm": "11000",
+      "larg_mm": "1250",
+      "lote": "M26B0208",
+      "coni": "OCT",
+      "esp": "3",
+      "lbase": "714",
+      "ltopo": "450"
+    },
+    {
+      "pri": "12",
+      "cliente": "ENEDIS",
+      "ov": "2601427",
+      "of": "261567",
+      "modelo": "CD03P504",
+      "qtd": "10",
+      "comp_mm": "12000",
+      "larg_mm": "1250",
+      "lote": "M26B0208",
+      "coni": "OCT",
+      "esp": "3",
+      "lbase": "735",
+      "ltopo": "450"
+    },
+    {
+      "pri": "3",
+      "cliente": "ENEDIS",
+      "ov": "2601161",
+      "of": "261221",
+      "modelo": "CD03P504",
+      "qtd": "8",
+      "comp_mm": "12000",
+      "larg_mm": "1250",
+      "lote": "M26B0208",
+      "coni": "OCT",
+      "esp": "3",
+      "lbase": "735",
+      "ltopo": "450"
+    },
+    {
+      "pri": "3",
+      "cliente": "ENEDIS",
+      "ov": "2601161",
+      "of": "261221",
+      "modelo": "CD03P504",
+      "qtd": "4",
+      "comp_mm": "12000",
+      "larg_mm": "1250",
+      "lote": "M26B0208",
+      "coni": "OCT",
+      "esp": "3",
+      "lbase": "735",
+      "ltopo": "450"
+    },
+    {
+      "pri": "12",
+      "cliente": "ENEDIS",
+      "ov": "2602276",
+      "of": "261861",
+      "modelo": "CD03P504",
+      "qtd": "2",
+      "comp_mm": "12000",
+      "larg_mm": "1250",
+      "lote": "M26B0208",
+      "coni": "OCT",
+      "esp": "3",
+      "lbase": "735",
+      "ltopo": "450"
+    },
+    {
+      "pri": "12",
+      "cliente": "ENEDIS",
+      "ov": "2602276",
+      "of": "261861",
+      "modelo": "CD03P504",
+      "qtd": "2",
+      "comp_mm": "12000",
+      "larg_mm": "1250",
+      "lote": "M26B0208",
+      "coni": "OCT",
+      "esp": "3",
+      "lbase": "735",
+      "ltopo": "450"
+    },
+    {
+      "pri": "12",
+      "cliente": "ENEDIS",
+      "ov": "2601760",
+      "of": "261571",
+      "modelo": "CD03P504",
+      "qtd": "22",
+      "comp_mm": "12000",
+      "larg_mm": "1250",
+      "lote": "M26B0208",
+      "coni": "OCT",
+      "esp": "3",
+      "lbase": "735",
+      "ltopo": "450"
+    }
+  ],
+  "footer": {
+    "colunas_produzidas": "50",
+    "horas_trabalhadas": "3:00"
+  }
+}

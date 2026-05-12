@@ -1,0 +1,234 @@
+{
+  "sheet_id": 12,
+  "image_path": "images\\20260504_160528_3b96ef03b785b5db.jpeg",
+  "operador": "JULIO LIMA",
+  "date": "2026-04-30",
+  "sheet_status": "extracted",
+  "checked_at": "2026-05-12T08:19:46+00:00",
+  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "summary": {
+    "match": 25,
+    "no_match": 0,
+    "na": 11,
+    "total": 36
+  },
+  "rows": [
+    {
+      "row_index": 0,
+      "fields": {
+        "of": {
+          "value": "257093",
+          "status": "MATCH",
+          "ref": "257093",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "STOCK MTG BELUX",
+          "status": "MATCH",
+          "ref": "STOCK MTG BELUX",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2511344",
+          "status": "MATCH",
+          "ref": "2511344",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CBCBE06DI - 2 SC",
+          "status": "MATCH",
+          "ref": "CBCBE06DI - 2 SC",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "7100",
+          "status": "MATCH",
+          "ref": "7100",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M26B0358",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1375",
+          "status": "NA",
+          "ref": "1320",
+          "ref_source": "sap",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        },
+        "esp": {
+          "value": "2,6",
+          "status": "MATCH",
+          "ref": "2.6",
+          "ref_source": "plan"
+        },
+        "lbase": {
+          "value": "479",
+          "status": "MATCH",
+          "ref": "479.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "193",
+          "status": "MATCH",
+          "ref": "193.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 9,
+        "no_match": 0,
+        "na": 1
+      }
+    },
+    {
+      "row_index": 1,
+      "fields": {
+        "of": {
+          "value": "257093",
+          "status": "MATCH",
+          "ref": "257093",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "STOCK MTG BELUX",
+          "status": "MATCH",
+          "ref": "STOCK MTG BELUX",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2511344",
+          "status": "MATCH",
+          "ref": "2511344",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CBCBE06DI - 2 SC",
+          "status": "MATCH",
+          "ref": "CBCBE06DI - 2 SC",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "7100",
+          "status": "MATCH",
+          "ref": "7100",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M26B0355",
+          "status": "NA",
+          "ref_source": "sap",
+          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
+          "suspended_by_stub": true
+        },
+        "larg_mm": {
+          "value": "1375",
+          "status": "NA",
+          "reason": "stub-accept w13 (promote_na_if_lote_missing, 5/5 of,cliente,modelo,esp,comp_mm MATCH)",
+          "suspended_by_stub": true
+        },
+        "esp": {
+          "value": "2,6",
+          "status": "MATCH",
+          "ref": "2.6",
+          "ref_source": "plan"
+        },
+        "lbase": {
+          "value": "479",
+          "status": "MATCH",
+          "ref": "479.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "193",
+          "status": "MATCH",
+          "ref": "193.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 8,
+        "no_match": 0,
+        "na": 2
+      }
+    },
+    {
+      "row_index": 2,
+      "fields": {
+        "of": {
+          "value": "260078",
+          "status": "MATCH",
+          "ref": "260078",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "STOCK MTG BELUX",
+          "status": "MATCH",
+          "ref": "STOCK MTG BELUX",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2600054",
+          "status": "MATCH",
+          "ref": "2600054",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CBCBE06DI - 2 SC",
+          "status": "MATCH",
+          "ref": "CBCBE06DI - 2 SC",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "7100",
+          "status": "MATCH",
+          "ref": "7100",
+          "ref_source": "plan"
+        },
+        "lote": {
+          "value": "M26B0355",
+          "status": "NA",
+          "ref_source": "sap",
+          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
+          "suspended_by_stub": true
+        },
+        "larg_mm": {
+          "value": "1375",
+          "status": "NA",
+          "reason": "stub-accept w13 (promote_na_if_lote_missing, 5/5 of,cliente,modelo,esp,comp_mm MATCH)",
+          "suspended_by_stub": true
+        },
+        "esp": {
+          "value": "2,6",
+          "status": "MATCH",
+          "ref": "2.6",
+          "ref_source": "plan"
+        },
+        "lbase": {
+          "value": "479",
+          "status": "MATCH",
+          "ref": "479.0",
+          "ref_source": "plan"
+        },
+        "ltopo": {
+          "value": "193",
+          "status": "MATCH",
+          "ref": "193.0",
+          "ref_source": "plan"
+        }
+      },
+      "summary": {
+        "match": 8,
+        "no_match": 0,
+        "na": 2
+      }
+    }
+  ],
+  "to_analisar": []
+}

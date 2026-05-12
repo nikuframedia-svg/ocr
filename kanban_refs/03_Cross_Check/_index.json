@@ -1,0 +1,1130 @@
+{
+  "updated_at": "2026-05-12T12:04:56+00:00",
+  "sheets": {
+    "4": {
+      "sheet_id": 4,
+      "operador": "Júlio Lima",
+      "date": "2026-04-14",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 78,
+        "no_match": 0,
+        "na": 8,
+        "total": 86
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-14/JulioLima_14-04-2026_sheet4.json",
+      "updated_at": "2026-05-12T08:19:46+00:00"
+    },
+    "5": {
+      "sheet_id": 5,
+      "operador": "VITOR CARVALHO",
+      "date": "2026-04-13",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 16,
+        "no_match": 0,
+        "na": 10,
+        "total": 26
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-13/VitorCarvalho_13-04-2026_sheet5.json",
+      "updated_at": "2026-05-12T08:19:46+00:00"
+    },
+    "3": {
+      "sheet_id": 3,
+      "operador": "AUGUSTO MONTEIRO",
+      "date": "2026-04-16",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 98,
+        "no_match": 0,
+        "na": 8,
+        "total": 106
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-16/AugustoMonteiro_16-04-2026_sheet3.json",
+      "updated_at": "2026-05-12T08:19:46+00:00"
+    },
+    "2": {
+      "sheet_id": 2,
+      "operador": "JULIO LIMA",
+      "date": "2026-04-15",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 120,
+        "no_match": 0,
+        "na": 6,
+        "total": 126
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-15/JulioLima_15-04-2026_sheet2.json",
+      "updated_at": "2026-05-12T08:19:46+00:00"
+    },
+    "1": {
+      "sheet_id": 1,
+      "operador": "VITOR CARVALHO",
+      "date": "2026-04-17",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 47,
+        "no_match": 0,
+        "na": 9,
+        "total": 56
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-17/VitorCarvalho_17-04-2026_sheet1.json",
+      "updated_at": "2026-05-12T08:19:46+00:00"
+    },
+    "6": {
+      "sheet_id": 6,
+      "operador": "VITOR CARVALHO",
+      "date": "2026-04-17",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 44,
+        "no_match": 0,
+        "na": 12,
+        "total": 56
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-17/VitorCarvalho_17-04-2026_sheet6.json",
+      "updated_at": "2026-05-12T08:19:46+00:00"
+    },
+    "7": {
+      "sheet_id": 7,
+      "operador": "VITOR CARVALHO",
+      "date": "2026-04-14",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 46,
+        "no_match": 0,
+        "na": 10,
+        "total": 56
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-14/VitorCarvalho_14-04-2026_sheet7.json",
+      "updated_at": "2026-05-12T08:19:46+00:00"
+    },
+    "8": {
+      "sheet_id": 8,
+      "operador": "JULIO LIMA",
+      "date": "2026-04-30",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 25,
+        "no_match": 0,
+        "na": 11,
+        "total": 36
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-30/JulioLima_30-04-2026_sheet8.json",
+      "updated_at": "2026-05-12T08:19:46+00:00"
+    },
+    "9": {
+      "sheet_id": 9,
+      "operador": "VITOR GONCALVES",
+      "date": "2026-04-30",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 74,
+        "no_match": 2,
+        "na": 20,
+        "total": 96
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-30/VitorGoncalves_30-04-2026_sheet9.json",
+      "updated_at": "2026-05-12T08:19:46+00:00"
+    },
+    "10": {
+      "sheet_id": 10,
+      "operador": "VITORIA CRUZ VITALINO",
+      "date": "2026-11-30",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 98,
+        "no_match": 0,
+        "na": 8,
+        "total": 106
+      },
+      "ok_rate": 0.0,
+      "file": "2026-11-30/VitoriaCruzVitalino_30-11-2026_sheet10.json",
+      "updated_at": "2026-05-12T08:19:46+00:00"
+    },
+    "11": {
+      "sheet_id": 11,
+      "operador": "VITORIA GABRIELA",
+      "date": "2026-04-30",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 79,
+        "no_match": 2,
+        "na": 25,
+        "total": 106
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-30/VitoriaGabriela_30-04-2026_sheet11.json",
+      "updated_at": "2026-05-12T08:19:46+00:00"
+    },
+    "12": {
+      "sheet_id": 12,
+      "operador": "JULIO LIMA",
+      "date": "2026-04-30",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 25,
+        "no_match": 0,
+        "na": 11,
+        "total": 36
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-30/JulioLima_30-04-2026_sheet12.json",
+      "updated_at": "2026-05-12T08:19:46+00:00"
+    },
+    "13": {
+      "sheet_id": 13,
+      "operador": "VITOR GONCALVES",
+      "date": "2026-11-30",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 86,
+        "no_match": 0,
+        "na": 10,
+        "total": 96
+      },
+      "ok_rate": 0.0,
+      "file": "2026-11-30/VitorGoncalves_30-11-2026_sheet13.json",
+      "updated_at": "2026-05-12T08:19:46+00:00"
+    },
+    "14": {
+      "sheet_id": 14,
+      "operador": "JULIO LIMA",
+      "date": "2026-04-30",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 25,
+        "no_match": 0,
+        "na": 11,
+        "total": 36
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-30/JulioLima_30-04-2026_sheet14.json",
+      "updated_at": "2026-05-12T08:19:46+00:00"
+    },
+    "15": {
+      "sheet_id": 15,
+      "operador": "JULIO LIMA",
+      "date": "2026-04-30",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 26,
+        "no_match": 0,
+        "na": 10,
+        "total": 36
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-30/JulioLima_30-04-2026_sheet15.json",
+      "updated_at": "2026-05-12T08:19:46+00:00"
+    },
+    "16": {
+      "sheet_id": 16,
+      "operador": "JULIO LIMA",
+      "date": "2025-04-15",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 63,
+        "no_match": 0,
+        "na": 13,
+        "total": 76
+      },
+      "ok_rate": 0.0,
+      "file": "2025-04-15/JulioLima_15-04-2025_sheet16.json",
+      "updated_at": "2026-05-12T08:19:46+00:00"
+    },
+    "17": {
+      "sheet_id": 17,
+      "operador": "JULIO LIMA",
+      "date": "2026-04-30",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 25,
+        "no_match": 0,
+        "na": 11,
+        "total": 36
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-30/JulioLima_30-04-2026_sheet17.json",
+      "updated_at": "2026-05-12T08:19:46+00:00"
+    },
+    "18": {
+      "sheet_id": 18,
+      "operador": "VIVIANE CARVALHO",
+      "date": "2026-04-30",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 86,
+        "no_match": 0,
+        "na": 10,
+        "total": 96
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-30/VivianeCarvalho_30-04-2026_sheet18.json",
+      "updated_at": "2026-05-12T08:19:46+00:00"
+    },
+    "19": {
+      "sheet_id": 19,
+      "operador": "Júlio Lima",
+      "date": "2026-04-13",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 36,
+        "no_match": 0,
+        "na": 10,
+        "total": 46
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-13/JulioLima_13-04-2026_sheet19.json",
+      "updated_at": "2026-05-12T08:19:46+00:00"
+    },
+    "20": {
+      "sheet_id": 20,
+      "operador": "Júlio LIMA",
+      "date": "2026-04-13",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 36,
+        "no_match": 0,
+        "na": 10,
+        "total": 46
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-13/JulioLima_13-04-2026_sheet20.json",
+      "updated_at": "2026-05-12T08:19:45+00:00"
+    },
+    "21": {
+      "sheet_id": 21,
+      "operador": "DULIO LIMA",
+      "date": "2026-04-30",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 22,
+        "no_match": 0,
+        "na": 14,
+        "total": 36
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-30/DulioLima_30-04-2026_sheet21.json",
+      "updated_at": "2026-05-12T08:19:45+00:00"
+    },
+    "22": {
+      "sheet_id": 22,
+      "operador": "JULIO LIMA",
+      "date": "2026-04-30",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 16,
+        "no_match": 2,
+        "na": 18,
+        "total": 36
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-30/JulioLima_30-04-2026_sheet22.json",
+      "updated_at": "2026-05-12T08:19:45+00:00"
+    },
+    "23": {
+      "sheet_id": 23,
+      "operador": "VITOR CARVALHO",
+      "date": "2026-04-30",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 83,
+        "no_match": 0,
+        "na": 13,
+        "total": 96
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-30/VitorCarvalho_30-04-2026_sheet23.json",
+      "updated_at": "2026-05-12T08:19:45+00:00"
+    },
+    "24": {
+      "sheet_id": 24,
+      "operador": "Júlio LIMA",
+      "date": "2026-04-13",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 35,
+        "no_match": 0,
+        "na": 11,
+        "total": 46
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-13/JulioLima_13-04-2026_sheet24.json",
+      "updated_at": "2026-05-12T08:19:45+00:00"
+    },
+    "25": {
+      "sheet_id": 25,
+      "operador": "Júlio Lima",
+      "date": "2026-04-13",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 38,
+        "no_match": 0,
+        "na": 8,
+        "total": 46
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-13/JulioLima_13-04-2026_sheet25.json",
+      "updated_at": "2026-05-12T08:19:45+00:00"
+    },
+    "26": {
+      "sheet_id": 26,
+      "operador": "VITOR GABRIEL",
+      "date": "2026-04-30",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 86,
+        "no_match": 0,
+        "na": 10,
+        "total": 96
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-30/VitorGabriel_30-04-2026_sheet26.json",
+      "updated_at": "2026-05-12T08:19:45+00:00"
+    },
+    "27": {
+      "sheet_id": 27,
+      "operador": "Júlio Lima",
+      "date": "2026-04-13",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 38,
+        "no_match": 0,
+        "na": 8,
+        "total": 46
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-13/JulioLima_13-04-2026_sheet27.json",
+      "updated_at": "2026-05-12T08:19:45+00:00"
+    },
+    "28": {
+      "sheet_id": 28,
+      "operador": "VIVIANE CARVALHO",
+      "date": "2026-04-30",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 83,
+        "no_match": 0,
+        "na": 13,
+        "total": 96
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-30/VivianeCarvalho_30-04-2026_sheet28.json",
+      "updated_at": "2026-05-12T08:19:45+00:00"
+    },
+    "29": {
+      "sheet_id": 29,
+      "operador": "VITOR CARVALHO",
+      "date": "2026-04-14",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 36,
+        "no_match": 0,
+        "na": 10,
+        "total": 46
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-14/VitorCarvalho_14-04-2026_sheet29.json",
+      "updated_at": "2026-05-12T08:19:45+00:00"
+    },
+    "30": {
+      "sheet_id": 30,
+      "operador": "AUGUSTO MONTEIRO",
+      "date": "2026-04-14",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 24,
+        "no_match": 0,
+        "na": 12,
+        "total": 36
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-14/AugustoMonteiro_14-04-2026_sheet30.json",
+      "updated_at": "2026-05-12T08:19:45+00:00"
+    },
+    "31": {
+      "sheet_id": 31,
+      "operador": "JULIO LIMA",
+      "date": "2026-04-15",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 120,
+        "no_match": 0,
+        "na": 6,
+        "total": 126
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-15/JulioLima_15-04-2026_sheet31.json",
+      "updated_at": "2026-05-12T08:19:45+00:00"
+    },
+    "32": {
+      "sheet_id": 32,
+      "operador": "JULIO LIMA",
+      "date": "2020-04-15",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 70,
+        "no_match": 0,
+        "na": 6,
+        "total": 76
+      },
+      "ok_rate": 0.0,
+      "file": "2020-04-15/JulioLima_15-04-2020_sheet32.json",
+      "updated_at": "2026-05-12T08:19:45+00:00"
+    },
+    "33": {
+      "sheet_id": 33,
+      "operador": "VIRG CARVALHO",
+      "date": "2026-04-15",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 43,
+        "no_match": 0,
+        "na": 13,
+        "total": 56
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-15/VirgCarvalho_15-04-2026_sheet33.json",
+      "updated_at": "2026-05-12T08:19:45+00:00"
+    },
+    "34": {
+      "sheet_id": 34,
+      "operador": "JÚLIO LIMA",
+      "date": "2026-04-15",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 108,
+        "no_match": 0,
+        "na": 18,
+        "total": 126
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-15/JulioLima_15-04-2026_sheet34.json",
+      "updated_at": "2026-05-12T08:19:45+00:00"
+    },
+    "35": {
+      "sheet_id": 35,
+      "operador": "JULIO LIMA",
+      "date": "2020-04-15",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 69,
+        "no_match": 0,
+        "na": 7,
+        "total": 76
+      },
+      "ok_rate": 0.0,
+      "file": "2020-04-15/JulioLima_15-04-2020_sheet35.json",
+      "updated_at": "2026-05-12T08:19:45+00:00"
+    },
+    "36": {
+      "sheet_id": 36,
+      "operador": "VITOR CARVALHO",
+      "date": "2026-04-15",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 42,
+        "no_match": 0,
+        "na": 14,
+        "total": 56
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-15/VitorCarvalho_15-04-2026_sheet36.json",
+      "updated_at": "2026-05-12T08:19:45+00:00"
+    },
+    "37": {
+      "sheet_id": 37,
+      "operador": "VITOR CARVALHO",
+      "date": "2026-05-08",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 81,
+        "no_match": 1,
+        "na": 14,
+        "total": 96
+      },
+      "ok_rate": 0.0,
+      "file": "2026-05-08/VitorCarvalho_08-05-2026_sheet37.json",
+      "updated_at": "2026-05-12T08:19:45+00:00"
+    },
+    "38": {
+      "sheet_id": 38,
+      "operador": "AUGUSTO MONTEIRO",
+      "date": "2026-05-08",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 80,
+        "no_match": 2,
+        "na": 24,
+        "total": 106
+      },
+      "ok_rate": 0.0,
+      "file": "2026-05-08/AugustoMonteiro_08-05-2026_sheet38.json",
+      "updated_at": "2026-05-12T08:19:44+00:00"
+    },
+    "39": {
+      "sheet_id": 39,
+      "operador": "VITOR CARVALHO",
+      "date": "2026-05-07",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 68,
+        "no_match": 0,
+        "na": 18,
+        "total": 86
+      },
+      "ok_rate": 0.0,
+      "file": "2026-05-07/VitorCarvalho_07-05-2026_sheet39.json",
+      "updated_at": "2026-05-12T08:19:44+00:00"
+    },
+    "40": {
+      "sheet_id": 40,
+      "operador": "AUGUSTO MONTEIRO",
+      "date": "2026-05-07",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 94,
+        "no_match": 1,
+        "na": 11,
+        "total": 106
+      },
+      "ok_rate": 0.0,
+      "file": "2026-05-07/AugustoMonteiro_07-05-2026_sheet40.json",
+      "updated_at": "2026-05-12T08:19:44+00:00"
+    },
+    "41": {
+      "sheet_id": 41,
+      "operador": "VITOR CARVALHO",
+      "date": "2026-05-06",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 108,
+        "no_match": 0,
+        "na": 18,
+        "total": 126
+      },
+      "ok_rate": 0.0,
+      "file": "2026-05-06/VitorCarvalho_06-05-2026_sheet41.json",
+      "updated_at": "2026-05-12T08:19:44+00:00"
+    },
+    "42": {
+      "sheet_id": 42,
+      "operador": "AUGUSTO MONTEIRO",
+      "date": "2026-05-06",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 75,
+        "no_match": 0,
+        "na": 11,
+        "total": 86
+      },
+      "ok_rate": 0.0,
+      "file": "2026-05-06/AugustoMonteiro_06-05-2026_sheet42.json",
+      "updated_at": "2026-05-12T08:19:44+00:00"
+    },
+    "43": {
+      "sheet_id": 43,
+      "operador": "VICTOR CARVALHO",
+      "date": "2026-05-05",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 58,
+        "no_match": 6,
+        "na": 32,
+        "total": 96
+      },
+      "ok_rate": 0.0,
+      "file": "2026-05-05/VictorCarvalho_05-05-2026_sheet43.json",
+      "updated_at": "2026-05-12T08:19:44+00:00"
+    },
+    "44": {
+      "sheet_id": 44,
+      "operador": "AUGUSTO MONTEIRO",
+      "date": "2026-05-05",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 50,
+        "no_match": 2,
+        "na": 14,
+        "total": 66
+      },
+      "ok_rate": 0.0,
+      "file": "2026-05-05/AugustoMonteiro_05-05-2026_sheet44.json",
+      "updated_at": "2026-05-12T08:19:44+00:00"
+    },
+    "45": {
+      "sheet_id": 45,
+      "operador": "VITOR CAVALHO",
+      "date": "2026-05-04",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 54,
+        "no_match": 0,
+        "na": 12,
+        "total": 66
+      },
+      "ok_rate": 0.0,
+      "file": "2026-05-04/VitorCavalho_04-05-2026_sheet45.json",
+      "updated_at": "2026-05-12T08:19:44+00:00"
+    },
+    "46": {
+      "sheet_id": 46,
+      "operador": "AUGUSTO MONTEIRO",
+      "date": "2026-05-04",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 53,
+        "no_match": 0,
+        "na": 13,
+        "total": 66
+      },
+      "ok_rate": 0.0,
+      "file": "2026-05-04/AugustoMonteiro_04-05-2026_sheet46.json",
+      "updated_at": "2026-05-12T08:19:44+00:00"
+    },
+    "47": {
+      "sheet_id": 47,
+      "operador": "AUGUSTO MONTEIRO",
+      "date": "2026-04-30",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 28,
+        "no_match": 0,
+        "na": 8,
+        "total": 36
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-30/AugustoMonteiro_30-04-2026_sheet47.json",
+      "updated_at": "2026-05-12T08:19:44+00:00"
+    },
+    "48": {
+      "sheet_id": 48,
+      "operador": "JULIO LIMA",
+      "date": "2026-04-29",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 92,
+        "no_match": 0,
+        "na": 24,
+        "total": 116
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-29/JulioLima_29-04-2026_sheet48.json",
+      "updated_at": "2026-05-12T08:19:44+00:00"
+    },
+    "49": {
+      "sheet_id": 49,
+      "operador": "VITOR CARVALHO",
+      "date": "2026-04-29",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 65,
+        "no_match": 0,
+        "na": 11,
+        "total": 76
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-29/VitorCarvalho_29-04-2026_sheet49.json",
+      "updated_at": "2026-05-12T08:19:44+00:00"
+    },
+    "50": {
+      "sheet_id": 50,
+      "operador": "AUGUSTO NONTEIRO",
+      "date": "2026-04-29",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 27,
+        "no_match": 0,
+        "na": 9,
+        "total": 36
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-29/AugustoNonteiro_29-04-2026_sheet50.json",
+      "updated_at": "2026-05-12T08:19:44+00:00"
+    },
+    "51": {
+      "sheet_id": 51,
+      "operador": "Júlio Lima",
+      "date": "2026-04-20",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 80,
+        "no_match": 0,
+        "na": 16,
+        "total": 96
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-20/JulioLima_20-04-2026_sheet51.json",
+      "updated_at": "2026-05-12T08:19:44+00:00"
+    },
+    "52": {
+      "sheet_id": 52,
+      "operador": "AUGUSTO MONTEIRO",
+      "date": "2026-04-20",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 67,
+        "no_match": 0,
+        "na": 9,
+        "total": 76
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-20/AugustoMonteiro_20-04-2026_sheet52.json",
+      "updated_at": "2026-05-12T08:19:44+00:00"
+    },
+    "53": {
+      "sheet_id": 53,
+      "operador": "Vitor CARVALHO",
+      "date": "2026-04-20",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 40,
+        "no_match": 0,
+        "na": 6,
+        "total": 46
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-20/VitorCarvalho_20-04-2026_sheet53.json",
+      "updated_at": "2026-05-12T08:19:44+00:00"
+    },
+    "54": {
+      "sheet_id": 54,
+      "operador": "Júlio Lima",
+      "date": "2026-04-22",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 50,
+        "no_match": 0,
+        "na": 16,
+        "total": 66
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-22/JulioLima_22-04-2026_sheet54.json",
+      "updated_at": "2026-05-12T08:19:44+00:00"
+    },
+    "55": {
+      "sheet_id": 55,
+      "operador": "AUGUSTO MONTEIRO",
+      "date": "2026-04-21",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 45,
+        "no_match": 0,
+        "na": 11,
+        "total": 56
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-21/AugustoMonteiro_21-04-2026_sheet55.json",
+      "updated_at": "2026-05-12T08:19:43+00:00"
+    },
+    "56": {
+      "sheet_id": 56,
+      "operador": "VITOR CARVALHO",
+      "date": "2026-04-21",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 115,
+        "no_match": 0,
+        "na": 11,
+        "total": 126
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-21/VitorCarvalho_21-04-2026_sheet56.json",
+      "updated_at": "2026-05-12T08:19:43+00:00"
+    },
+    "57": {
+      "sheet_id": 57,
+      "operador": "AUGUSTO MONTEIRO",
+      "date": "2026-04-22",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 48,
+        "no_match": 0,
+        "na": 18,
+        "total": 66
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-22/AugustoMonteiro_22-04-2026_sheet57.json",
+      "updated_at": "2026-05-12T08:19:43+00:00"
+    },
+    "58": {
+      "sheet_id": 58,
+      "operador": "VITOR CARVALHO",
+      "date": "2026-04-22",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 97,
+        "no_match": 0,
+        "na": 19,
+        "total": 116
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-22/VitorCarvalho_22-04-2026_sheet58.json",
+      "updated_at": "2026-05-12T08:19:43+00:00"
+    },
+    "59": {
+      "sheet_id": 59,
+      "operador": "AUGUSTO MONTEIRO",
+      "date": "2026-04-23",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 47,
+        "no_match": 0,
+        "na": 9,
+        "total": 56
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-23/AugustoMonteiro_23-04-2026_sheet59.json",
+      "updated_at": "2026-05-12T08:19:43+00:00"
+    },
+    "60": {
+      "sheet_id": 60,
+      "operador": "Vitor CARVALHO",
+      "date": "2026-04-23",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 29,
+        "no_match": 0,
+        "na": 7,
+        "total": 36
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-23/VitorCarvalho_23-04-2026_sheet60.json",
+      "updated_at": "2026-05-12T08:19:43+00:00"
+    },
+    "61": {
+      "sheet_id": 61,
+      "operador": "VITOR CARVALHO",
+      "date": "2026-04-23",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 108,
+        "no_match": 0,
+        "na": 18,
+        "total": 126
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-23/VitorCarvalho_23-04-2026_sheet61.json",
+      "updated_at": "2026-05-12T08:19:43+00:00"
+    },
+    "62": {
+      "sheet_id": 62,
+      "operador": "JULIO LIMA",
+      "date": "2026-04-23",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 46,
+        "no_match": 0,
+        "na": 10,
+        "total": 56
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-23/JulioLima_23-04-2026_sheet62.json",
+      "updated_at": "2026-05-12T08:19:43+00:00"
+    },
+    "63": {
+      "sheet_id": 63,
+      "operador": "JULIO LIHA",
+      "date": "2026-04-24",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 68,
+        "no_match": 0,
+        "na": 8,
+        "total": 76
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-24/JulioLiha_24-04-2026_sheet63.json",
+      "updated_at": "2026-05-12T08:19:43+00:00"
+    },
+    "64": {
+      "sheet_id": 64,
+      "operador": "AUGUSTO MONTEIRO",
+      "date": "2026-04-24",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 49,
+        "no_match": 0,
+        "na": 7,
+        "total": 56
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-24/AugustoMonteiro_24-04-2026_sheet64.json",
+      "updated_at": "2026-05-12T08:19:43+00:00"
+    },
+    "65": {
+      "sheet_id": 65,
+      "operador": "VITOR CARVALHO",
+      "date": "2026-04-27",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 47,
+        "no_match": 0,
+        "na": 9,
+        "total": 56
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-27/VitorCarvalho_27-04-2026_sheet65.json",
+      "updated_at": "2026-05-12T08:19:43+00:00"
+    },
+    "66": {
+      "sheet_id": 66,
+      "operador": "VITOR CARVALHO",
+      "date": "2026-04-23",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 108,
+        "no_match": 0,
+        "na": 18,
+        "total": 126
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-23/VitorCarvalho_23-04-2026_sheet66.json",
+      "updated_at": "2026-05-12T08:19:43+00:00"
+    },
+    "67": {
+      "sheet_id": 67,
+      "operador": "AUGUSTO MONTEIRO",
+      "date": "2026-04-24",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 50,
+        "no_match": 0,
+        "na": 6,
+        "total": 56
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-24/AugustoMonteiro_24-04-2026_sheet67.json",
+      "updated_at": "2026-05-12T08:19:43+00:00"
+    },
+    "68": {
+      "sheet_id": 68,
+      "operador": "VITOR CARVALHO",
+      "date": "2026-04-23",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 108,
+        "no_match": 0,
+        "na": 18,
+        "total": 126
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-23/VitorCarvalho_23-04-2026_sheet68.json",
+      "updated_at": "2026-05-12T08:19:43+00:00"
+    },
+    "70": {
+      "sheet_id": 70,
+      "operador": "VITOR CARVALHO",
+      "date": "2026-04-23",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 108,
+        "no_match": 0,
+        "na": 18,
+        "total": 126
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-23/VitorCarvalho_23-04-2026_sheet70.json",
+      "updated_at": "2026-05-12T08:19:43+00:00"
+    },
+    "71": {
+      "sheet_id": 71,
+      "operador": "AUGUSTO MONTEIRO",
+      "date": "2026-04-23",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 47,
+        "no_match": 0,
+        "na": 9,
+        "total": 56
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-23/AugustoMonteiro_23-04-2026_sheet71.json",
+      "updated_at": "2026-05-12T08:19:43+00:00"
+    },
+    "72": {
+      "sheet_id": 72,
+      "operador": "Júlio LIMA",
+      "date": "2026-04-13",
+      "sheet_status": "validated",
+      "summary": {
+        "match": 38,
+        "no_match": 0,
+        "na": 8,
+        "total": 46
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-13/JulioLima_13-04-2026_sheet72.json",
+      "updated_at": "2026-05-12T09:34:37+00:00"
+    },
+    "73": {
+      "sheet_id": 73,
+      "operador": "AUGUSTO MONTEIRO",
+      "date": "2026-04-23",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 47,
+        "no_match": 0,
+        "na": 9,
+        "total": 56
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-23/AugustoMonteiro_23-04-2026_sheet73.json",
+      "updated_at": "2026-05-12T11:01:50+00:00"
+    },
+    "74": {
+      "sheet_id": 74,
+      "operador": "Vitor CARVALHO",
+      "date": "2026-04-23",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 29,
+        "no_match": 0,
+        "na": 7,
+        "total": 36
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-23/VitorCarvalho_23-04-2026_sheet74.json",
+      "updated_at": "2026-05-12T10:59:12+00:00"
+    },
+    "75": {
+      "sheet_id": 75,
+      "operador": "VITOR CARVALHO",
+      "date": "2026-04-23",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 108,
+        "no_match": 0,
+        "na": 18,
+        "total": 126
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-23/VitorCarvalho_23-04-2026_sheet75.json",
+      "updated_at": "2026-05-12T11:00:15+00:00"
+    },
+    "76": {
+      "sheet_id": 76,
+      "operador": "V. LOPES CARVALHO",
+      "date": "2026-04-23",
+      "sheet_status": "extracted",
+      "summary": {
+        "match": 27,
+        "no_match": 0,
+        "na": 9,
+        "total": 36
+      },
+      "ok_rate": 0.0,
+      "file": "2026-04-23/V.LopesCarvalho_23-04-2026_sheet76.json",
+      "updated_at": "2026-05-12T12:04:56+00:00"
+    }
+  }
+}

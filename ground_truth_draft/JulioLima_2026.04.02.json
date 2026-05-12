@@ -1,0 +1,18 @@
+{
+  "header": {
+    "operador": "JÚLIO LIMA",
+    "n_operador": "0537",
+    "setor_maquina": "BOBINE-FORMATO",
+    "data": "02-04-2026"
+  },
+  "rows": [
+    {"pri": "2", "cliente": "TECPOLES", "ov": "2305032", "of": "260938", "modelo": "0641-S-515", "qtd": "2", "comp_mm": "11870", "larg_mm": "1165", "lote": "M25B0754", "coni": "12", "esp": "3,5", "lbase": "790", "ltopo": "268"},
+    {"pri": "40", "cliente": "MTG", "ov": "260012", "of": "261632", "modelo": "CLC6F05D", "qtd": "208", "comp_mm": "5000", "larg_mm": "1144", "lote": "M26B0294", "coni": "12", "esp": "2,6", "lbase": "369", "ltopo": "180"},
+    {"pri": "40", "cliente": "MTG", "ov": "260012", "of": "261629", "modelo": "CLC6F45D", "qtd": "44", "comp_mm": "4500", "larg_mm": "1144", "lote": "M26B0294", "coni": "12", "esp": "2,6", "lbase": "350", "ltopo": "180"},
+    {"pri": "5", "cliente": "RODEL", "ov": "2602170", "of": "261497", "modelo": "CL02F08B", "qtd": "88", "comp_mm": "7543", "larg_mm": "1400", "lote": "M26B0273", "coni": "OCT", "esp": "2,6", "lbase": "466", "ltopo": "204"}
+  ],
+  "footer": {
+    "colunas_produzidas": "342",
+    "horas_trabalhadas": "5:30"
+  }
+}

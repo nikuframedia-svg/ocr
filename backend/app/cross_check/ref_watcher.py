@@ -32,6 +32,7 @@ Refs dict shape (matches old ``sap_plan_mined.json``):
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
@@ -39,8 +40,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-# Default location — matches the factory ecosystem the user set up
-_DEFAULT_DOC_DIR = Path(r"C:\kanban\nifruka\04_Documentacao")
+# R64 — overridable via KANBAN_DOC_DIR env var. Lets the laptop runtime
+# point at a local refs folder (or `kanban_refs/04_Documentacao` inside
+# the repo) instead of the hardcoded desktop path.
+_DEFAULT_DOC_DIR = Path(
+    os.environ.get("KANBAN_DOC_DIR", r"C:\kanban\nifruka\04_Documentacao")
+)
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # Round 35 — SAP exports lotes inconsistently: some rows have a leading

@@ -1,0 +1,74 @@
+{
+  "header": {
+    "operador": "VITOR CARVALHO",
+    "n_operador": "1391",
+    "setor_maquina": "BOBINE-FORMATO",
+    "data": "14-04-2026"
+  },
+  "rows": [
+    {
+      "pri": "C11",
+      "cliente": "MTG BELUX",
+      "ov": "2601624",
+      "of": "261326",
+      "modelo": "CB03E10P",
+      "qtd": "2",
+      "comp_mm": "9475",
+      "larg_mm": "1190",
+      "lote": "M26B0209",
+      "coni": "OCT",
+      "esp": "4",
+      "lbase": "774",
+      "ltopo": "372"
+    },
+    {
+      "pri": "C7",
+      "cliente": "FEDERATION",
+      "ov": "2602037",
+      "of": "261902",
+      "modelo": "CLC8F07RI-V",
+      "qtd": "4",
+      "comp_mm": "7072",
+      "larg_mm": "1500",
+      "lote": "M24B1003",
+      "coni": "14",
+      "esp": "3",
+      "lbase": "487",
+      "ltopo": "179"
+    },
+    {
+      "pri": "C6",
+      "cliente": "STOCK MTG GMBH",
+      "ov": "2511757",
+      "of": "257370",
+      "modelo": "CGC2E06D1- 2ªPRIORIDADE",
+      "qtd": "2",
+      "comp_mm": "7000",
+      "larg_mm": "712",
+      "lote": "M26B0325",
+      "coni": "10",
+      "esp": "2,6",
+      "lbase": "450",
+      "ltopo": "230"
+    },
+    {
+      "pri": "C9",
+      "cliente": "STOCK MTG GMBH",
+      "ov": "2511757",
+      "of": "257372",
+      "modelo": "CGC2E08DI",
+      "qtd": "4",
+      "comp_mm": "9200",
+      "larg_mm": "800",
+      "lote": "M26B0324",
+      "coni": "10",
+      "esp": "2,6",
+      "lbase": "519",
+      "ltopo": "230"
+    }
+  ],
+  "footer": {
+    "colunas_produzidas": "12",
+    "horas_trabalhadas": "8,00"
+  }
+}

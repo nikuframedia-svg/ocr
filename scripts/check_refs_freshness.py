@@ -114,6 +114,47 @@ def main() -> None:
     print(f"  - C:\\kanban\\nifruka\\04_Documentacao\\StockSAP.xlsx")
     print("Then: POST /admin/reload-refs to pick up new entries.")
 
+    # R52 F5: also write a curated markdown report to reports/refs_to_refresh.md
+    # for sharing with the factory team. Sorted by frequency, with sheet IDs.
+    out_md = REPO / "reports" / "refs_to_refresh.md"
+    out_md.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Refs a actualizar — relatório para factory team",
+        "",
+        f"Gerado: {sum(len(v) for v in missing_ofs.values()) + sum(len(v) for v in missing_lotes.values())} "
+        "cells em sheets actuais dependem de refs ausentes em plan_colunas/StockSAP.",
+        "",
+        "## OFs ausentes em plan_colunas_cpis.xlsx",
+        "",
+    ]
+    if missing_ofs:
+        lines.append("| OF | # cells | Sheets |")
+        lines.append("|---|---|---|")
+        for of, cells in sorted(missing_ofs.items(), key=lambda x: -len(x[1])):
+            sheet_ids = sorted({sid for sid, _ in cells})
+            lines.append(f"| `{of}` | {len(cells)} | {', '.join(map(str, sheet_ids))} |")
+    else:
+        lines.append("_(nenhuma)_")
+    lines.append("")
+    lines.append("## Lotes ausentes em StockSAP.xlsx")
+    lines.append("")
+    if missing_lotes:
+        lines.append("| Lote | # cells | Sheets |")
+        lines.append("|---|---|---|")
+        for lote, cells in sorted(missing_lotes.items(), key=lambda x: -len(x[1])):
+            sheet_ids = sorted({sid for sid, _ in cells})
+            lines.append(f"| `{lote}` | {len(cells)} | {', '.join(map(str, sheet_ids))} |")
+    else:
+        lines.append("_(nenhum)_")
+    lines.append("")
+    lines.append("## Acção")
+    lines.append("")
+    lines.append("1. Verificar com a factory se estes OFs/lotes existem em sistema interno")
+    lines.append("2. Actualizar os XLSX em `C:\\kanban\\nifruka\\04_Documentacao\\`")
+    lines.append("3. `curl -X POST http://127.0.0.1:8080/admin/reload-refs` para recarregar")
+    out_md.write_text("\n".join(lines), encoding="utf-8")
+    print(f"\nRelatório markdown escrito: {out_md}")
+
 
 if __name__ == "__main__":
     main()

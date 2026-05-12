@@ -1,0 +1,266 @@
+{
+  "sheet_id": 22,
+  "image_path": "images\\20260506_160821_431178ea6f2e53c2.jpeg",
+  "operador": "JULIO LIMA",
+  "date": "2026-04-30",
+  "sheet_status": "extracted",
+  "checked_at": "2026-05-12T08:19:45+00:00",
+  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "summary": {
+    "match": 16,
+    "no_match": 2,
+    "na": 18,
+    "total": 36
+  },
+  "rows": [
+    {
+      "row_index": 0,
+      "fields": {
+        "of": {
+          "value": "254303",
+          "status": "MATCH",
+          "ref": "254303",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "MTG BELUX",
+          "status": "MATCH",
+          "ref": "MTG BELUX",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2507116",
+          "status": "MATCH",
+          "ref": "2507116",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CBCAE05UI - 2 SC + 2 PORTAS + PLUG + PONTEIRA",
+          "status": "MATCH",
+          "ref": "CBCAE05UI - 2 SC + 2 PORTAS + PLUG + PONTEIRA",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "3100",
+          "status": "NA",
+          "ref": "6100",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        },
+        "lote": {
+          "value": "M26B0358",
+          "status": "MATCH",
+          "ref_source": "sap"
+        },
+        "larg_mm": {
+          "value": "1335",
+          "status": "MATCH",
+          "ref": "1320",
+          "ref_source": "sap"
+        },
+        "esp": {
+          "value": "2,6",
+          "status": "MATCH",
+          "ref": "2.6",
+          "ref_source": "plan"
+        },
+        "lbase": {
+          "value": "499",
+          "status": "NA",
+          "ref": "504.0",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        },
+        "ltopo": {
+          "value": "193",
+          "status": "NA",
+          "ref": "237.0",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        }
+      },
+      "summary": {
+        "match": 7,
+        "no_match": 0,
+        "na": 3
+      }
+    },
+    {
+      "row_index": 1,
+      "fields": {
+        "of": {
+          "value": "254303",
+          "status": "MATCH",
+          "ref": "254303",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "MTG BELUX",
+          "status": "MATCH",
+          "ref": "MTG BELUX",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2507116",
+          "status": "MATCH",
+          "ref": "2507116",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CBCAE05UI - 2 SC + 2 PORTAS + PLUG + PONTEIRA",
+          "status": "MATCH",
+          "ref": "CBCAE05UI - 2 SC + 2 PORTAS + PLUG + PONTEIRA",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "3100",
+          "status": "NA",
+          "ref": "6100",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        },
+        "lote": {
+          "value": "M26B0355",
+          "status": "NA",
+          "ref_source": "sap",
+          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
+          "suspended_by_stub": true
+        },
+        "larg_mm": {
+          "value": "1335",
+          "status": "NA",
+          "reason": "stub-accept w13 (promote_na_if_lote_missing, 4/5 of,cliente,modelo,esp,comp_mm MATCH)",
+          "suspended_by_stub": true
+        },
+        "esp": {
+          "value": "2,6",
+          "status": "MATCH",
+          "ref": "2.6",
+          "ref_source": "plan"
+        },
+        "lbase": {
+          "value": "499",
+          "status": "NA",
+          "ref": "504.0",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        },
+        "ltopo": {
+          "value": "193",
+          "status": "NA",
+          "ref": "237.0",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        }
+      },
+      "summary": {
+        "match": 5,
+        "no_match": 0,
+        "na": 5
+      }
+    },
+    {
+      "row_index": 2,
+      "fields": {
+        "of": {
+          "value": "260008",
+          "status": "MATCH",
+          "ref": "260008",
+          "ref_source": "plan"
+        },
+        "cliente": {
+          "value": "MTG BELUX",
+          "status": "MATCH",
+          "ref": "MTG BELUX",
+          "ref_source": "plan"
+        },
+        "ov": {
+          "value": "2509923",
+          "status": "MATCH",
+          "ref": "2509923",
+          "ref_source": "plan"
+        },
+        "modelo": {
+          "value": "CLCEE06RI_V",
+          "status": "MATCH",
+          "ref": "CLCEE06RI_V",
+          "ref_source": "plan",
+          "reason": "substring"
+        },
+        "comp_mm": {
+          "value": "3100",
+          "status": "NA",
+          "ref": "7500",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        },
+        "lote": {
+          "value": "M26B0355",
+          "status": "NO_MATCH",
+          "ref_source": "sap",
+          "reason": "lote 'M26B0355' não está em StockSAP"
+        },
+        "larg_mm": {
+          "value": "1335",
+          "status": "NA",
+          "reason": "lote não em SAP"
+        },
+        "esp": {
+          "value": "26",
+          "status": "NO_MATCH",
+          "ref": "4.0",
+          "ref_source": "plan",
+          "reason": "OCR=26.0 vs plan=4.0"
+        },
+        "lbase": {
+          "value": "499",
+          "status": "NA",
+          "ref": "512.0",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        },
+        "ltopo": {
+          "value": "193",
+          "status": "NA",
+          "ref": "182.0",
+          "ref_source": "plan",
+          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "suspended_by_stub": true
+        }
+      },
+      "summary": {
+        "match": 4,
+        "no_match": 2,
+        "na": 4
+      }
+    }
+  ],
+  "to_analisar": [
+    {
+      "row_index": 2,
+      "field": "lote",
+      "value": "M26B0355",
+      "ref": null,
+      "ref_source": "sap",
+      "reason": "lote 'M26B0355' não está em StockSAP"
+    },
+    {
+      "row_index": 2,
+      "field": "esp",
+      "value": "26",
+      "ref": "4.0",
+      "ref_source": "plan",
+      "reason": "OCR=26.0 vs plan=4.0"
+    }
+  ]
+}

@@ -1,0 +1,254 @@
+{
+  "updated_at": "2026-05-12T12:04:56+00:00",
+  "totals": {
+    "match": 4585,
+    "no_match": 18,
+    "na": 917,
+    "total": 5520
+  },
+  "by_day": {
+    "2020-04-15": {
+      "match": 1923,
+      "no_match": 6,
+      "na": 365,
+      "total": 2294
+    },
+    "2025-04-15": {
+      "match": 1013,
+      "no_match": 4,
+      "na": 195,
+      "total": 1212
+    },
+    "2026-04-13": {
+      "match": 331,
+      "no_match": 0,
+      "na": 83,
+      "total": 414
+    },
+    "2026-04-14": {
+      "match": 262,
+      "no_match": 0,
+      "na": 48,
+      "total": 310
+    },
+    "2026-04-15": {
+      "match": 745,
+      "no_match": 0,
+      "na": 89,
+      "total": 834
+    },
+    "2026-04-16": {
+      "match": 290,
+      "no_match": 0,
+      "na": 34,
+      "total": 324
+    },
+    "2026-04-17": {
+      "match": 450,
+      "no_match": 0,
+      "na": 62,
+      "total": 512
+    },
+    "2026-04-20": {
+      "match": 3246,
+      "no_match": 18,
+      "na": 670,
+      "total": 3934
+    },
+    "2026-04-21": {
+      "match": 3421,
+      "no_match": 18,
+      "na": 703,
+      "total": 4142
+    },
+    "2026-04-22": {
+      "match": 3411,
+      "no_match": 18,
+      "na": 723,
+      "total": 4152
+    },
+    "2026-04-23": {
+      "match": 4380,
+      "no_match": 18,
+      "na": 888,
+      "total": 5286
+    },
+    "2026-04-24": {
+      "match": 3986,
+      "no_match": 18,
+      "na": 802,
+      "total": 4806
+    },
+    "2026-04-27": {
+      "match": 3962,
+      "no_match": 18,
+      "na": 806,
+      "total": 4786
+    },
+    "2026-04-29": {
+      "match": 3071,
+      "no_match": 18,
+      "na": 647,
+      "total": 3736
+    },
+    "2026-04-30": {
+      "match": 1157,
+      "no_match": 6,
+      "na": 259,
+      "total": 1422
+    },
+    "2026-05-04": {
+      "match": 2821,
+      "no_match": 18,
+      "na": 583,
+      "total": 3422
+    },
+    "2026-05-05": {
+      "match": 2718,
+      "no_match": 24,
+      "na": 578,
+      "total": 3320
+    },
+    "2026-05-06": {
+      "match": 2660,
+      "no_match": 10,
+      "na": 518,
+      "total": 3188
+    },
+    "2026-05-07": {
+      "match": 2437,
+      "no_match": 10,
+      "na": 489,
+      "total": 2936
+    },
+    "2026-05-08": {
+      "match": 2288,
+      "no_match": 10,
+      "na": 456,
+      "total": 2754
+    },
+    "2026-11-30": {
+      "match": 830,
+      "no_match": 2,
+      "na": 120,
+      "total": 952
+    }
+  },
+  "by_operador": {
+    "AUGUSTO MONTEIRO": {
+      "match": 1094,
+      "no_match": 5,
+      "na": 205,
+      "total": 1304
+    },
+    "AUGUSTO NONTEIRO": {
+      "match": 3006,
+      "no_match": 18,
+      "na": 632,
+      "total": 3656
+    },
+    "DULIO LIMA": {
+      "match": 1177,
+      "no_match": 4,
+      "na": 251,
+      "total": 1432
+    },
+    "JULIO LIHA": {
+      "match": 3887,
+      "no_match": 18,
+      "na": 789,
+      "total": 4694
+    },
+    "JULIO LIMA": {
+      "match": 1034,
+      "no_match": 2,
+      "na": 176,
+      "total": 1212
+    },
+    "JÚLIO LIMA": {
+      "match": 2043,
+      "no_match": 6,
+      "na": 401,
+      "total": 2450
+    },
+    "Júlio LIMA": {
+      "match": 1242,
+      "no_match": 4,
+      "na": 252,
+      "total": 1498
+    },
+    "Júlio Lima": {
+      "match": 398,
+      "no_match": 0,
+      "na": 74,
+      "total": 472
+    },
+    "V. LOPES CARVALHO": {
+      "match": 4612,
+      "no_match": 18,
+      "na": 926,
+      "total": 5556
+    },
+    "VICTOR CARVALHO": {
+      "match": 2668,
+      "no_match": 22,
+      "na": 564,
+      "total": 3254
+    },
+    "VIRG CARVALHO": {
+      "match": 1870,
+      "no_match": 6,
+      "na": 378,
+      "total": 2254
+    },
+    "VITOR CARVALHO": {
+      "match": 1529,
+      "no_match": 1,
+      "na": 286,
+      "total": 1816
+    },
+    "VITOR CAVALHO": {
+      "match": 2768,
+      "no_match": 18,
+      "na": 570,
+      "total": 3356
+    },
+    "VITOR GABRIEL": {
+      "match": 1499,
+      "no_match": 6,
+      "na": 307,
+      "total": 1812
+    },
+    "VITOR GONCALVES": {
+      "match": 708,
+      "no_match": 4,
+      "na": 124,
+      "total": 836
+    },
+    "VITORIA CRUZ VITALINO": {
+      "match": 744,
+      "no_match": 2,
+      "na": 110,
+      "total": 856
+    },
+    "VITORIA GABRIELA": {
+      "match": 804,
+      "no_match": 6,
+      "na": 152,
+      "total": 962
+    },
+    "VIVIANE CARVALHO": {
+      "match": 1230,
+      "no_match": 4,
+      "na": 226,
+      "total": 1460
+    },
+    "Vitor CARVALHO": {
+      "match": 3264,
+      "no_match": 18,
+      "na": 674,
+      "total": 3956
+    }
+  },
+  "n_sheets": 75
+}

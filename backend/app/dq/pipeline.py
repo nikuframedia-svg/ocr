@@ -19,6 +19,12 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from app.templates_registry import (
+    DEFAULT_TEMPLATE,
+    TemplateSpec,
+    get_template,
+)
+
 from .constraints import (
     CellRef,
     Severity,
@@ -33,24 +39,52 @@ from .validators import (
     validate_extraction,
 )
 
+# Header is identical across all 11 templates (per templates_registry).
 _HEADER_FIELDS = ("operador", "n_operador", "setor_maquina", "data")
-_FOOTER_FIELDS = ("colunas_produzidas", "horas_trabalhadas")
-_ROW_FIELDS = (
+
+# Bobine-Formato fallback fields — only used when an extraction has no
+# template_name and detection fails. R54 makes everything else flow
+# from the TemplateSpec instead.
+_LEGACY_FOOTER_FIELDS = ("colunas_produzidas", "horas_trabalhadas")
+_LEGACY_ROW_FIELDS = (
     "pri", "cliente", "ov", "of", "modelo", "qtd",
     "comp_mm", "larg_mm", "lote", "coni", "esp", "lbase", "ltopo",
 )
-# Snap dependency order (Round 27c): `of` must snap before `ov`/`modelo`
-# (which look up `plan_to_entries[of]`). Other fields independent.
-# Output row dict still uses `_ROW_FIELDS` natural order; only the snap
-# pass uses this order.
-_ROW_SNAP_ORDER = (
+
+# Canonical snap dependency order. `of` must snap before `ov`/`modelo`
+# (which look up `plan_to_entries[of]`). Fields not in this order get
+# snapped in their natural template.row_fields order. Fields not in the
+# template are simply skipped.
+_SNAP_ORDER_PRIORITY = (
     "of",        # OF first — its post-snap value is used by ov/modelo
     "ov",        # uses post-snap OF for plan-OV Lev-1 lookup
     "modelo",    # uses post-snap OF for plan.designacao lookup
     "lote",      # independent (SAP exact)
-    "pri", "cliente", "qtd",
-    "comp_mm", "larg_mm", "coni", "esp", "lbase", "ltopo",
 )
+
+
+def _template_for_extraction(extraction: dict) -> TemplateSpec:
+    """Read template_name from extraction; fall back to bobine_formato.
+
+    Used by run_dq + cell map builder + snap iterator so the same
+    `TemplateSpec` is consistent across all DQ phases.
+    """
+    tname = (extraction or {}).get("template_name")
+    if tname:
+        return get_template(tname)
+    return DEFAULT_TEMPLATE
+
+
+def _row_snap_order(template: TemplateSpec) -> tuple[str, ...]:
+    """Return the snap order tailored to a template's row_fields.
+
+    Priority fields (of/ov/modelo/lote) come first IF they exist in the
+    template. Remaining fields keep their template-declared order.
+    """
+    fields_set = set(template.row_fields)
+    head = tuple(f for f in _SNAP_ORDER_PRIORITY if f in fields_set)
+    tail = tuple(f for f in template.row_fields if f not in head)
+    return head + tail
 
 
 @dataclass
@@ -105,6 +139,12 @@ class DQResult:
 
 
 def _path(row_index: int | None, field_name: str) -> str:
+    """Return ``"rows[i].field"`` or ``"header.field"`` / ``"footer.field"``.
+
+    For section detection (row_index is None), assumes the field belongs
+    to header if it's one of the canonical header names; otherwise treats
+    as footer. Header is constant across templates so this is safe.
+    """
     if row_index is None:
         section = "header" if field_name in _HEADER_FIELDS else "footer"
         return f"{section}.{field_name}"
@@ -122,8 +162,16 @@ def _seed_cell(row_index: int | None, field_name: str, value: str) -> CellAudit:
     )
 
 
-def _build_cell_map(extraction: dict) -> dict[str, CellAudit]:
-    """Build initial cell_map keyed by field_path."""
+def _build_cell_map(
+    extraction: dict, template: TemplateSpec,
+) -> dict[str, CellAudit]:
+    """Build initial cell_map keyed by field_path.
+
+    Round 54 — template-aware: iterates `template.row_fields` and
+    `template.footer_fields` instead of hardcoded constants. Cells for
+    fields not in the template aren't created (so the UI / cross-check
+    never sees them).
+    """
     cells: dict[str, CellAudit] = {}
     header = extraction.get("header", {}) or {}
     for f in _HEADER_FIELDS:
@@ -132,10 +180,10 @@ def _build_cell_map(extraction: dict) -> dict[str, CellAudit]:
     for i, row in enumerate(rows):
         if not isinstance(row, dict):
             continue
-        for f in _ROW_FIELDS:
+        for f in template.row_fields:
             cells[_path(i, f)] = _seed_cell(i, f, str(row.get(f, "") or ""))
     footer = extraction.get("footer", {}) or {}
-    for f in _FOOTER_FIELDS:
+    for f in template.footer_fields:
         cells[_path(None, f)] = _seed_cell(None, f, str(footer.get(f, "") or ""))
     return cells
 
@@ -153,11 +201,24 @@ def _apply_l1(cells: dict[str, CellAudit], issues: list[ValidationIssue]) -> Non
         })
 
 
-def _apply_l2(cells: dict[str, CellAudit]) -> dict:
-    """Run snap on each cell with a snap policy. Returns a fixed
-    extraction dict matching the raw shape (header/rows/footer)."""
+def _apply_l2(
+    cells: dict[str, CellAudit], template: TemplateSpec,
+) -> dict:
+    """Run snap on each cell. Returns a fixed extraction dict matching
+    the raw shape (header/rows/footer).
+
+    Round 54 — template-aware: only iterates the template's row_fields
+    and footer_fields. Snap order is derived from
+    ``_row_snap_order(template)`` so dependencies still resolve (OF
+    before OV/MODELO).
+    """
     fixed: dict = {"header": {}, "rows": [], "footer": {}}
-    # Header
+
+    snap_order = _row_snap_order(template)
+    row_fields = template.row_fields
+    footer_fields = template.footer_fields
+
+    # Header (same for all templates)
     for f in _HEADER_FIELDS:
         path = _path(None, f)
         cell = cells[path]
@@ -167,25 +228,24 @@ def _apply_l2(cells: dict[str, CellAudit]) -> dict:
             cell.final = res.snapped
             cell.fix_chain.append(f"L2:{res.rule}:{res.raw!r}->{res.snapped!r}")
         fixed["header"][f] = cell.final
-    # Rows
-    # Find max row_index from cell paths
+
+    # Rows — iterate template fields, in dependency order for snap
     row_indices = sorted({c.row_index for c in cells.values() if c.row_index is not None})
     for i in row_indices:
-        # Live row state — starts as raw, accumulates post-snap values as we
-        # iterate. Lets downstream snaps (e.g. modelo using post-snap OF for
-        # plan.designacao lookup) see corrected sibling fields.
+        # Live row state for cross-field snap context (e.g. modelo reads
+        # post-snap OF for plan.designacao lookup).
         row_state: dict[str, str] = {}
-        for f in _ROW_FIELDS:
-            path = _path(i, f)
-            cell = cells.get(path)
+        for f in row_fields:
+            cell = cells.get(_path(i, f))
             if cell is not None:
                 row_state[f] = cell.raw
-        # Snap pass — dependency order, so cross-field rules see post-snap
-        # values of upstream fields (e.g. modelo reads post-snap OF).
+
+        # Snap pass — priority order (OF/OV/MODELO/LOTE) then template
+        # order. Fields not in this template's row_fields are simply
+        # absent from the iteration.
         cascade_rules: dict[str, tuple[str, float]] = {}
-        for f in _ROW_SNAP_ORDER:
-            path = _path(i, f)
-            cell = cells.get(path)
+        for f in snap_order:
+            cell = cells.get(_path(i, f))
             if cell is None:
                 continue
             res = snap_field(f, cell.raw, row_context=row_state)
@@ -195,14 +255,14 @@ def _apply_l2(cells: dict[str, CellAudit]) -> dict:
                 cell.fix_chain.append(f"L2:{res.rule}:{res.raw!r}->{res.snapped!r}")
                 row_state[f] = res.snapped
                 cascade_rules[f] = (res.rule, res.distance)
-        # Round 42 — per-field cross-validator. After cascade, check if any
-        # Lev-2 fuzzy snap on modelo/cliente over-corrected when raw was
-        # already an exact lexicon hit. Reverts only when raw is provably
-        # canonical and cascade rule isn't an authoritative one (R32 plan
-        # canonical, alias, exact, etc. are preserved).
+
+        # Round 42 cross-validator — only meaningful if modelo/cliente
+        # are in this template. For templates without them (paragens),
+        # this loop is a no-op.
         for f in ("modelo", "cliente"):
-            path = _path(i, f)
-            cell = cells.get(path)
+            if f not in row_fields:
+                continue
+            cell = cells.get(_path(i, f))
             if cell is None or f not in cascade_rules:
                 continue
             rule, dist = cascade_rules[f]
@@ -214,23 +274,24 @@ def _apply_l2(cells: dict[str, CellAudit]) -> dict:
                     f"L2:cascade_reverted_by_perfield:{cell.raw!r}->{cv.best!r}"
                 )
                 row_state[f] = cv.best
-        # Build pass — natural row order for output dict.
-        row_out = {}
-        for f in _ROW_FIELDS:
-            path = _path(i, f)
-            cell = cells.get(path)
+
+        # Build pass — natural template order for output dict
+        row_out: dict[str, str] = {}
+        for f in row_fields:
+            cell = cells.get(_path(i, f))
             row_out[f] = cell.final if cell is not None else ""
         fixed["rows"].append(row_out)
+
     # Footer
-    for f in _FOOTER_FIELDS:
-        path = _path(None, f)
-        cell = cells[path]
+    for f in footer_fields:
+        cell = cells[_path(None, f)]
         res = snap_field(f, cell.raw)
         if res is not None and res.applied:
             cell.snapped = res.snapped
             cell.final = res.snapped
             cell.fix_chain.append(f"L2:{res.rule}:{res.raw!r}->{res.snapped!r}")
         fixed["footer"][f] = cell.final
+
     return fixed
 
 
@@ -290,14 +351,23 @@ def run_dq(
     learned = learned or {}
     index = index or CrossSheetIndex()
 
-    cells = _build_cell_map(extraction)
+    # Round 54 — template-aware. Defaults to bobine_formato for legacy
+    # extractions (no template_name field present).
+    template = _template_for_extraction(extraction)
+
+    cells = _build_cell_map(extraction, template)
 
     # L1
     issues = validate_extraction(extraction)
     _apply_l1(cells, issues)
 
-    # L2 — produce fixed extraction
-    fixed = _apply_l2(cells)
+    # L2 — produce fixed extraction (template-aware iteration)
+    fixed = _apply_l2(cells, template)
+
+    # Carry template_name through to fixed so downstream (cross-check,
+    # UI, CSV writer) keeps using the right schema. For legacy
+    # extractions (no template_name) we still emit one — bobine_formato.
+    fixed["template_name"] = template.name
 
     # L3 — run on FIXED (post-L2) values so cliente/modelo snap is
     # already applied (avoids spurious L3 violations from typos that

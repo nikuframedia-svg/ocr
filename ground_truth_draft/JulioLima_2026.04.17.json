@@ -1,0 +1,20 @@
+{
+  "header": {
+    "operador": "JÚLIO LIMA",
+    "n_operador": "0537",
+    "setor_maquina": "BOBINE-FORMATO",
+    "data": "17-04-2026"
+  },
+  "rows": [
+    {"pri": "23", "cliente": "MTG GMBH", "ov": "2602636", "of": "262081", "modelo": "CGCAE04Di", "qtd": "24", "comp_mm": "4800", "larg_mm": "1250", "lote": "M24B0698", "coni": "10", "esp": "3", "lbase": "330", "ltopo": "229"},
+    {"pri": "25", "cliente": "MTG GMBH", "ov": "2602279", "of": "261998", "modelo": "CGC4F09D", "qtd": "2", "comp_mm": "9000", "larg_mm": "950", "lote": "M26B0058", "coni": "10", "esp": "4", "lbase": "550", "ltopo": "267"},
+    {"pri": "5", "cliente": "SUNNA", "ov": "2601441", "of": "261345", "modelo": "CLCCF02R-V", "qtd": "4", "comp_mm": "7000", "larg_mm": "950", "lote": "M26B0058", "coni": "14", "esp": "4", "lbase": "575", "ltopo": "267"},
+    {"pri": "13", "cliente": "BRICANTEL", "ov": "2601593", "of": "261542", "modelo": "CEC1E10D", "qtd": "6", "comp_mm": "11700", "larg_mm": "920", "lote": "M24B0446", "coni": "14", "esp": "3", "lbase": "656", "ltopo": "176"},
+    {"pri": "1", "cliente": "SYNDICAT", "ov": "2602156", "of": "261537", "modelo": "CLC8F11Ri-V", "qtd": "2", "comp_mm": "11100", "larg_mm": "920", "lote": "M24B0446", "coni": "14", "esp": "3", "lbase": "663", "ltopo": "176"},
+    {"pri": "2", "cliente": "PETIT JEAN", "ov": "2512225", "of": "257540", "modelo": "OMEGA60-6M", "qtd": "368", "comp_mm": "6000", "larg_mm": "1270", "lote": "M25B0356", "coni": "14", "esp": "2,6", "lbase": "444", "ltopo": "180"}
+  ],
+  "footer": {
+    "colunas_produzidas": "406",
+    "horas_trabalhadas": "5:30"
+  }
+}

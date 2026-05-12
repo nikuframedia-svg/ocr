@@ -9,6 +9,13 @@
   </div>
   {% if sheet %}
     <div style="display:flex; gap:12px; align-items:center;">
+      {# Round 54 — template badge near validate button #}
+      {% if template %}
+        <span class="pill neutral mono" style="font-size:11px;"
+              title="{{ template.description }}{% if template.phase %} · {{ template.phase }}{% endif %}">
+          {{ template_name.replace('_', ' ') }}
+        </span>
+      {% endif %}
       {# Validate button + status pill — Round 34: at top of page #}
       {% if sheet.status == 'validated' %}
         <span class="pill ok">✓ Validada · {{ sheet.operador }}</span>
@@ -136,6 +143,11 @@
       </table>
     </div>
   </div>
+
+  {# R56 — color legend for the cross-check status of each cell. #}
+  {% if rows %}
+    {% include "_legend.html" %}
+  {% endif %}
 
   {# ============== ROWS — TABLE LAYOUT (Round 34) ============== #}
   <div class="card" style="margin-top:12px;">
