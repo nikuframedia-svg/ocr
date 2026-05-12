@@ -1,26 +1,52 @@
 $ErrorActionPreference = "Stop"
-$root = "C:\Users\User\ocr"
+
+# R65 — derive root from script location (portable across machines).
+# Script lives in <repo>/data/_logs/start.ps1; root is 2 levels up.
+$root = (Resolve-Path "$PSScriptRoot\..\..").Path
 $logs = "$root\data\_logs"
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
+Write-Host "REPO_ROOT=$root"
+
+# R65 — load .env file from repo root if it exists. Parses KEY=VALUE
+# lines (skipping comments and blank lines). Lets the operator point
+# this runtime at a remote Ollama (OLLAMA_URL), local refs folder
+# (KANBAN_DOC_DIR), etc. without editing this script.
+$envFile = "$root\.env"
+if (Test-Path $envFile) {
+    Write-Host "Loading $envFile"
+    Get-Content $envFile | ForEach-Object {
+        $line = $_.Trim()
+        if ($line -and -not $line.StartsWith("#") -and $line.Contains("=")) {
+            $idx = $line.IndexOf("=")
+            $key = $line.Substring(0, $idx).Trim()
+            $val = $line.Substring($idx + 1).Trim().Trim('"').Trim("'")
+            Set-Item -Path "Env:$key" -Value $val
+            Write-Host "  $key=$val"
+        }
+    }
+} else {
+    Write-Host "(no .env at $envFile - using defaults inline below)"
+}
 
 # Kill any stragglers
 Get-Process | Where-Object { $_.Name -in @("python","cloudflared") } | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 1
 
 # Production OCR uses qwen3.5:9b (Round 20). Disable reasoning blocks via
-# OCR_NO_THINK=1 — without it the model emits ~3× extra "thinking" tokens
-# that cause 42% JSON parse failures and 4× latency. With it: 100% parse
+# OCR_NO_THINK=1 - without it the model emits ~3x extra "thinking" tokens
+# that cause 42% JSON parse failures and 4x latency. With it: 100% parse
 # rate, ~22s/photo, +6.9pp field accuracy vs qwen2.5vl:7b baseline.
-$env:OCR_NO_THINK = "1"
+# R65: only set if not already loaded from .env.
+if (-not $env:OCR_NO_THINK) { $env:OCR_NO_THINK = "1" }
 
-# Round 44 — cross-check stub-accept variant. w13 builds on v13 with:
+# Round 44 - cross-check stub-accept variant. w13 builds on v13 with:
 #   - lote 3-of-4 (drop esp gate; esp can be misread)
 #   - modelo-aware dim downgrade (when modelo NO_MATCH, entry-selection is
-#     unreliable → can't validate dim against wrong ref)
-#   - cluster sanity (dim NA only when ≥1 sibling dim MATCH)
+#     unreliable - can't validate dim against wrong ref)
+#   - cluster sanity (dim NA only when >=1 sibling dim MATCH)
 # Achieves 95.50% match rate while preserving modelo NO_MATCH visibility
 # (real divergences supervisor must see). See reports/round44_*.
-$env:CC_STUB_VARIANT = "w13"
+if (-not $env:CC_STUB_VARIANT) { $env:CC_STUB_VARIANT = "w13" }
 
 # Start uvicorn detached
 $uv = Start-Process -FilePath "$root\.venv\Scripts\python.exe" `
@@ -34,8 +60,24 @@ $uv.Id | Out-File -Encoding ascii "$logs\uvicorn.pid"
 Write-Host "UVICORN_PID=$($uv.Id)"
 Start-Sleep -Seconds 4
 
+# R65 - cloudflared auto-detect (PATH, then common install locations).
+$cflar = (Get-Command cloudflared -ErrorAction SilentlyContinue).Source
+if (-not $cflar) {
+    $candidates = @(
+        "C:\Users\$env:USERNAME\AppData\Local\Microsoft\WinGet\Packages\Cloudflare.cloudflared_Microsoft.Winget.Source_8wekyb3d8bbwe\cloudflared.exe",
+        "C:\Program Files\cloudflared\cloudflared.exe",
+        "C:\Program Files (x86)\cloudflared\cloudflared.exe"
+    )
+    foreach ($c in $candidates) { if (Test-Path $c) { $cflar = $c; break } }
+}
+if (-not $cflar) {
+    Write-Host "ERROR: cloudflared not found. Install: winget install cloudflare.cloudflared"
+    Write-Host "(uvicorn is up at http://127.0.0.1:8080 but no public tunnel)"
+    exit 1
+}
+Write-Host "CLOUDFLARED=$cflar"
+
 # Start cloudflared detached
-$cflar = "C:\Users\User\AppData\Local\Microsoft\WinGet\Packages\Cloudflare.cloudflared_Microsoft.Winget.Source_8wekyb3d8bbwe\cloudflared.exe"
 $cf = Start-Process -FilePath $cflar `
   -ArgumentList "tunnel","--url","http://localhost:8080","--no-autoupdate" `
   -WorkingDirectory $root `

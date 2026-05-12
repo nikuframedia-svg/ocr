@@ -58,7 +58,7 @@ Se `requirements.txt` não existir, instala do `pyproject.toml`:
 
 ```ini
 # Apontar para Ollama no PC (LAN IP)
-OCR_URL=http://192.168.1.224:11434
+OLLAMA_URL=http://192.168.1.224:11434
 OCR_MODEL=qwen3.5:9b
 OCR_NO_THINK=1
 
