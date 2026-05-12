@@ -65,6 +65,10 @@ _HEADER_SCHEMA: dict[str, Any] = {
         "operador": _string(_OPERADOR),
         "n_operador": _string(_NUMERIC_SHORT),
         "setor_maquina": _string(_SETOR),
+        # cod_maquina (M0xx) — optional for backwards-compatibility with
+        # extractions captured before the field was added. Empty string
+        # allowed for kanbans where the code isn't printed.
+        "cod_maquina": {"type": "string", "pattern": r"^M\d{3}$|^$"},
         "data": _string(_DATE),
     },
 }

@@ -92,12 +92,15 @@ class TemplateSpec:
     cross_check_fields: tuple[str, ...] = ()
 
     # Header fields specific to this template. All 11 share the same
-    # 4-field header (operador, n_operador, setor_maquina, data) so this
-    # is constant; kept as a field for future flexibility.
+    # 5-field header (operador, n_operador, setor_maquina, cod_maquina,
+    # data) so this is constant; kept as a field for future flexibility.
+    # cod_maquina (e.g. "M032") was added for the CPIS migration export —
+    # legacy sheets without it still parse (Pydantic Header default "").
     header_fields: tuple[str, ...] = (
         "operador",
         "n_operador",
         "setor_maquina",
+        "cod_maquina",
         "data",
     )
 
@@ -115,7 +118,7 @@ class TemplateSpec:
 # ============================================================================
 
 # Common header / footer for all TPL103 production templates
-_TPL103_HEADER = ("operador", "n_operador", "setor_maquina", "data")
+_TPL103_HEADER = ("operador", "n_operador", "setor_maquina", "cod_maquina", "data")
 _TPL103_FOOTER = ("colunas_produzidas", "horas_trabalhadas")
 
 # Bobine-Formato — the original supported template (13 row fields)

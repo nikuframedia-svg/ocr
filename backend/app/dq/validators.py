@@ -102,6 +102,8 @@ _FIELD_PATTERNS: dict[str, str | None] = {
     "operador": _OPERADOR,
     "n_operador": _NUMERIC_SHORT,
     "setor_maquina": _SETOR,
+    # cod_maquina (M0xx) — empty allowed for legacy / unprinted kanbans
+    "cod_maquina": r"^M\d{3}$|^$",
     "data": _DATE,
     "pri": _PRI,
     "ov": _OV,
@@ -181,6 +183,7 @@ def _format_hint(name: str) -> str:
         "horas_trabalhadas": "HORAS: H:MM, H, or H[,. ]MM",
         "operador": "OPERADOR: uppercase name (with diacritics)",
         "setor_maquina": "SETOR/MAQUINA: uppercase, hyphenated",
+        "cod_maquina": "COD_MAQUINA: M + 3 digits (e.g. M032) or empty",
         "colunas_produzidas": "COLUNAS_PRODUZIDAS: integer count",
     }.get(name, "")
 

@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Excel — Dados Registados — Metalogalva OCR{% endblock %}
+{% block content %}
+<div class="page-h">
+  <div>
+    <div class="page-eyebrow">Chão de Fábrica · Dados</div>
+    <h1 class="page-title">Excel — Dados Registados</h1>
+  </div>
+  <a class="btn primary" href="#" @click.prevent="$dispatch('open-export-modal')" x-data>
+    ⬇ Exportar
+  </a>
+</div>
+
+<div class="page-content">
+  <div style="display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap; align-items:center;">
+    <form method="get" action="/excel"
+          style="display:inline-flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <span class="lbl" style="margin:0;">OPERADOR</span>
+      <select name="operador" class="kv-select" style="min-width:160px;">
+        <option value="">— Todos —</option>
+        {% for op in operadores %}
+          <option value="{{ op }}" {% if op == operador_filter %}selected{% endif %}>{{ op }}</option>
+        {% endfor %}
+      </select>
+
+      <span class="lbl" style="margin:0;">OF</span>
+      <input type="text" name="of" value="{{ of_filter }}"
+             class="kv-select" style="min-width:120px;"
+             placeholder="ex.: 261699">
+
+      <span class="lbl" style="margin:0;">LIMITE</span>
+      <select name="limit" class="kv-select" style="min-width:90px;">
+        {% for v in [100, 500, 1000, 2500, 5000] %}
+          <option value="{{ v }}" {% if v == limit %}selected{% endif %}>{{ v }}</option>
+        {% endfor %}
+      </select>
+
+      <button class="btn" type="submit">Filtrar</button>
+      {% if operador_filter or of_filter %}
+        <a class="btn ghost" style="font-size:12px;" href="/excel">✕ Limpar</a>
+      {% endif %}
+    </form>
+
+    <div class="muted tiny" style="margin-left:auto;">
+      A mostrar <b>{{ shown }}</b> de <b>{{ total_rows }}</b> linhas registadas.
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead>
+          <tr>
+            {% for _, label in columns %}
+              <th>{{ label }}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+            <tr>
+              {% for key, _ in columns %}
+                {% set v = r[key] %}
+                <td>
+                  {% if v is none or v == "" %}
+                    <span class="muted">—</span>
+                  {% elif key == "data" %}
+                    {{ v.strftime("%d-%m-%Y") }}
+                  {% elif key in ("peso_kg", "desperdicio_kg", "desperdicio_pct") %}
+                    {{ "%.2f"|format(v) }}
+                  {% elif key == "esp_mm" %}
+                    {{ "%.1f"|format(v) }}
+                  {% else %}
+                    {{ v }}
+                  {% endif %}
+                </td>
+              {% endfor %}
+            </tr>
+          {% else %}
+            <tr><td colspan="{{ columns|length }}" style="text-align:center; padding:24px;">
+              <span class="muted">Sem dados que correspondam ao filtro.</span>
+            </td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

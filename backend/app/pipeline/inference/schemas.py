@@ -30,6 +30,7 @@ HEADER_FIELDS: Final[tuple[str, ...]] = (
     "operador",
     "n_operador",
     "setor_maquina",
+    "cod_maquina",
     "data",
 )
 
@@ -95,6 +96,7 @@ class Header(_StringFields):
     operador: str = ""
     n_operador: str = ""
     setor_maquina: str = ""
+    cod_maquina: str = ""
     data: str = ""
 
     @field_validator("data", mode="after")

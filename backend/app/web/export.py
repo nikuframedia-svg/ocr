@@ -8,9 +8,13 @@ Output structure:
     13-column kanban format
 
 Reads from `production_rows` (denormalized) for fast iteration.
+
+CPIS migration export — see `build_cpis_workbook()`. Produces a single
+flat sheet matching the 17-column `MigracaoNikufraCPIS.xlsx` template.
 """
 from __future__ import annotations
 
+import datetime as dt
 import io
 from collections import defaultdict
 
@@ -18,7 +22,10 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+from app.dq.geometry import row_waste
+
 from .db import conn
+from .kpis import _derive_cod_maquina
 
 # Order of columns in the per-day per-operator sub-tables (matches kanban)
 ROW_COLUMNS = [
@@ -301,3 +308,208 @@ def filename_for(date_from: str, date_to: str, operador: str | None = None) -> s
         slug = "".join(ch for ch in slug if ch.isalnum())
         op_suffix = f"_{slug}"
     return f"metalogalva_{date_from}_{date_to}{op_suffix}.xlsx"
+
+
+# ============================================================================
+#  CPIS migration export (MigracaoNikufraCPIS.xlsx schema)
+# ============================================================================
+
+# Column order must match the user-supplied template exactly (folha "Folha1").
+CPIS_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("data", "Data"),
+    ("cod_funcionario", "Cód. Funcionário"),
+    ("nome_funcionario", "Nome Funcionário"),
+    ("setor_maquina_desc", "Setor / Máquina Desc."),
+    ("cod_maquina", "Cód. Máquina"),
+    ("of", "OF"),
+    ("ov", "OV"),
+    ("cliente", "Cliente"),
+    ("modelo", "Modelo"),
+    ("qtd", "QTD"),
+    ("comp_mm", "Comprimento (mm)"),
+    ("larg_mm", "Largura (mm)"),
+    ("esp_mm", "Espessura (mm)"),
+    ("coni", "CONI"),
+    ("peso_kg", "Peso (kg)"),
+    ("desperdicio_kg", "Desperdício (kg)"),
+    ("desperdicio_pct", "% Desperdício"),
+)
+
+
+def _query_cpis_rows(
+    date_from: str,
+    date_to: str,
+    operador: str | None,
+) -> list[dict]:
+    """Pull production_rows + header.n_operador joined from sheets.
+
+    Mirrors `_query_rows` but adds `n_operador` (header field, not on
+    production_rows). Filters by sheet_iso_date inclusive.
+    """
+    sql = """
+        SELECT pr.*,
+               s.operador AS validated_operador,
+               json_extract(s.sheet_data, '$.header.setor_maquina') AS setor_maquina,
+               json_extract(s.sheet_data, '$.header.n_operador') AS n_operador,
+               json_extract(s.sheet_data, '$.header.cod_maquina') AS header_cod_maquina
+          FROM production_rows pr
+          JOIN sheets s ON s.id = pr.sheet_id
+         WHERE pr.sheet_iso_date BETWEEN ? AND ?
+    """
+    params: list = [date_from, date_to]
+    if operador:
+        sql += " AND (UPPER(pr.operador) = UPPER(?) OR UPPER(s.operador) = UPPER(?))"
+        params.extend([operador, operador])
+    sql += (
+        " ORDER BY pr.sheet_iso_date ASC, pr.operador ASC,"
+        "          pr.sheet_id ASC, pr.row_index ASC"
+    )
+    with conn() as c:
+        return [dict(r) for r in c.execute(sql, params).fetchall()]
+
+
+def _iso_to_date(iso: str | None) -> dt.date | None:
+    if not iso or len(iso) != 10:
+        return None
+    try:
+        return dt.date(int(iso[0:4]), int(iso[5:7]), int(iso[8:10]))
+    except ValueError:
+        return None
+
+
+def _to_int(v) -> int | None:
+    if v is None or v == "":
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        try:
+            return int(str(v).strip())
+        except (TypeError, ValueError):
+            return None
+
+
+def _to_float(v) -> float | None:
+    if v is None or v == "":
+        return None
+    try:
+        return float(str(v).replace(",", ".").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_cpis_row(row: dict) -> dict:
+    """Project a production_rows dict into the 17-column CPIS schema."""
+    qtd = _to_int(row.get("qtd"))
+    larg = _to_float(row.get("larg_mm"))
+    comp = _to_float(row.get("comp_mm"))
+    lbase = _to_float(row.get("lbase"))
+    ltopo = _to_float(row.get("ltopo"))
+    esp = _to_float(row.get("esp"))
+
+    # Geometric waste — mirrors kpis.py:814 (uses comp as both
+    # comp_a_cortar and comp_teorico — pure-geometry interpretation).
+    waste = row_waste(qtd, larg, comp, lbase, ltopo, comp, esp)
+    if waste.get("valid"):
+        peso_kg = waste["peso_produzido_kg"]
+        desp_kg = waste["peso_desperdicio_kg"]
+        desp_pct = waste["desperdicio_pct"]
+    else:
+        peso_kg = desp_kg = desp_pct = None
+
+    setor_maquina = row.get("setor_maquina") or ""
+    # Prefer OCR-extracted cod_maquina if the header has it (future kanbans).
+    # Fall back to the derivation table for legacy sheets.
+    cod_maquina = (
+        (row.get("header_cod_maquina") or "").strip()
+        or _derive_cod_maquina(setor_maquina)
+    )
+
+    nome = (row.get("validated_operador") or row.get("operador") or "").strip()
+
+    return {
+        "data": _iso_to_date(row.get("sheet_iso_date")),
+        "cod_funcionario": _to_int(row.get("n_operador")),
+        "nome_funcionario": nome,
+        "setor_maquina_desc": setor_maquina,
+        "cod_maquina": cod_maquina,
+        "of": row.get("of") or "",
+        "ov": row.get("ov") or "",
+        "cliente": row.get("cliente") or "",
+        "modelo": row.get("modelo") or "",
+        "qtd": qtd,
+        "comp_mm": _to_int(row.get("comp_mm")),
+        "larg_mm": _to_int(row.get("larg_mm")),
+        "esp_mm": esp,
+        "coni": row.get("coni") or "",
+        "peso_kg": round(peso_kg, 2) if peso_kg is not None else None,
+        "desperdicio_kg": round(desp_kg, 2) if desp_kg is not None else None,
+        "desperdicio_pct": round(desp_pct, 2) if desp_pct is not None else None,
+    }
+
+
+def build_cpis_workbook(
+    date_from: str,
+    date_to: str,
+    operador: str | None = None,
+) -> bytes:
+    """Return .xlsx bytes matching MigracaoNikufraCPIS.xlsx schema.
+
+    Single sheet (`Folha1`) with 17 columns. One row per kanban row in the
+    period. Excel-native types: dates as date objects, numerics as numbers.
+
+    Empty-period: still returns a valid file with just the header row, so
+    the user can confirm column layout.
+    """
+    raw_rows = _query_cpis_rows(date_from, date_to, operador)
+    cpis_rows = [_build_cpis_row(r) for r in raw_rows]
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Folha1"
+
+    # Header row (matches template exactly)
+    for ci, (_, label) in enumerate(CPIS_COLUMNS, start=1):
+        cell = ws.cell(row=1, column=ci, value=label)
+        _style_cell(cell, bold=True, fill=_FILL_HEADER)
+        cell.font = _FONT_HEADER
+
+    # Data rows
+    for ri, cpis in enumerate(cpis_rows, start=2):
+        for ci, (key, _) in enumerate(CPIS_COLUMNS, start=1):
+            v = cpis.get(key)
+            cell = ws.cell(row=ri, column=ci, value=v)
+            _style_cell(cell)
+            if key == "data" and isinstance(v, dt.date):
+                cell.number_format = "DD-MM-YYYY"
+            elif key in ("peso_kg", "desperdicio_kg"):
+                cell.number_format = "0.00"
+            elif key == "desperdicio_pct":
+                cell.number_format = "0.00"
+            elif key == "esp_mm":
+                cell.number_format = "0.0"
+
+    # Column widths — tuned for Inter font + the labels above
+    widths = [12, 10, 22, 22, 11, 10, 10, 18, 18, 7, 14, 12, 12, 8, 11, 14, 13]
+    for ci, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(ci)].width = w
+
+    # Freeze header row
+    ws.freeze_panes = "A2"
+
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
+def cpis_filename_for(
+    date_from: str,
+    date_to: str,
+    operador: str | None = None,
+) -> str:
+    """Slugged filename for the CPIS download."""
+    op_suffix = ""
+    if operador:
+        slug = "".join(ch for ch in operador.upper().replace(" ", "") if ch.isalnum())
+        op_suffix = f"_{slug}"
+    return f"MigracaoNikufraCPIS_{date_from}_{date_to}{op_suffix}.xlsx"

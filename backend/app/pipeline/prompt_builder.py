@@ -163,10 +163,13 @@ def build_prompt(template: TemplateSpec) -> str:
         domain_hint = "PRODUÇÃO DE COLUNAS"
 
     # Header skeleton (identical for all templates)
+    # cod_maquina is the printed machine code (e.g. M032 for BOBINE-FORMATO).
+    # Empty string when not visible — derivation table fills it later.
     header_skel = (
         '    "operador": "FULL NAME",\n'
         '    "n_operador": "e.g. 0537",\n'
         f'    "setor_maquina": "{setor}",\n'
+        '    "cod_maquina": "e.g. M032 (machine code printed near sector name; empty if absent)",\n'
         '    "data": "DD-MM-YYYY"'
     )
 
@@ -194,7 +197,7 @@ This kanban is for {domain_hint}. Setor/Máquina = {setor}.
 Extract ALL data and return ONLY a valid JSON object. No markdown, no <think> blocks, no explanation.
 
 The sheet has:
-1. HEADER fields: Operador (full name), N° (operator number), Setor/Maquina, Data
+1. HEADER fields: Operador (full name), N° (operator number), Setor/Maquina, Cód. Máquina (M0xx code printed near the sector — leave "" if absent), Data
 2. A TABLE with exactly these columns in order:
    {cols_line}
 {footer_desc}

@@ -49,7 +49,7 @@ ROW_FIELDS = (
     "pri", "cliente", "ov", "of", "modelo", "qtd",
     "comp_mm", "larg_mm", "lote", "coni", "esp", "lbase", "ltopo",
 )
-HEADER_FIELDS = ("operador", "n_operador", "setor_maquina", "data")
+HEADER_FIELDS = ("operador", "n_operador", "setor_maquina", "cod_maquina", "data")
 FOOTER_FIELDS = ("colunas_produzidas", "horas_trabalhadas")
 
 
@@ -1090,6 +1090,104 @@ def export_excel(
         raise HTTPException(400, "date_to must be >= date_from")
     xlsx_bytes = export.export_excel(date_from, date_to, operador)
     filename = export.filename_for(date_from, date_to, operador)
+    return Response(
+        content=xlsx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/excel", response_class=HTMLResponse)
+def excel_page(
+    request: Request,
+    operador: str | None = None,
+    of_filter: str | None = Query(None, alias="of"),
+    limit: int = Query(500, ge=1, le=5000),
+) -> Response:
+    """Continuous Excel-style view of every registered production row.
+
+    Mirrors the 17-column CPIS schema (the same shape as the
+    `MigracaoNikufraCPIS.xlsx` export). Read-only; clicking "Exportar"
+    in the top bar produces the downloadable .xlsx with a period
+    selector (1 dia / 1 semana / 1 mês / 3 / 6 meses / 1 ano).
+    """
+    from app.web.db import conn
+
+    where = ["pr.sheet_iso_date IS NOT NULL"]
+    params: list = []
+    if operador:
+        where.append(
+            "(UPPER(pr.operador) = UPPER(?) OR UPPER(s.operador) = UPPER(?))"
+        )
+        params.extend([operador, operador])
+    if of_filter:
+        where.append("pr.of = ?")
+        params.append(of_filter.strip())
+
+    sql = f"""
+        SELECT pr.*,
+               s.operador AS validated_operador,
+               json_extract(s.sheet_data, '$.header.setor_maquina') AS setor_maquina,
+               json_extract(s.sheet_data, '$.header.n_operador') AS n_operador,
+               json_extract(s.sheet_data, '$.header.cod_maquina') AS header_cod_maquina
+          FROM production_rows pr
+          JOIN sheets s ON s.id = pr.sheet_id
+         WHERE {' AND '.join(where)}
+         ORDER BY pr.sheet_iso_date DESC, pr.sheet_id DESC, pr.row_index ASC
+         LIMIT ?
+    """
+    params.append(limit)
+    with conn() as c:
+        raw_rows = [dict(r) for r in c.execute(sql, params).fetchall()]
+
+    cpis_rows = [export._build_cpis_row(r) for r in raw_rows]
+
+    # Distinct operators for the filter dropdown (reuse db helper)
+    operadores = db.list_distinct_operadores()
+
+    # Total count (separate cheap query, no limit) for the row counter
+    with conn() as c:
+        total_rows = c.execute(
+            "SELECT COUNT(*) FROM production_rows WHERE sheet_iso_date IS NOT NULL"
+        ).fetchone()[0]
+
+    return templates.TemplateResponse(
+        request,
+        "excel.html",
+        {
+            "rows": cpis_rows,
+            "columns": export.CPIS_COLUMNS,
+            "operadores": operadores,
+            "operador_filter": operador or "",
+            "of_filter": of_filter or "",
+            "limit": limit,
+            "shown": len(cpis_rows),
+            "total_rows": total_rows,
+            "active_tab": "excel",
+        },
+    )
+
+
+@app.get("/export/cpis")
+def export_cpis(
+    date_from: str,
+    date_to: str,
+    operador: str | None = None,
+) -> Response:
+    """CPIS migration export — single-sheet .xlsx matching
+    `MigracaoNikufraCPIS.xlsx` (17 columns, `Folha1`).
+
+    One row per kanban production row in the period. Peso/Desperdício
+    computed via `geometry.row_waste()` (trapezoidal column, steel ρ=7.85
+    g/cm³). `Cód. Máquina` derived from setor_maquina (BOBINE-FORMATO →
+    M032, etc.). Query params identical to `/export`.
+    """
+    if not _ISO_DATE_RE.match(date_from) or not _ISO_DATE_RE.match(date_to):
+        raise HTTPException(400, "date_from and date_to must be YYYY-MM-DD")
+    if date_to < date_from:
+        raise HTTPException(400, "date_to must be >= date_from")
+    xlsx_bytes = export.build_cpis_workbook(date_from, date_to, operador)
+    filename = export.cpis_filename_for(date_from, date_to, operador)
     return Response(
         content=xlsx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

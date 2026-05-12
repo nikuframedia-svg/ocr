@@ -117,7 +117,7 @@ def _merge_pass2_into_pass1(pass1: dict, pass2: dict) -> dict:
 
     # For each header field: prefer pass-2 if non-empty, else pass-1
     merged_header = {}
-    for k in ("operador", "n_operador", "setor_maquina", "data"):
+    for k in ("operador", "n_operador", "setor_maquina", "cod_maquina", "data"):
         v2 = (h2.get(k) or "").strip()
         v1 = (h1.get(k) or "").strip()
         merged_header[k] = v2 or v1

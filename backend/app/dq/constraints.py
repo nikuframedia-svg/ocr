@@ -40,7 +40,7 @@ class CellRef:
 
     def path(self) -> str:
         if self.row_index is None:
-            section = "header" if self.field in ("operador", "n_operador", "setor_maquina", "data") else "footer"
+            section = "header" if self.field in ("operador", "n_operador", "setor_maquina", "cod_maquina", "data") else "footer"
             return f"{section}.{self.field}"
         return f"rows[{self.row_index}].{self.field}"
 

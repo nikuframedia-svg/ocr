@@ -18,6 +18,7 @@
 {% set is_pair = path.startswith('/pair') %}
 {% set is_queue = path.startswith('/queue') or path.startswith('/sheet') %}
 {% set is_kanbans = path.startswith('/kanbans') %}
+{% set is_excel = path.startswith('/excel') %}
 {% set is_today = path == '/dashboard' or (active_tab is defined and active_tab == 'today') %}
 {% set is_production = path.startswith('/dashboard/production') or (active_tab is defined and active_tab == 'production') %}
 {% set is_workers = active_tab is defined and active_tab == 'workers' %}
@@ -51,9 +52,9 @@
       <span class="sb-num">↗</span>
       <span>Pair telemóvel</span>
     </a>
-    <a class="sb-item" href="#" @click.prevent="$dispatch('open-export-modal')" x-data>
+    <a class="sb-item {% if is_excel %}active{% endif %}" href="/excel">
       <span class="sb-num">⬇</span>
-      <span>Export Excel</span>
+      <span>Excel</span>
     </a>
 
     <div class="sb-section">Dashboards</div>
@@ -100,6 +101,18 @@
   {% endif %}
 
   <main class="main">
+    {# Top bar — always-visible "Exportar Excel" button #}
+    {% if not is_mobile %}
+    <div class="topbar"
+         style="display:flex; justify-content:flex-end; align-items:center;
+                gap:10px; padding:10px 24px; border-bottom:1px solid var(--rule-2);
+                background:var(--bg-1, #fff); position:sticky; top:0; z-index:50;">
+      <button class="btn primary" type="button"
+              @click="$dispatch('open-export-modal')" x-data>
+        ⬇ Exportar Excel
+      </button>
+    </div>
+    {% endif %}
     {% block content %}{% endblock %}
   </main>
 </div>
@@ -113,18 +126,32 @@
     <div class="card" style="max-width:520px; width:100%; padding:24px;">
       <h2 style="margin:0 0 4px 0; font-size:20px;">Export Excel</h2>
       <p class="muted tiny" style="margin:0 0 18px 0;">
-        Múltiplas folhas: 1 aba "Resumo" + 1 aba por dia com sub-tabelas por operador.
+        Resumo: múltiplas folhas (1 aba "Resumo" + 1 aba por dia com sub-tabelas por operador).<br>
+        CPIS: folha única com 17 colunas para migração (MigracaoNikufraCPIS).
       </p>
-      <form action="/export" method="get" style="display:flex; flex-direction:column; gap:12px;">
+      <form x-ref="exportForm" method="get" style="display:flex; flex-direction:column; gap:12px;">
+        {# Period presets — set date_from = today − N days, date_to = today #}
+        <div>
+          <div class="lbl">PERÍODO</div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            <template x-for="p in presets" :key="p.label">
+              <button type="button" class="btn"
+                      :class="{ 'primary': activePreset === p.label }"
+                      style="font-size:12px; padding:6px 10px;"
+                      @click="applyPreset(p)"
+                      x-text="p.label"></button>
+            </template>
+          </div>
+        </div>
         <div style="display:flex; gap:10px;">
           <label style="flex:1;">
             <div class="lbl">DE</div>
-            <input type="date" name="date_from" :value="dateFrom" required
+            <input type="date" name="date_from" :value="dateFrom" @change="dateFrom=$event.target.value; activePreset=null" required
                    style="width:100%; padding:8px; border:1px solid var(--rule-2); border-radius:6px;">
           </label>
           <label style="flex:1;">
             <div class="lbl">ATÉ</div>
-            <input type="date" name="date_to" :value="dateTo" required
+            <input type="date" name="date_to" :value="dateTo" @change="dateTo=$event.target.value; activePreset=null" required
                    style="width:100%; padding:8px; border:1px solid var(--rule-2); border-radius:6px;">
           </label>
         </div>
@@ -139,7 +166,10 @@
         </label>
         <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:8px;">
           <button type="button" class="btn" @click="visible=false">Cancelar</button>
-          <button type="submit" class="btn primary">Descarregar</button>
+          <button type="submit" class="btn"
+                  @click="$refs.exportForm.action='/export/cpis'">CPIS (migração)</button>
+          <button type="submit" class="btn primary"
+                  @click="$refs.exportForm.action='/export'">Resumo</button>
         </div>
       </form>
     </div>
@@ -151,13 +181,27 @@ function exportModal() {
     visible: false,
     dateFrom: '',
     dateTo: '',
-    open() {
-      // Default range: last 30 days
+    activePreset: '1 mês',
+    presets: [
+      { label: '1 dia',     days: 1 },
+      { label: '1 semana',  days: 7 },
+      { label: '1 mês',     days: 30 },
+      { label: '3 meses',   days: 90 },
+      { label: '6 meses',   days: 180 },
+      { label: '1 ano',     days: 365 },
+    ],
+    applyPreset(p) {
       const today = new Date();
       const t = today.toISOString().substring(0, 10);
-      const ago = new Date(today.getTime() - 30 * 86400000).toISOString().substring(0, 10);
+      const ago = new Date(today.getTime() - p.days * 86400000)
+                    .toISOString().substring(0, 10);
       this.dateFrom = ago;
       this.dateTo = t;
+      this.activePreset = p.label;
+    },
+    open() {
+      // Default preset: 1 mês
+      this.applyPreset(this.presets[2]);
       this.visible = true;
     }
   };
