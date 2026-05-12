@@ -219,6 +219,16 @@ async def upload(
 # overwrite identifiers (of/ov/lote) or physical measurements (dim).
 _AUTO_OVERWRITE_FIELDS = ("modelo", "cliente")
 
+# R66 — fields eligible for overwrite ONLY when cell["snapped"] is True
+# (set by engine._apply_lev1_snap when row context + Lev-1 OCR-confidence
+# implies the operator's value is an OCR-misread of the plan canonical).
+# Includes identifiers (ov/of/lote) and dims/esp — broader than R61.
+_SNAPPED_OVERWRITE_FIELDS = (
+    "ov", "of", "lote",
+    "modelo", "cliente",
+    "comp_mm", "larg_mm", "lbase", "ltopo", "esp",
+)
+
 
 def _apply_auto_overwrites(sheet_id: int, result: dict) -> int:
     """R61 — for modelo + cliente cells with MATCH status, overwrite
@@ -226,6 +236,10 @@ def _apply_auto_overwrites(sheet_id: int, result: dict) -> int:
 
     For modelo: canonical = first-token of matched designacao.
     For cliente: canonical = plan.cliente verbatim.
+
+    R66 — additionally, for ANY field tagged cell["snapped"] = True
+    (by engine._apply_lev1_snap), overwrite to canonical. This keeps the
+    UI value consistent with the MATCH status the snap assigned.
 
     Returns count of edits applied.
     """
@@ -235,10 +249,15 @@ def _apply_auto_overwrites(sheet_id: int, result: dict) -> int:
         if i is None:
             continue
         fields = row_r.get("fields", {})
-        for fn in _AUTO_OVERWRITE_FIELDS:
-            cell = fields.get(fn) or {}
+        for fn, cell in fields.items():
             if cell.get("status") != "MATCH":
                 continue
+            is_snapped = bool(cell.get("snapped"))
+            # R61 always applies to modelo/cliente; R66 extends to other
+            # fields only when snap-recovered.
+            if fn not in _AUTO_OVERWRITE_FIELDS:
+                if not (is_snapped and fn in _SNAPPED_OVERWRITE_FIELDS):
+                    continue
             value = (cell.get("value") or "").strip()
             ref = (cell.get("ref") or "").strip()
             if not value or not ref:

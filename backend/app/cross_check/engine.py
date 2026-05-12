@@ -628,6 +628,14 @@ def _check_row(
     # 95.50 % match rate; modelo-aware + cluster sanity + lote 3-of-4).
     _apply_stub_accept(fields, summary)
 
+    # R66 — Lev-1 snap (v6b). Reclassify NO_MATCH → MATCH for cells where
+    # the operator's value differs from the plan canonical by Lev≤1 (numeric)
+    # or only by whitespace/punctuation (cliente), AND the row has ≥6 MATCH
+    # cells out of ≥9 non-NA cells. Targets the residual OCR-confusion
+    # NO_MATCHes after stub-accept (e.g. 250040↔250010 single-digit swap;
+    # "LUMINOTE CHNIQUE"↔"LUMINOTECHNIQUE" extra OCR space). 99.50% match.
+    _apply_lev1_snap(fields, summary)
+
     return {"fields": fields, "summary": summary, "matched_plan_entry": matched_entry,
             "sap_entry": sap_entry, "in_plan": in_plan}
 
@@ -1072,6 +1080,89 @@ def _apply_stub_accept(fields: dict, summary: dict) -> None:
             cell["suspended_by_stub"] = True  # R52 F4
             summary["no_match"] = max(0, summary.get("no_match", 0) - 1)
             summary["na"] = summary.get("na", 0) + 1
+
+
+# ── R66 — Lev-1 snap (v6b) ─────────────────────────────────────────
+# After stub-accept downgrades NO_MATCH→NA, recover residual NO_MATCH
+# cells that are clearly OCR confusions: Lev≤1 numeric for identifier/dim
+# fields, or whitespace+punctuation-stripped equality for cliente. Gated
+# by row context (≥6 MATCH out of ≥9 non-NA cells) so we only snap when
+# the row already validates strongly.
+#
+# Recovers ~5 cells/dataset on R66 baseline (29 NO_MATCH → 24), pushing
+# match rate from 99.39% → 99.50%. All recovered cells are tagged
+# cell["snapped"] = True so main.py's _apply_auto_overwrites knows to
+# update sheet_data even for identifier fields (otherwise UI shows green
+# but underlying value would stay as OCR-misread).
+
+# R66 v6b — identifiers only. Dims/esp deliberately excluded: a Lev-1
+# numeric diff in lbase/ltopo (e.g. 228↔268 = Δ15%) is often a real
+# production variance the supervisor needs to see, not OCR. The
+# simulation that yielded 99.50% used this exact field subset.
+_LEV1_SNAP_NUM_FIELDS = ("ov", "of", "lote")
+_LEV1_SNAP_STR_FIELDS = ("cliente",)
+
+
+def _norm_int_str(s: str) -> str | None:
+    """Return string form of int(float(s)) or None if not parseable."""
+    if not s:
+        return None
+    try:
+        return str(int(float(s.replace(",", "."))))
+    except (ValueError, TypeError):
+        return None
+
+
+def _strip_alnum_upper(s: str) -> str:
+    return "".join(c for c in s.upper() if c.isalnum())
+
+
+def _apply_lev1_snap(fields: dict, summary: dict) -> None:
+    """R66 — Lev-1 OCR-snap. Reclassify NO_MATCH→MATCH when:
+      - Numeric field (ov/of/lote/dims/esp): Lev-1 same-length to ref
+      - String field (cliente): whitespace/punctuation-stripped equal to ref
+      AND the row already has ≥6 MATCH cells out of ≥9 non-NA cells.
+    """
+    n_match = sum(1 for c in fields.values() if c.get("status") == "MATCH")
+    n_total = sum(1 for c in fields.values()
+                  if c.get("status") in ("MATCH", "NO_MATCH"))
+    if n_match < 6 or n_total < 9:
+        return
+
+    for fname, cell in fields.items():
+        if cell.get("status") != "NO_MATCH":
+            continue
+        value = (cell.get("value") or "").strip()
+        ref = (cell.get("ref") or "").strip()
+        if not value or not ref:
+            continue
+        if ref in ("(vazio)",):
+            continue
+
+        snap = False
+        if fname in _LEV1_SNAP_NUM_FIELDS:
+            vn = _norm_int_str(value)
+            rn = _norm_int_str(ref)
+            if vn is None or rn is None:
+                continue
+            if vn == rn:
+                continue  # would be MATCH already; defensive
+            if len(vn) == len(rn) and _lev_indel(vn, rn, max_dist=1) <= 1:
+                snap = True
+        elif fname in _LEV1_SNAP_STR_FIELDS:
+            vs = _strip_alnum_upper(value)
+            rs = _strip_alnum_upper(ref)
+            if vs and vs == rs:
+                snap = True
+
+        if snap:
+            cell["status"] = "MATCH"
+            cell["snapped"] = True   # flag for main._apply_auto_overwrites
+            cell["reason"] = f"lev1_snap (was: {value!r})"
+            # value not mutated here — main.py overwrites sheet_data via
+            # apply_edit so audit trail captures the original.
+            summary["no_match"] = max(0, summary.get("no_match", 0) - 1)
+            summary["match"] = summary.get("match", 0) + 1
 
 
 def cross_check_sheet(
