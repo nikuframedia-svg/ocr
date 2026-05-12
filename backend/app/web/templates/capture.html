@@ -35,6 +35,9 @@
             <input type="file" accept="image/*" capture="environment" multiple
                    @change="onFiles($event)" style="display:none;">
           </label>
+          <button class="btn" type="button" @click="start()" style="margin-left:8px;">
+            Tentar de novo
+          </button>
         </div>
       </div>
 
@@ -273,15 +276,40 @@ function captureApp() {
     _stream: null,
     _photoCounter: 0,
     _backLockArmed: false,
+    _boundPopState: null,    // R66 — bound reference so removeEventListener actually works
+    _boundVisibility: null,  // R66 — visibilitychange listener for iOS Safari resume
+
+    // R66 — Alpine lifecycle: bind visibility handler once
+    init() {
+      this._boundVisibility = () => {
+        if (!document.hidden && this.stage === 'preview' && !this.streamReady) {
+          this.start();
+        }
+      };
+      document.addEventListener('visibilitychange', this._boundVisibility);
+    },
+    destroy() {
+      if (this._boundVisibility) {
+        document.removeEventListener('visibilitychange', this._boundVisibility);
+        this._boundVisibility = null;
+      }
+      this.disarmBackLock();
+      this.stopStream();
+    },
 
     // Round 50 — lock browser back button after upload completes so the
     // operator can't accidentally undo finalised work. Stays armed on
     // 'uploading', 'qtd_confirm' and 'done' stages. Cleared on reset().
+    // R66 fix: store bound reference so removeEventListener actually removes
+    // the listener (previously each .bind(this) created a fresh function and
+    // listeners accumulated across capture cycles, inflating history stack
+    // and breaking touch handlers on iOS Safari — required a manual refresh).
     armBackLock() {
       if (this._backLockArmed) return;
       this._backLockArmed = true;
+      this._boundPopState = this._onPopState.bind(this);
       history.pushState({ locked: true }, '', location.href);
-      window.addEventListener('popstate', this._onPopState.bind(this));
+      window.addEventListener('popstate', this._boundPopState);
     },
     _onPopState(e) {
       // Block any attempt to navigate back during a locked stage.
@@ -293,10 +321,22 @@ function captureApp() {
     disarmBackLock() {
       if (!this._backLockArmed) return;
       this._backLockArmed = false;
-      window.removeEventListener('popstate', this._onPopState.bind(this));
+      if (this._boundPopState) {
+        window.removeEventListener('popstate', this._boundPopState);
+        this._boundPopState = null;
+      }
     },
 
     async start() {
+      // R66 — idempotent: reset visible state + release any old stream so
+      // a re-entry (backToPreview, reset, visibilitychange) produces a
+      // coherent state regardless of what came before.
+      this.streamReady = false;
+      this.streamErr = '';
+      if (this._stream) {
+        this._stream.getTracks().forEach(t => t.stop());
+        this._stream = null;
+      }
       if (!navigator.mediaDevices?.getUserMedia) {
         this.streamErr = 'Browser sem suporte a câmara.';
         return;
@@ -318,6 +358,7 @@ function captureApp() {
         }
       } catch (e) {
         this.streamErr = e.message || 'Sem acesso à câmara';
+        this.streamReady = false;
       }
     },
 

@@ -121,8 +121,10 @@ async def _attach_watermark(request: Request, call_next):
 # ----- Pages -----
 
 @app.get("/", response_class=HTMLResponse)
-def home() -> RedirectResponse:
-    return RedirectResponse("/queue", status_code=302)
+def home(request: Request) -> RedirectResponse:
+    # R66 — mobile lands straight on the camera; desktop on the queue.
+    target = "/capture" if _is_mobile_request(request) else "/queue"
+    return RedirectResponse(target, status_code=302)
 
 
 @app.get("/capture", response_class=HTMLResponse)
@@ -640,7 +642,8 @@ _DESKTOP_ONLY_PREFIXES = (
     "/dashboard",    # all dashboards (production, workers, jobs, etc.)
     "/queue",        # full sheets list with edit/validate
     "/pair",         # QR code page (only useful on desktop showing the QR)
-    "/export",       # bulk Excel export
+    "/export",       # bulk Excel export (covers /export and /export/cpis)
+    "/excel",        # R66 — continuous data page (desktop-only)
 )
 
 
