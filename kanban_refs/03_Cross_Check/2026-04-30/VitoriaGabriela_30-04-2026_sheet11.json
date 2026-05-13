@@ -4,13 +4,13 @@
   "operador": "VITORIA GABRIELA",
   "date": "2026-04-30",
   "sheet_status": "extracted",
-  "checked_at": "2026-05-12T08:19:46+00:00",
-  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "checked_at": "2026-05-12T17:44:25+00:00",
+  "refs_loaded_at": "2026-05-12T17:44:23+00:00",
   "summary": {
     "match": 79,
-    "no_match": 2,
-    "na": 25,
-    "total": 106
+    "no_match": 0,
+    "na": 28,
+    "total": 107
   },
   "rows": [
     {
@@ -35,9 +35,9 @@
           "ref_source": "plan"
         },
         "modelo": {
-          "value": "CFC5F12RI",
+          "value": "CFC5F12RI - 30ud",
           "status": "MATCH",
-          "ref": "CFC5F12RI",
+          "ref": "CFC5F12RI - 30ud",
           "ref_source": "plan",
           "reason": "substring"
         },
@@ -116,7 +116,7 @@
           "status": "NA",
           "ref": "7000",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "lote": {
@@ -178,17 +178,18 @@
         },
         "modelo": {
           "value": "CLC8F08Ri-V",
-          "status": "NO_MATCH",
+          "status": "NA",
           "ref": "CR11H556 - CRL4 Nº2 1/2",
           "ref_source": "plan",
-          "reason": "modelo 'CLC8F08Ri-V' não bate plan (substring nem fuzzy)"
+          "reason": "stub-accept w15 (row_match_ratio:0.78)",
+          "suspended_by_stub": true
         },
         "comp_mm": {
           "value": "7000",
           "status": "NA",
           "ref": "8570",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (modelo_no_match)",
+          "reason": "stub-accept w15 (modelo_no_match)",
           "suspended_by_stub": true
         },
         "lote": {
@@ -213,7 +214,7 @@
           "status": "NA",
           "ref": "684.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (modelo_no_match)",
+          "reason": "stub-accept w15 (modelo_no_match)",
           "suspended_by_stub": true
         },
         "ltopo": {
@@ -221,14 +222,14 @@
           "status": "NA",
           "ref": "463.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (modelo_no_match)",
+          "reason": "stub-accept w15 (modelo_no_match)",
           "suspended_by_stub": true
         }
       },
       "summary": {
         "match": 6,
-        "no_match": 1,
-        "na": 3
+        "no_match": 0,
+        "na": 4
       }
     },
     {
@@ -269,14 +270,13 @@
           "value": "M26B0226",
           "status": "NA",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
           "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "1020",
           "status": "NA",
-          "reason": "stub-accept w13 (promote_na_if_lote_missing, 5/5 of,cliente,modelo,esp,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "3",
@@ -295,7 +295,7 @@
           "status": "NA",
           "ref": "179.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         }
       },
@@ -343,14 +343,13 @@
           "value": "M26B0226",
           "status": "NA",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
           "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "1020",
           "status": "NA",
-          "reason": "stub-accept w13 (promote_na_if_lote_missing, 5/5 of,cliente,modelo,esp,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "3",
@@ -369,7 +368,7 @@
           "status": "NA",
           "ref": "179.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         }
       },
@@ -402,17 +401,18 @@
         },
         "modelo": {
           "value": "CLCCF07R-V",
-          "status": "NO_MATCH",
+          "status": "NA",
           "ref": "EI02LJ02 - EI02L500 + FL PL + ORELHAS + OLHAL - BA",
           "ref_source": "plan",
-          "reason": "modelo 'CLCCF07R-V' não bate plan (substring nem fuzzy)"
+          "reason": "stub-accept w15 (row_match_ratio:0.78)",
+          "suspended_by_stub": true
         },
         "comp_mm": {
           "value": "8000",
           "status": "NA",
           "ref": "3000",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (modelo_no_match)",
+          "reason": "stub-accept w15 (modelo_no_match)",
           "suspended_by_stub": true
         },
         "lote": {
@@ -437,7 +437,7 @@
           "status": "NA",
           "ref": "550.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (modelo_no_match)",
+          "reason": "stub-accept w15 (modelo_no_match)",
           "suspended_by_stub": true
         },
         "ltopo": {
@@ -445,14 +445,14 @@
           "status": "NA",
           "ref": "265.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (modelo_no_match)",
+          "reason": "stub-accept w15 (modelo_no_match)",
           "suspended_by_stub": true
         }
       },
       "summary": {
         "match": 6,
-        "no_match": 1,
-        "na": 3
+        "no_match": 0,
+        "na": 4
       }
     },
     {
@@ -499,7 +499,7 @@
           "status": "NA",
           "ref": "1190",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "esp": {
@@ -513,7 +513,7 @@
           "status": "NA",
           "ref": "330.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "ltopo": {
@@ -521,7 +521,7 @@
           "status": "NA",
           "ref": "179.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         }
       },
@@ -587,7 +587,7 @@
           "status": "NA",
           "ref": "355.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "ltopo": {
@@ -595,7 +595,7 @@
           "status": "NA",
           "ref": "179.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         }
       },
@@ -667,7 +667,7 @@
           "status": "NA",
           "ref": "180.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         }
       },
@@ -748,22 +748,5 @@
       }
     }
   ],
-  "to_analisar": [
-    {
-      "row_index": 2,
-      "field": "modelo",
-      "value": "CLC8F08Ri-V",
-      "ref": "CR11H556 - CRL4 Nº2 1/2",
-      "ref_source": "plan",
-      "reason": "modelo 'CLC8F08Ri-V' não bate plan (substring nem fuzzy)"
-    },
-    {
-      "row_index": 5,
-      "field": "modelo",
-      "value": "CLCCF07R-V",
-      "ref": "EI02LJ02 - EI02L500 + FL PL + ORELHAS + OLHAL - BA",
-      "ref_source": "plan",
-      "reason": "modelo 'CLCCF07R-V' não bate plan (substring nem fuzzy)"
-    }
-  ]
+  "to_analisar": []
 }

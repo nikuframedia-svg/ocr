@@ -1,76 +1,26 @@
 {
-  "updated_at": "2026-05-12T12:04:56+00:00",
+  "updated_at": "2026-05-13T07:10:12+00:00",
   "total": 18,
   "items": [
     {
-      "sheet_id": 9,
-      "operador": "VITOR GONCALVES",
-      "date": "2026-04-30",
-      "row_index": 2,
-      "field": "lote",
-      "value": "14",
-      "plan_value": null,
-      "reason": "lote '14' não está em StockSAP"
-    },
-    {
-      "sheet_id": 9,
-      "operador": "VITOR GONCALVES",
-      "date": "2026-04-30",
-      "row_index": 3,
-      "field": "lote",
-      "value": "14",
-      "plan_value": null,
-      "reason": "lote '14' não está em StockSAP"
-    },
-    {
-      "sheet_id": 11,
-      "operador": "VITORIA GABRIELA",
-      "date": "2026-04-30",
-      "row_index": 2,
-      "field": "modelo",
-      "value": "CLC8F08Ri-V",
-      "plan_value": null,
-      "reason": "modelo 'CLC8F08Ri-V' não bate plan (substring nem fuzzy)"
-    },
-    {
-      "sheet_id": 11,
-      "operador": "VITORIA GABRIELA",
-      "date": "2026-04-30",
-      "row_index": 5,
-      "field": "modelo",
-      "value": "CLCCF07R-V",
-      "plan_value": null,
-      "reason": "modelo 'CLCCF07R-V' não bate plan (substring nem fuzzy)"
-    },
-    {
-      "sheet_id": 22,
+      "sheet_id": 16,
       "operador": "JULIO LIMA",
-      "date": "2026-04-30",
-      "row_index": 2,
-      "field": "lote",
-      "value": "M26B0355",
-      "plan_value": null,
-      "reason": "lote 'M26B0355' não está em StockSAP"
-    },
-    {
-      "sheet_id": 22,
-      "operador": "JULIO LIMA",
-      "date": "2026-04-30",
-      "row_index": 2,
-      "field": "esp",
-      "value": "26",
-      "plan_value": null,
-      "reason": "OCR=26.0 vs plan=4.0"
-    },
-    {
-      "sheet_id": 37,
-      "operador": "VITOR CARVALHO",
-      "date": "2026-05-08",
+      "date": "2025-04-15",
       "row_index": 6,
-      "field": "modelo",
-      "value": "CGCBEF06D",
+      "field": "lbase",
+      "value": "735",
       "plan_value": null,
-      "reason": "modelo 'CGCBEF06D' não bate plan (substring nem fuzzy)"
+      "reason": "OCR=735 vs plan=709 (Δ26mm)"
+    },
+    {
+      "sheet_id": 16,
+      "operador": "JULIO LIMA",
+      "date": "2025-04-15",
+      "row_index": 6,
+      "field": "ltopo",
+      "value": "450",
+      "plan_value": null,
+      "reason": "OCR=450 vs plan=343 (Δ107mm)"
     },
     {
       "sheet_id": 38,
@@ -93,14 +43,34 @@
       "reason": "lote 'M25B1341' não está em StockSAP"
     },
     {
-      "sheet_id": 40,
-      "operador": "AUGUSTO MONTEIRO",
-      "date": "2026-05-07",
-      "row_index": 9,
-      "field": "modelo",
-      "value": "CFC2 6667 R570",
+      "sheet_id": 41,
+      "operador": "VITOR CARVALHO",
+      "date": "2026-05-06",
+      "row_index": 5,
+      "field": "comp_mm",
+      "value": "2878",
       "plan_value": null,
-      "reason": "modelo 'CFC2 6667 R570' não bate plan (substring nem fuzzy)"
+      "reason": "OCR=2878 vs plan=8000 (Δ5122mm > 100mm)"
+    },
+    {
+      "sheet_id": 41,
+      "operador": "VITOR CARVALHO",
+      "date": "2026-05-06",
+      "row_index": 5,
+      "field": "lbase",
+      "value": "447",
+      "plan_value": null,
+      "reason": "OCR=447 vs plan=431 (Δ16mm)"
+    },
+    {
+      "sheet_id": 41,
+      "operador": "VITOR CARVALHO",
+      "date": "2026-05-06",
+      "row_index": 5,
+      "field": "ltopo",
+      "value": "117",
+      "plan_value": null,
+      "reason": "OCR=117 vs plan=180 (Δ63mm)"
     },
     {
       "sheet_id": 43,
@@ -136,26 +106,6 @@
       "sheet_id": 43,
       "operador": "VICTOR CARVALHO",
       "date": "2026-05-05",
-      "row_index": 6,
-      "field": "lote",
-      "value": "M26B0291",
-      "plan_value": null,
-      "reason": "lote 'M26B0291' não está em StockSAP"
-    },
-    {
-      "sheet_id": 43,
-      "operador": "VICTOR CARVALHO",
-      "date": "2026-05-05",
-      "row_index": 8,
-      "field": "lote",
-      "value": "M24B0895",
-      "plan_value": null,
-      "reason": "lote 'M24B0895' não está em StockSAP"
-    },
-    {
-      "sheet_id": 43,
-      "operador": "VICTOR CARVALHO",
-      "date": "2026-05-05",
       "row_index": 8,
       "field": "esp",
       "value": "799",
@@ -163,24 +113,74 @@
       "reason": "OCR=799.0 vs plan=3.0"
     },
     {
-      "sheet_id": 44,
-      "operador": "AUGUSTO MONTEIRO",
+      "sheet_id": 43,
+      "operador": "VICTOR CARVALHO",
       "date": "2026-05-05",
-      "row_index": 5,
-      "field": "lote",
-      "value": "M26B0243",
+      "row_index": 8,
+      "field": "lbase",
+      "value": "378",
       "plan_value": null,
-      "reason": "lote 'M26B0243' não está em StockSAP"
+      "reason": "OCR=378 vs plan=779 (Δ401mm)"
     },
     {
-      "sheet_id": 44,
+      "sheet_id": 78,
       "operador": "AUGUSTO MONTEIRO",
-      "date": "2026-05-05",
-      "row_index": 5,
-      "field": "esp",
-      "value": "26",
+      "date": "2026-04-13",
+      "row_index": 1,
+      "field": "of",
+      "value": "268251",
       "plan_value": null,
-      "reason": "OCR=26.0 vs plan=4.0"
+      "reason": "OF '268251' não está em plan_colunas"
+    },
+    {
+      "sheet_id": 78,
+      "operador": "AUGUSTO MONTEIRO",
+      "date": "2026-04-13",
+      "row_index": 2,
+      "field": "ov",
+      "value": "250041",
+      "plan_value": null,
+      "reason": "OCR '250041' ≠ plan '260011'"
+    },
+    {
+      "sheet_id": 78,
+      "operador": "AUGUSTO MONTEIRO",
+      "date": "2026-04-13",
+      "row_index": 3,
+      "field": "of",
+      "value": "262052",
+      "plan_value": null,
+      "reason": "OF '262052' não está em plan_colunas"
+    },
+    {
+      "sheet_id": 79,
+      "operador": "AUGUSTO MONTEIRO",
+      "date": "2026-05-11",
+      "row_index": 3,
+      "field": "cliente",
+      "value": "MTG BELUX",
+      "plan_value": null,
+      "reason": "OCR 'MTG BELUX' ≠ plan 'SOLARCIEL'"
+    },
+    {
+      "sheet_id": 79,
+      "operador": "AUGUSTO MONTEIRO",
+      "date": "2026-05-11",
+      "row_index": 3,
+      "field": "ov",
+      "value": "2603051",
+      "plan_value": null,
+      "reason": "OCR '2603051' ≠ plan '2602999'"
+    },
+    {
+      "sheet_id": 79,
+      "operador": "AUGUSTO MONTEIRO",
+      "date": "2026-05-11",
+      "row_index": 3,
+      "field": "modelo",
+      "value": "CB03E13D",
+      "plan_value": null,
+      "reason": "modelo 'CB03E13D' não bate plan (substring nem fuzzy)"
     }
   ]
 }

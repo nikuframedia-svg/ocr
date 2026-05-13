@@ -4,13 +4,13 @@
   "operador": "JÚLIO LIMA",
   "date": "2026-04-15",
   "sheet_status": "extracted",
-  "checked_at": "2026-05-12T08:19:45+00:00",
-  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "checked_at": "2026-05-12T17:44:24+00:00",
+  "refs_loaded_at": "2026-05-12T17:44:23+00:00",
   "summary": {
     "match": 108,
     "no_match": 0,
-    "na": 18,
-    "total": 126
+    "na": 19,
+    "total": 127
   },
   "rows": [
     {
@@ -57,7 +57,7 @@
           "status": "NA",
           "ref": "1410",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "esp": {
@@ -129,7 +129,7 @@
           "status": "NA",
           "ref": "1410",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "esp": {
@@ -201,7 +201,7 @@
           "status": "NA",
           "ref": "1410",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "esp": {
@@ -273,7 +273,7 @@
           "status": "NA",
           "ref": "1410",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "esp": {
@@ -345,7 +345,7 @@
           "status": "NA",
           "ref": "1410",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "esp": {
@@ -417,7 +417,7 @@
           "status": "NA",
           "ref": "1410",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "esp": {
@@ -467,11 +467,11 @@
           "ref_source": "plan"
         },
         "modelo": {
-          "value": "CR15LF12 - LMF1882T - CR1516A4525 - SUP DEGRAUS + SUP LV - USAR 2 STOCK",
+          "value": "CR15LF02 - LMF1682N - CR1516A4507 + SUP DEGRAUS + SUP LV - TOPO",
           "status": "MATCH",
-          "ref": "CR15LF12 - LMF1882T - CR1516A4525 - SUP DEGRAUS + SUP LV - USAR 2 STOCK",
+          "ref": "CR15LF02 - LMF1682N - CR1516A4507 + SUP DEGRAUS + SUP LV - TOPO",
           "ref_source": "plan",
-          "reason": "substring"
+          "reason": "token_fuzzy"
         },
         "comp_mm": {
           "value": "11900",
@@ -489,7 +489,7 @@
           "status": "NA",
           "ref": "1250",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "esp": {
@@ -561,7 +561,7 @@
           "status": "NA",
           "ref": "1250",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "esp": {
@@ -633,7 +633,7 @@
           "status": "NA",
           "ref": "1250",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "esp": {
@@ -705,7 +705,7 @@
           "status": "NA",
           "ref": "1250",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "esp": {
@@ -777,7 +777,7 @@
           "status": "NA",
           "ref": "1250",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "esp": {
@@ -849,7 +849,7 @@
           "status": "NA",
           "ref": "1250",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "esp": {

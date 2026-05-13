@@ -4,13 +4,13 @@
   "operador": "Vitor CARVALHO",
   "date": "2026-04-20",
   "sheet_status": "extracted",
-  "checked_at": "2026-05-12T08:19:44+00:00",
-  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "checked_at": "2026-05-12T17:44:24+00:00",
+  "refs_loaded_at": "2026-05-12T17:44:23+00:00",
   "summary": {
-    "match": 40,
+    "match": 36,
     "no_match": 0,
-    "na": 6,
-    "total": 46
+    "na": 11,
+    "total": 47
   },
   "rows": [
     {
@@ -49,20 +49,21 @@
         },
         "lote": {
           "value": "M26B0212",
-          "status": "MATCH",
-          "ref_source": "sap"
+          "status": "NA",
+          "ref_source": "sap",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
+          "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "1250",
-          "status": "MATCH",
-          "ref": "1250",
-          "ref_source": "sap"
+          "status": "NA",
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "4",
           "status": "MATCH",
           "ref": "4",
-          "ref_source": "sap"
+          "ref_source": "plan"
         },
         "lbase": {
           "value": "724",
@@ -78,9 +79,9 @@
         }
       },
       "summary": {
-        "match": 10,
+        "match": 8,
         "no_match": 0,
-        "na": 0
+        "na": 2
       }
     },
     {
@@ -119,20 +120,21 @@
         },
         "lote": {
           "value": "M26B0212",
-          "status": "MATCH",
-          "ref_source": "sap"
+          "status": "NA",
+          "ref_source": "sap",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
+          "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "1250",
-          "status": "MATCH",
-          "ref": "1250",
-          "ref_source": "sap"
+          "status": "NA",
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "4",
           "status": "MATCH",
           "ref": "4",
-          "ref_source": "sap"
+          "ref_source": "plan"
         },
         "lbase": {
           "value": "724",
@@ -148,9 +150,9 @@
         }
       },
       "summary": {
-        "match": 10,
+        "match": 8,
         "no_match": 0,
-        "na": 0
+        "na": 2
       }
     },
     {
@@ -265,14 +267,14 @@
         "larg_mm": {
           "value": "1410",
           "status": "MATCH",
-          "ref": "1410",
+          "ref": "1400",
           "ref_source": "sap"
         },
         "esp": {
           "value": "2,6",
           "status": "MATCH",
           "ref": "2.6",
-          "ref_source": "plan"
+          "ref_source": "sap"
         },
         "lbase": {
           "value": "450",

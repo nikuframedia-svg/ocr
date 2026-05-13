@@ -4,13 +4,13 @@
   "operador": "VITOR CARVALHO",
   "date": "2026-04-17",
   "sheet_status": "extracted",
-  "checked_at": "2026-05-12T08:19:46+00:00",
-  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "checked_at": "2026-05-12T17:44:25+00:00",
+  "refs_loaded_at": "2026-05-12T17:44:23+00:00",
   "summary": {
-    "match": 44,
+    "match": 41,
     "no_match": 0,
-    "na": 12,
-    "total": 56
+    "na": 16,
+    "total": 57
   },
   "rows": [
     {
@@ -35,9 +35,9 @@
           "ref_source": "plan"
         },
         "modelo": {
-          "value": "OMEGA606MABI",
+          "value": "OMEGA606MABI - 364ud",
           "status": "MATCH",
-          "ref": "OMEGA606MABI",
+          "ref": "OMEGA606MABI - 364ud",
           "ref_source": "plan",
           "reason": "substring"
         },
@@ -49,22 +49,21 @@
         },
         "lote": {
           "value": "M25B0356",
-          "status": "MATCH",
-          "ref_source": "sap"
+          "status": "NA",
+          "ref_source": "sap",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
+          "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "1230",
           "status": "NA",
-          "ref": "1270",
-          "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
-          "suspended_by_stub": true
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "2,6",
           "status": "MATCH",
           "ref": "2.6",
-          "ref_source": "sap"
+          "ref_source": "plan"
         },
         "lbase": {
           "value": "444",
@@ -80,9 +79,9 @@
         }
       },
       "summary": {
-        "match": 9,
+        "match": 8,
         "no_match": 0,
-        "na": 1
+        "na": 2
       }
     },
     {
@@ -107,9 +106,9 @@
           "ref_source": "plan"
         },
         "modelo": {
-          "value": "OMEGA606MABI",
+          "value": "OMEGA606MABI - 364ud",
           "status": "MATCH",
-          "ref": "OMEGA606MABI",
+          "ref": "OMEGA606MABI - 364ud",
           "ref_source": "plan",
           "reason": "substring"
         },
@@ -121,22 +120,21 @@
         },
         "lote": {
           "value": "M25B0503",
-          "status": "MATCH",
-          "ref_source": "sap"
+          "status": "NA",
+          "ref_source": "sap",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
+          "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "1230",
           "status": "NA",
-          "ref": "1270",
-          "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
-          "suspended_by_stub": true
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "2,6",
           "status": "MATCH",
           "ref": "2.6",
-          "ref_source": "sap"
+          "ref_source": "plan"
         },
         "lbase": {
           "value": "444",
@@ -152,9 +150,9 @@
         }
       },
       "summary": {
-        "match": 9,
+        "match": 8,
         "no_match": 0,
-        "na": 1
+        "na": 2
       }
     },
     {
@@ -179,9 +177,9 @@
           "ref_source": "plan"
         },
         "modelo": {
-          "value": "OMEGA606MABI",
+          "value": "OMEGA606MABI - 364ud",
           "status": "MATCH",
-          "ref": "OMEGA606MABI",
+          "ref": "OMEGA606MABI - 364ud",
           "ref_source": "plan",
           "reason": "substring"
         },
@@ -193,22 +191,21 @@
         },
         "lote": {
           "value": "M25B0503",
-          "status": "MATCH",
-          "ref_source": "sap"
+          "status": "NA",
+          "ref_source": "sap",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
+          "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "1230",
           "status": "NA",
-          "ref": "1270",
-          "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
-          "suspended_by_stub": true
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "2,6",
           "status": "MATCH",
           "ref": "2.6",
-          "ref_source": "sap"
+          "ref_source": "plan"
         },
         "lbase": {
           "value": "444",
@@ -224,9 +221,9 @@
         }
       },
       "summary": {
-        "match": 9,
+        "match": 8,
         "no_match": 0,
-        "na": 1
+        "na": 2
       }
     },
     {
@@ -251,9 +248,9 @@
           "ref_source": "plan"
         },
         "modelo": {
-          "value": "CGC2E08Di",
+          "value": "CGC2E08DI -2 prioridade",
           "status": "MATCH",
-          "ref": "CGC2E08DI",
+          "ref": "CGC2E08DI -2 prioridade",
           "ref_source": "plan",
           "reason": "substring"
         },
@@ -267,14 +264,13 @@
           "value": "M26B0327",
           "status": "NA",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
           "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "800",
           "status": "NA",
-          "reason": "stub-accept w13 (promote_na_if_lote_missing, 5/5 of,cliente,modelo,esp,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "2,6",
@@ -345,7 +341,7 @@
           "status": "NA",
           "ref": "1105",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "esp": {

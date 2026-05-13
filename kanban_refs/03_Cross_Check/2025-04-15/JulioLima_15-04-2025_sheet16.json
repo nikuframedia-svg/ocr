@@ -4,13 +4,13 @@
   "operador": "JULIO LIMA",
   "date": "2025-04-15",
   "sheet_status": "extracted",
-  "checked_at": "2026-05-12T08:19:46+00:00",
-  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "checked_at": "2026-05-12T17:44:25+00:00",
+  "refs_loaded_at": "2026-05-12T17:44:23+00:00",
   "summary": {
     "match": 63,
-    "no_match": 0,
-    "na": 13,
-    "total": 76
+    "no_match": 2,
+    "na": 12,
+    "total": 77
   },
   "rows": [
     {
@@ -69,7 +69,7 @@
           "status": "NA",
           "ref": "714.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "ltopo": {
@@ -118,7 +118,7 @@
           "status": "NA",
           "ref": "10000",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "lote": {
@@ -143,7 +143,7 @@
           "status": "NA",
           "ref": "1030.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "ltopo": {
@@ -151,7 +151,7 @@
           "status": "NA",
           "ref": "483.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         }
       },
@@ -467,7 +467,7 @@
           "status": "NA",
           "ref": "CD13MJ31 - 11.9M/10KN CD13M505 1/2",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (4/4 of,cliente,ov,comp_mm MATCH)",
+          "reason": "stub-accept w15 (4/4 of,cliente,ov,comp_mm MATCH)",
           "suspended_by_stub": true
         },
         "comp_mm": {
@@ -495,27 +495,42 @@
         },
         "lbase": {
           "value": "735",
-          "status": "NA",
+          "status": "NO_MATCH",
           "ref": "709.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (any_dim_sibling_match)",
-          "suspended_by_stub": true
+          "reason": "OCR=735 vs plan=709 (Δ26mm)"
         },
         "ltopo": {
           "value": "450",
-          "status": "NA",
+          "status": "NO_MATCH",
           "ref": "343.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (any_dim_sibling_match)",
-          "suspended_by_stub": true
+          "reason": "OCR=450 vs plan=343 (Δ107mm)"
         }
       },
       "summary": {
         "match": 7,
-        "no_match": 0,
-        "na": 3
+        "no_match": 2,
+        "na": 1
       }
     }
   ],
-  "to_analisar": []
+  "to_analisar": [
+    {
+      "row_index": 6,
+      "field": "lbase",
+      "value": "735",
+      "ref": "709.0",
+      "ref_source": "plan",
+      "reason": "OCR=735 vs plan=709 (Δ26mm)"
+    },
+    {
+      "row_index": 6,
+      "field": "ltopo",
+      "value": "450",
+      "ref": "343.0",
+      "ref_source": "plan",
+      "reason": "OCR=450 vs plan=343 (Δ107mm)"
+    }
+  ]
 }

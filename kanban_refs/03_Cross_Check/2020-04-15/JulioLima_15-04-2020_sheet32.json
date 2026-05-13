@@ -4,13 +4,13 @@
   "operador": "JULIO LIMA",
   "date": "2020-04-15",
   "sheet_status": "extracted",
-  "checked_at": "2026-05-12T08:19:45+00:00",
-  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "checked_at": "2026-05-12T17:44:24+00:00",
+  "refs_loaded_at": "2026-05-12T17:44:23+00:00",
   "summary": {
     "match": 70,
     "no_match": 0,
-    "na": 6,
-    "total": 76
+    "na": 7,
+    "total": 77
   },
   "rows": [
     {

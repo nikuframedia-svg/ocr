@@ -4,13 +4,13 @@
   "operador": "VITOR GONCALVES",
   "date": "2026-11-30",
   "sheet_status": "extracted",
-  "checked_at": "2026-05-12T08:19:46+00:00",
-  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "checked_at": "2026-05-12T17:44:25+00:00",
+  "refs_loaded_at": "2026-05-12T17:44:23+00:00",
   "summary": {
     "match": 86,
     "no_match": 0,
-    "na": 10,
-    "total": 96
+    "na": 11,
+    "total": 97
   },
   "rows": [
     {
@@ -35,9 +35,9 @@
           "ref_source": "plan"
         },
         "modelo": {
-          "value": "CFC5F12RI",
+          "value": "CFC5F12RI - 30ud",
           "status": "MATCH",
-          "ref": "CFC5F12RI",
+          "ref": "CFC5F12RI - 30ud",
           "ref_source": "plan",
           "reason": "substring"
         },
@@ -337,7 +337,7 @@
           "status": "NA",
           "ref": "1190",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "esp": {
@@ -357,7 +357,7 @@
           "status": "NA",
           "ref": "180.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         }
       },
@@ -423,7 +423,7 @@
           "status": "NA",
           "ref": "405.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "ltopo": {
@@ -431,7 +431,7 @@
           "status": "NA",
           "ref": "229.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         }
       },

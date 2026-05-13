@@ -4,13 +4,13 @@
   "operador": "VITOR GONCALVES",
   "date": "2026-04-30",
   "sheet_status": "extracted",
-  "checked_at": "2026-05-12T08:19:46+00:00",
-  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "checked_at": "2026-05-12T17:44:25+00:00",
+  "refs_loaded_at": "2026-05-12T17:44:23+00:00",
   "summary": {
     "match": 74,
-    "no_match": 2,
-    "na": 20,
-    "total": 96
+    "no_match": 0,
+    "na": 23,
+    "total": 97
   },
   "rows": [
     {
@@ -35,9 +35,9 @@
           "ref_source": "plan"
         },
         "modelo": {
-          "value": "CFC5F12RI",
+          "value": "CFC5F12RI - 30ud",
           "status": "MATCH",
-          "ref": "CFC5F12RI",
+          "ref": "CFC5F12RI - 30ud",
           "ref_source": "plan",
           "reason": "substring"
         },
@@ -51,14 +51,13 @@
           "value": "M26B0273",
           "status": "NA",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
           "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "1020",
           "status": "NA",
-          "reason": "stub-accept w13 (promote_na_if_lote_missing, 5/5 of,cliente,modelo,esp,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "2,6",
@@ -191,22 +190,22 @@
         },
         "lote": {
           "value": "14",
-          "status": "NO_MATCH",
+          "status": "NA",
           "ref_source": "sap",
-          "reason": "lote '14' não está em StockSAP"
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
+          "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "126B0220",
           "status": "NA",
-          "reason": "stub-accept w13 (promote_na_if_lote_missing, 4/5 of,cliente,modelo,esp,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "531",
           "status": "NA",
           "ref": "3.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,comp_mm MATCH)",
+          "reason": "stub-accept w15 (4/4 of,cliente,modelo,comp_mm MATCH)",
           "suspended_by_stub": true
         },
         "lbase": {
@@ -214,7 +213,7 @@
           "status": "NA",
           "ref": "531.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "ltopo": {
@@ -225,8 +224,8 @@
       },
       "summary": {
         "match": 5,
-        "no_match": 1,
-        "na": 4
+        "no_match": 0,
+        "na": 5
       }
     },
     {
@@ -265,22 +264,22 @@
         },
         "lote": {
           "value": "14",
-          "status": "NO_MATCH",
+          "status": "NA",
           "ref_source": "sap",
-          "reason": "lote '14' não está em StockSAP"
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
+          "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "126B0220",
           "status": "NA",
-          "reason": "stub-accept w13 (promote_na_if_lote_missing, 4/5 of,cliente,modelo,esp,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "531",
           "status": "NA",
           "ref": "3.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,comp_mm MATCH)",
+          "reason": "stub-accept w15 (4/4 of,cliente,modelo,comp_mm MATCH)",
           "suspended_by_stub": true
         },
         "lbase": {
@@ -288,7 +287,7 @@
           "status": "NA",
           "ref": "531.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "ltopo": {
@@ -299,8 +298,8 @@
       },
       "summary": {
         "match": 5,
-        "no_match": 1,
-        "na": 4
+        "no_match": 0,
+        "na": 5
       }
     },
     {
@@ -365,7 +364,7 @@
           "status": "NA",
           "ref": "180.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         }
       },
@@ -431,7 +430,7 @@
           "status": "NA",
           "ref": "355.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "ltopo": {
@@ -439,7 +438,7 @@
           "status": "NA",
           "ref": "179.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         }
       },
@@ -575,7 +574,7 @@
           "status": "NA",
           "ref": "450.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "ltopo": {
@@ -662,22 +661,5 @@
       }
     }
   ],
-  "to_analisar": [
-    {
-      "row_index": 2,
-      "field": "lote",
-      "value": "14",
-      "ref": null,
-      "ref_source": "sap",
-      "reason": "lote '14' não está em StockSAP"
-    },
-    {
-      "row_index": 3,
-      "field": "lote",
-      "value": "14",
-      "ref": null,
-      "ref_source": "sap",
-      "reason": "lote '14' não está em StockSAP"
-    }
-  ]
+  "to_analisar": []
 }

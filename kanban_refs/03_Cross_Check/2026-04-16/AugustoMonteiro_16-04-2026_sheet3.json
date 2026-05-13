@@ -4,13 +4,13 @@
   "operador": "AUGUSTO MONTEIRO",
   "date": "2026-04-16",
   "sheet_status": "extracted",
-  "checked_at": "2026-05-12T08:19:46+00:00",
-  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "checked_at": "2026-05-12T17:44:25+00:00",
+  "refs_loaded_at": "2026-05-12T17:44:23+00:00",
   "summary": {
     "match": 98,
     "no_match": 0,
-    "na": 8,
-    "total": 106
+    "na": 9,
+    "total": 107
   },
   "rows": [
     {
@@ -119,22 +119,20 @@
         },
         "lote": {
           "value": "M26B0284",
-          "status": "NA",
-          "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref_source": "sap"
         },
         "larg_mm": {
           "value": "1440",
-          "status": "NA",
-          "reason": "stub-accept w13 (promote_na_if_lote_missing, 5/5 of,cliente,modelo,esp,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref": "1440",
+          "ref_source": "sap"
         },
         "esp": {
           "value": "4",
           "status": "MATCH",
           "ref": "4",
-          "ref_source": "plan"
+          "ref_source": "sap"
         },
         "lbase": {
           "value": "906",
@@ -150,9 +148,9 @@
         }
       },
       "summary": {
-        "match": 8,
+        "match": 10,
         "no_match": 0,
-        "na": 2
+        "na": 0
       }
     },
     {
@@ -177,9 +175,9 @@
           "ref_source": "plan"
         },
         "modelo": {
-          "value": "CLC7E08RI - SEM MARCACAO",
+          "value": "CLC7E08RI - SEM MARCACAO - 25ud",
           "status": "MATCH",
-          "ref": "CLC7E08RI - SEM MARCACAO",
+          "ref": "CLC7E08RI - SEM MARCACAO - 25ud",
           "ref_source": "plan",
           "reason": "substring"
         },
@@ -261,20 +259,21 @@
         },
         "lote": {
           "value": "M26B0058",
-          "status": "MATCH",
-          "ref_source": "sap"
+          "status": "NA",
+          "ref_source": "sap",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
+          "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "950",
-          "status": "MATCH",
-          "ref": "950",
-          "ref_source": "sap"
+          "status": "NA",
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "4",
           "status": "MATCH",
           "ref": "4",
-          "ref_source": "sap"
+          "ref_source": "plan"
         },
         "lbase": {
           "value": "550",
@@ -290,9 +289,9 @@
         }
       },
       "summary": {
-        "match": 10,
+        "match": 8,
         "no_match": 0,
-        "na": 0
+        "na": 2
       }
     },
     {
@@ -387,9 +386,9 @@
           "ref_source": "plan"
         },
         "modelo": {
-          "value": "CGC8E04Di",
+          "value": "CGC8E04DI - 110ud",
           "status": "MATCH",
-          "ref": "CGC8E04DI",
+          "ref": "CGC8E04DI - 110ud",
           "ref_source": "plan",
           "reason": "substring"
         },

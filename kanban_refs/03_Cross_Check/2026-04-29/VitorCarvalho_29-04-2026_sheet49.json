@@ -4,13 +4,13 @@
   "operador": "VITOR CARVALHO",
   "date": "2026-04-29",
   "sheet_status": "extracted",
-  "checked_at": "2026-05-12T08:19:44+00:00",
-  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "checked_at": "2026-05-12T17:44:24+00:00",
+  "refs_loaded_at": "2026-05-12T17:44:23+00:00",
   "summary": {
-    "match": 65,
+    "match": 69,
     "no_match": 0,
-    "na": 11,
-    "total": 76
+    "na": 8,
+    "total": 77
   },
   "rows": [
     {
@@ -337,7 +337,7 @@
           "status": "NA",
           "ref": "1480",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "esp": {
@@ -401,22 +401,20 @@
         },
         "lote": {
           "value": "M26B0297",
-          "status": "NA",
-          "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref_source": "sap"
         },
         "larg_mm": {
           "value": "1480",
-          "status": "NA",
-          "reason": "stub-accept w13 (promote_na_if_lote_missing, 5/5 of,cliente,modelo,esp,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref": "1480",
+          "ref_source": "sap"
         },
         "esp": {
           "value": "3",
           "status": "MATCH",
           "ref": "3",
-          "ref_source": "plan"
+          "ref_source": "sap"
         },
         "lbase": {
           "value": "901",
@@ -432,9 +430,9 @@
         }
       },
       "summary": {
-        "match": 8,
+        "match": 10,
         "no_match": 0,
-        "na": 2
+        "na": 0
       }
     },
     {
@@ -473,22 +471,20 @@
         },
         "lote": {
           "value": "M26B0297",
-          "status": "NA",
-          "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref_source": "sap"
         },
         "larg_mm": {
           "value": "1480",
-          "status": "NA",
-          "reason": "stub-accept w13 (promote_na_if_lote_missing, 5/5 of,cliente,modelo,esp,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref": "1480",
+          "ref_source": "sap"
         },
         "esp": {
           "value": "3",
           "status": "MATCH",
           "ref": "3",
-          "ref_source": "plan"
+          "ref_source": "sap"
         },
         "lbase": {
           "value": "825",
@@ -504,9 +500,9 @@
         }
       },
       "summary": {
-        "match": 8,
+        "match": 10,
         "no_match": 0,
-        "na": 2
+        "na": 0
       }
     }
   ],

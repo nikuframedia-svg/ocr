@@ -4,13 +4,13 @@
   "operador": "AUGUSTO MONTEIRO",
   "date": "2026-04-23",
   "sheet_status": "extracted",
-  "checked_at": "2026-05-12T08:19:43+00:00",
-  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "checked_at": "2026-05-12T17:44:24+00:00",
+  "refs_loaded_at": "2026-05-12T17:44:23+00:00",
   "summary": {
-    "match": 47,
+    "match": 42,
     "no_match": 0,
-    "na": 9,
-    "total": 56
+    "na": 15,
+    "total": 57
   },
   "rows": [
     {
@@ -49,20 +49,21 @@
         },
         "lote": {
           "value": "M26B0133",
-          "status": "MATCH",
-          "ref_source": "sap"
+          "status": "NA",
+          "ref_source": "sap",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
+          "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "1500",
-          "status": "MATCH",
-          "ref": "1500",
-          "ref_source": "sap"
+          "status": "NA",
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "4",
           "status": "MATCH",
           "ref": "4",
-          "ref_source": "sap"
+          "ref_source": "plan"
         },
         "lbase": {
           "value": "731",
@@ -78,9 +79,9 @@
         }
       },
       "summary": {
-        "match": 10,
+        "match": 8,
         "no_match": 0,
-        "na": 0
+        "na": 2
       }
     },
     {
@@ -116,25 +117,26 @@
           "status": "NA",
           "ref": "12200",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "lote": {
           "value": "M26B0133",
-          "status": "MATCH",
-          "ref_source": "sap"
+          "status": "NA",
+          "ref_source": "sap",
+          "reason": "stub-accept w15 (row_match_ratio:0.78)",
+          "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "1500",
-          "status": "MATCH",
-          "ref": "1500",
-          "ref_source": "sap"
+          "status": "NA",
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "4",
           "status": "MATCH",
           "ref": "4",
-          "ref_source": "sap"
+          "ref_source": "plan"
         },
         "lbase": {
           "value": "1168",
@@ -150,9 +152,9 @@
         }
       },
       "summary": {
-        "match": 9,
+        "match": 7,
         "no_match": 0,
-        "na": 1
+        "na": 3
       }
     },
     {
@@ -191,20 +193,21 @@
         },
         "lote": {
           "value": "M26B0133",
-          "status": "MATCH",
-          "ref_source": "sap"
+          "status": "NA",
+          "ref_source": "sap",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
+          "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "1500",
-          "status": "MATCH",
-          "ref": "1500",
-          "ref_source": "sap"
+          "status": "NA",
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "4",
           "status": "MATCH",
           "ref": "4",
-          "ref_source": "sap"
+          "ref_source": "plan"
         },
         "lbase": {
           "value": "852",
@@ -220,9 +223,9 @@
         }
       },
       "summary": {
-        "match": 10,
+        "match": 8,
         "no_match": 0,
-        "na": 0
+        "na": 2
       }
     },
     {
@@ -266,17 +269,15 @@
         },
         "larg_mm": {
           "value": "1490",
-          "status": "NA",
-          "ref": "1320",
-          "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref": "1490",
+          "ref_source": "sap"
         },
         "esp": {
           "value": "4",
           "status": "MATCH",
           "ref": "4",
-          "ref_source": "plan"
+          "ref_source": "sap"
         },
         "lbase": {
           "value": "852",
@@ -292,9 +293,9 @@
         }
       },
       "summary": {
-        "match": 9,
+        "match": 10,
         "no_match": 0,
-        "na": 1
+        "na": 0
       }
     },
     {
@@ -359,7 +360,7 @@
           "status": "NA",
           "ref": "312.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         }
       },

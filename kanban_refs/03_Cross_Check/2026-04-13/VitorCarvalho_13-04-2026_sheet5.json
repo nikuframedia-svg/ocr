@@ -4,13 +4,13 @@
   "operador": "VITOR CARVALHO",
   "date": "2026-04-13",
   "sheet_status": "extracted",
-  "checked_at": "2026-05-12T08:19:46+00:00",
-  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "checked_at": "2026-05-12T17:44:25+00:00",
+  "refs_loaded_at": "2026-05-12T17:44:23+00:00",
   "summary": {
     "match": 16,
     "no_match": 0,
-    "na": 10,
-    "total": 26
+    "na": 11,
+    "total": 27
   },
   "rows": [
     {
@@ -51,14 +51,13 @@
           "value": "M26B0307",
           "status": "NA",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
           "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "875",
           "status": "NA",
-          "reason": "stub-accept w13 (promote_na_if_lote_missing, 5/5 of,cliente,modelo,esp,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "2,6",
@@ -123,14 +122,13 @@
           "value": "M26B0307",
           "status": "NA",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
           "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "875",
           "status": "NA",
-          "reason": "stub-accept w13 (promote_na_if_lote_missing, 5/5 of,cliente,modelo,esp,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "2,6",

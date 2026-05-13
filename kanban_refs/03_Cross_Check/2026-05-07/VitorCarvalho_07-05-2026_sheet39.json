@@ -4,13 +4,13 @@
   "operador": "VITOR CARVALHO",
   "date": "2026-05-07",
   "sheet_status": "extracted",
-  "checked_at": "2026-05-12T08:19:44+00:00",
-  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "checked_at": "2026-05-12T17:44:24+00:00",
+  "refs_loaded_at": "2026-05-12T17:44:23+00:00",
   "summary": {
-    "match": 68,
+    "match": 76,
     "no_match": 0,
-    "na": 18,
-    "total": 86
+    "na": 11,
+    "total": 87
   },
   "rows": [
     {
@@ -51,14 +51,13 @@
           "value": "M26B0380",
           "status": "NA",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
           "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "1175",
           "status": "NA",
-          "reason": "stub-accept w13 (promote_na_if_lote_missing, 5/5 of,cliente,modelo,esp,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "4",
@@ -107,9 +106,9 @@
           "ref_source": "plan"
         },
         "modelo": {
-          "value": "CR15LF02 - LMF1682T - CR1516A4507 + SUP DEGRAUS + SUP LV - USAR 3 STOCK",
+          "value": "CR15LF02 - LMF1682N - CR1516A4507 + SUP DEGRAUS + SUP LV - TOPO",
           "status": "MATCH",
-          "ref": "CR15LF02 - LMF1682T - CR1516A4507 + SUP DEGRAUS + SUP LV - USAR 3 STOCK",
+          "ref": "CR15LF02 - LMF1682N - CR1516A4507 + SUP DEGRAUS + SUP LV - TOPO",
           "ref_source": "plan",
           "reason": "substring"
         },
@@ -123,14 +122,13 @@
           "value": "M26B0380",
           "status": "NA",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
           "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "1034",
           "status": "NA",
-          "reason": "stub-accept w13 (promote_na_if_lote_missing, 5/5 of,cliente,modelo,esp,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "4",
@@ -179,9 +177,9 @@
           "ref_source": "plan"
         },
         "modelo": {
-          "value": "CR15LF02 - LMF1682T - CR1516A4507 + SUP DEGRAUS + SUP LV - USAR 3 STOCK",
+          "value": "CR15LF02 - LMF1682N - CR1516A4507 + SUP DEGRAUS + SUP LV - TOPO",
           "status": "MATCH",
-          "ref": "CR15LF02 - LMF1682T - CR1516A4507 + SUP DEGRAUS + SUP LV - USAR 3 STOCK",
+          "ref": "CR15LF02 - LMF1682N - CR1516A4507 + SUP DEGRAUS + SUP LV - TOPO",
           "ref_source": "plan",
           "reason": "substring"
         },
@@ -193,22 +191,20 @@
         },
         "lote": {
           "value": "M26B0343",
-          "status": "NA",
-          "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref_source": "sap"
         },
         "larg_mm": {
           "value": "1034",
-          "status": "NA",
-          "reason": "stub-accept w13 (promote_na_if_lote_missing, 5/5 of,cliente,modelo,esp,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref": "1034",
+          "ref_source": "sap"
         },
         "esp": {
           "value": "4",
           "status": "MATCH",
           "ref": "4",
-          "ref_source": "plan"
+          "ref_source": "sap"
         },
         "lbase": {
           "value": "635",
@@ -224,9 +220,9 @@
         }
       },
       "summary": {
-        "match": 8,
+        "match": 10,
         "no_match": 0,
-        "na": 2
+        "na": 0
       }
     },
     {
@@ -265,22 +261,20 @@
         },
         "lote": {
           "value": "M26B0343",
-          "status": "NA",
-          "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref_source": "sap"
         },
         "larg_mm": {
           "value": "1034",
-          "status": "NA",
-          "reason": "stub-accept w13 (promote_na_if_lote_missing, 5/5 of,cliente,modelo,esp,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref": "1034",
+          "ref_source": "sap"
         },
         "esp": {
           "value": "4",
           "status": "MATCH",
           "ref": "4",
-          "ref_source": "plan"
+          "ref_source": "sap"
         },
         "lbase": {
           "value": "637",
@@ -296,9 +290,9 @@
         }
       },
       "summary": {
-        "match": 8,
+        "match": 10,
         "no_match": 0,
-        "na": 2
+        "na": 0
       }
     },
     {
@@ -337,22 +331,20 @@
         },
         "lote": {
           "value": "M26B0343",
-          "status": "NA",
-          "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref_source": "sap"
         },
         "larg_mm": {
           "value": "1034",
-          "status": "NA",
-          "reason": "stub-accept w13 (promote_na_if_lote_missing, 5/5 of,cliente,modelo,esp,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref": "1034",
+          "ref_source": "sap"
         },
         "esp": {
           "value": "4",
           "status": "MATCH",
           "ref": "4",
-          "ref_source": "plan"
+          "ref_source": "sap"
         },
         "lbase": {
           "value": "736",
@@ -368,9 +360,9 @@
         }
       },
       "summary": {
-        "match": 8,
+        "match": 10,
         "no_match": 0,
-        "na": 2
+        "na": 0
       }
     },
     {
@@ -409,22 +401,20 @@
         },
         "lote": {
           "value": "M26B0345",
-          "status": "NA",
-          "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref_source": "sap"
         },
         "larg_mm": {
           "value": "800",
-          "status": "NA",
-          "reason": "stub-accept w13 (promote_na_if_lote_missing, 5/5 of,cliente,modelo,esp,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref": "800",
+          "ref_source": "sap"
         },
         "esp": {
           "value": "3",
           "status": "MATCH",
           "ref": "3",
-          "ref_source": "plan"
+          "ref_source": "sap"
         },
         "lbase": {
           "value": "537",
@@ -440,9 +430,9 @@
         }
       },
       "summary": {
-        "match": 8,
+        "match": 10,
         "no_match": 0,
-        "na": 2
+        "na": 0
       }
     },
     {

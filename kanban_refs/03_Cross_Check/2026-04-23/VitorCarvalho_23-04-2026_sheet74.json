@@ -4,13 +4,13 @@
   "operador": "Vitor CARVALHO",
   "date": "2026-04-23",
   "sheet_status": "extracted",
-  "checked_at": "2026-05-12T10:59:12+00:00",
-  "refs_loaded_at": "2026-05-12T09:29:32+00:00",
+  "checked_at": "2026-05-12T17:44:24+00:00",
+  "refs_loaded_at": "2026-05-12T17:44:23+00:00",
   "summary": {
     "match": 29,
     "no_match": 0,
-    "na": 7,
-    "total": 36
+    "na": 8,
+    "total": 37
   },
   "rows": [
     {
@@ -175,9 +175,9 @@
           "ref_source": "plan"
         },
         "modelo": {
-          "value": "CFC5F03D",
+          "value": "CFC5F03D - 30",
           "status": "MATCH",
-          "ref": "CFC5F03D",
+          "ref": "CFC5F03D - 30",
           "ref_source": "plan",
           "reason": "substring"
         },
@@ -209,7 +209,7 @@
           "status": "NA",
           "ref": "312.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "ltopo": {

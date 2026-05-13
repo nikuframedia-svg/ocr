@@ -4,13 +4,13 @@
   "operador": "VITOR CARVALHO",
   "date": "2026-05-08",
   "sheet_status": "extracted",
-  "checked_at": "2026-05-12T08:19:45+00:00",
-  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "checked_at": "2026-05-12T17:44:24+00:00",
+  "refs_loaded_at": "2026-05-12T17:44:23+00:00",
   "summary": {
-    "match": 81,
-    "no_match": 1,
-    "na": 14,
-    "total": 96
+    "match": 87,
+    "no_match": 0,
+    "na": 10,
+    "total": 97
   },
   "rows": [
     {
@@ -49,22 +49,20 @@
         },
         "lote": {
           "value": "M26B0354",
-          "status": "NA",
-          "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref_source": "sap"
         },
         "larg_mm": {
           "value": "1375",
-          "status": "NA",
-          "reason": "stub-accept w13 (promote_na_if_lote_missing, 5/5 of,cliente,modelo,esp,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref": "1375",
+          "ref_source": "sap"
         },
         "esp": {
           "value": "2,6",
           "status": "MATCH",
           "ref": "2.6",
-          "ref_source": "plan"
+          "ref_source": "sap"
         },
         "lbase": {
           "value": "479",
@@ -80,9 +78,9 @@
         }
       },
       "summary": {
-        "match": 8,
+        "match": 10,
         "no_match": 0,
-        "na": 2
+        "na": 0
       }
     },
     {
@@ -121,22 +119,20 @@
         },
         "lote": {
           "value": "M26B0305",
-          "status": "NA",
-          "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref_source": "sap"
         },
         "larg_mm": {
           "value": "1375",
-          "status": "NA",
-          "reason": "stub-accept w13 (promote_na_if_lote_missing, 5/5 of,cliente,modelo,esp,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref": "1375",
+          "ref_source": "sap"
         },
         "esp": {
           "value": "2,6",
           "status": "MATCH",
           "ref": "2.6",
-          "ref_source": "plan"
+          "ref_source": "sap"
         },
         "lbase": {
           "value": "479",
@@ -152,9 +148,9 @@
         }
       },
       "summary": {
-        "match": 8,
+        "match": 10,
         "no_match": 0,
-        "na": 2
+        "na": 0
       }
     },
     {
@@ -403,22 +399,20 @@
         },
         "lote": {
           "value": "M26B0367",
-          "status": "NA",
-          "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref_source": "sap"
         },
         "larg_mm": {
           "value": "940",
-          "status": "NA",
-          "reason": "stub-accept w13 (promote_na_if_lote_missing, 5/5 of,cliente,modelo,esp,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref": "940",
+          "ref_source": "sap"
         },
         "esp": {
           "value": "2,6",
           "status": "MATCH",
           "ref": "2.6",
-          "ref_source": "plan"
+          "ref_source": "sap"
         },
         "lbase": {
           "value": "648",
@@ -434,9 +428,9 @@
         }
       },
       "summary": {
-        "match": 8,
+        "match": 10,
         "no_match": 0,
-        "na": 2
+        "na": 0
       }
     },
     {
@@ -462,17 +456,18 @@
         },
         "modelo": {
           "value": "CGCBEF06D",
-          "status": "NO_MATCH",
+          "status": "NA",
           "ref": "CD31.O.J01 - 16M/6KN Nº1 CD31.O.500",
           "ref_source": "plan",
-          "reason": "modelo 'CGCBEF06D' não bate plan (substring nem fuzzy)"
+          "reason": "stub-accept w15 (row_match_ratio:0.78)",
+          "suspended_by_stub": true
         },
         "comp_mm": {
           "value": "8500",
           "status": "NA",
           "ref": "4450",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (modelo_no_match)",
+          "reason": "stub-accept w15 (modelo_no_match)",
           "suspended_by_stub": true
         },
         "lote": {
@@ -503,14 +498,14 @@
           "status": "NA",
           "ref": "545.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (modelo_no_match)",
+          "reason": "stub-accept w15 (modelo_no_match)",
           "suspended_by_stub": true
         }
       },
       "summary": {
         "match": 7,
-        "no_match": 1,
-        "na": 2
+        "no_match": 0,
+        "na": 3
       }
     },
     {
@@ -605,9 +600,9 @@
           "ref_source": "plan"
         },
         "modelo": {
-          "value": "COE1F10D - FL PL + 2 CURVAS",
+          "value": "COE1F10D - FL PL + 2 CURVAS + FL TOPO",
           "status": "MATCH",
-          "ref": "COE1F10D - FL PL + 2 CURVAS",
+          "ref": "COE1F10D - FL PL + 2 CURVAS + FL TOPO",
           "ref_source": "plan",
           "reason": "substring"
         },
@@ -654,14 +649,5 @@
       }
     }
   ],
-  "to_analisar": [
-    {
-      "row_index": 6,
-      "field": "modelo",
-      "value": "CGCBEF06D",
-      "ref": "CD31.O.J01 - 16M/6KN Nº1 CD31.O.500",
-      "ref_source": "plan",
-      "reason": "modelo 'CGCBEF06D' não bate plan (substring nem fuzzy)"
-    }
-  ]
+  "to_analisar": []
 }

@@ -4,13 +4,13 @@
   "operador": "JULIO LIMA",
   "date": "2026-04-15",
   "sheet_status": "extracted",
-  "checked_at": "2026-05-12T08:19:45+00:00",
-  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "checked_at": "2026-05-12T17:44:24+00:00",
+  "refs_loaded_at": "2026-05-12T17:44:23+00:00",
   "summary": {
     "match": 120,
     "no_match": 0,
-    "na": 6,
-    "total": 126
+    "na": 7,
+    "total": 127
   },
   "rows": [
     {
@@ -455,11 +455,11 @@
           "ref_source": "plan"
         },
         "modelo": {
-          "value": "CR15LF12 - LMF1882T - CR1516A4525 - SUP DEGRAUS + SUP LV - USAR 2 STOCK",
+          "value": "CR15LF02 - LMF1682N - CR1516A4507 + SUP DEGRAUS + SUP LV - TOPO",
           "status": "MATCH",
-          "ref": "CR15LF12 - LMF1882T - CR1516A4525 - SUP DEGRAUS + SUP LV - USAR 2 STOCK",
+          "ref": "CR15LF02 - LMF1682N - CR1516A4507 + SUP DEGRAUS + SUP LV - TOPO",
           "ref_source": "plan",
-          "reason": "substring"
+          "reason": "token_fuzzy"
         },
         "comp_mm": {
           "value": "11900",

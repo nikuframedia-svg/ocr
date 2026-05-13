@@ -4,13 +4,13 @@
   "operador": "AUGUSTO MONTEIRO",
   "date": "2026-04-24",
   "sheet_status": "extracted",
-  "checked_at": "2026-05-12T08:19:43+00:00",
-  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "checked_at": "2026-05-12T17:44:24+00:00",
+  "refs_loaded_at": "2026-05-12T17:44:23+00:00",
   "summary": {
-    "match": 50,
+    "match": 48,
     "no_match": 0,
-    "na": 6,
-    "total": 56
+    "na": 9,
+    "total": 57
   },
   "rows": [
     {
@@ -35,9 +35,9 @@
           "ref_source": "plan"
         },
         "modelo": {
-          "value": "1015VT20 - Nº1 1015V503",
+          "value": "1015VJ20 - Nº3 1015V506",
           "status": "MATCH",
-          "ref": "1015VT20 - Nº1 1015V503",
+          "ref": "1015VJ20 - Nº3 1015V506",
           "ref_source": "plan",
           "reason": "token_fuzzy"
         },
@@ -189,20 +189,21 @@
         },
         "lote": {
           "value": "M26B0209",
-          "status": "MATCH",
-          "ref_source": "sap"
+          "status": "NA",
+          "ref_source": "sap",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
+          "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "1190",
-          "status": "MATCH",
-          "ref": "1190",
-          "ref_source": "sap"
+          "status": "NA",
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "4",
           "status": "MATCH",
           "ref": "4",
-          "ref_source": "sap"
+          "ref_source": "plan"
         },
         "lbase": {
           "value": "768",
@@ -218,9 +219,9 @@
         }
       },
       "summary": {
-        "match": 10,
+        "match": 8,
         "no_match": 0,
-        "na": 0
+        "na": 2
       }
     },
     {

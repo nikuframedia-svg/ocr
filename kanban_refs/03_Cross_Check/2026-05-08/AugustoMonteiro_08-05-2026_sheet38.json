@@ -4,13 +4,13 @@
   "operador": "AUGUSTO MONTEIRO",
   "date": "2026-05-08",
   "sheet_status": "extracted",
-  "checked_at": "2026-05-12T08:19:44+00:00",
-  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "checked_at": "2026-05-12T17:44:24+00:00",
+  "refs_loaded_at": "2026-05-12T17:44:23+00:00",
   "summary": {
     "match": 80,
     "no_match": 2,
-    "na": 24,
-    "total": 106
+    "na": 25,
+    "total": 107
   },
   "rows": [
     {
@@ -46,7 +46,7 @@
           "status": "NA",
           "ref": "9750",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (modelo_no_match)",
+          "reason": "stub-accept w15 (modelo_no_match)",
           "suspended_by_stub": true
         },
         "lote": {
@@ -71,7 +71,7 @@
           "status": "NA",
           "ref": "768.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (modelo_no_match)",
+          "reason": "stub-accept w15 (modelo_no_match)",
           "suspended_by_stub": true
         },
         "ltopo": {
@@ -120,21 +120,20 @@
           "status": "NA",
           "ref": "12901",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "lote": {
           "value": "M25B1341",
           "status": "NA",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
+          "reason": "stub-accept w15 (row_match_ratio:0.78)",
           "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "4260",
           "status": "NA",
-          "reason": "stub-accept w13 (promote_na_if_lote_missing, 4/5 of,cliente,modelo,esp,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "4",
@@ -147,7 +146,7 @@
           "status": "NA",
           "ref": "713.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "ltopo": {
@@ -196,21 +195,20 @@
           "status": "NA",
           "ref": "11500",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "lote": {
           "value": "M25B1341",
           "status": "NA",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
+          "reason": "stub-accept w15 (row_match_ratio:0.78)",
           "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "4260",
           "status": "NA",
-          "reason": "stub-accept w13 (promote_na_if_lote_missing, 4/5 of,cliente,modelo,esp,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "4",
@@ -223,7 +221,7 @@
           "status": "NA",
           "ref": "587.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "ltopo": {
@@ -277,14 +275,13 @@
           "value": "M25B1341",
           "status": "NA",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
           "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "4260",
           "status": "NA",
-          "reason": "stub-accept w13 (promote_na_if_lote_missing, 5/5 of,cliente,modelo,esp,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "4",
@@ -473,18 +470,18 @@
           "ref_source": "plan"
         },
         "modelo": {
-          "value": "CR15LF01 - LMF1861T - CR1516A4500 - SUP DEGRAUS + SUP LV - USAR 12 STOCK",
+          "value": "CR15LF02 - LMF1682N - CR1516A4507 + SUP DEGRAUS + SUP LV - TOPO",
           "status": "MATCH",
-          "ref": "CR15LF01 - LMF1861T - CR1516A4500 - SUP DEGRAUS + SUP LV - USAR 12 STOCK",
+          "ref": "CR15LF02 - LMF1682N - CR1516A4507 + SUP DEGRAUS + SUP LV - TOPO",
           "ref_source": "plan",
-          "reason": "substring"
+          "reason": "token_fuzzy"
         },
         "comp_mm": {
           "value": "8400",
           "status": "NA",
           "ref": "8100",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "lote": {
@@ -515,7 +512,7 @@
           "status": "NA",
           "ref": "318.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         }
       },
@@ -617,9 +614,9 @@
           "ref_source": "plan"
         },
         "modelo": {
-          "value": "CEC1F10B_V - FL PL",
+          "value": "CEC1F10B_V - FL PL + LINHA VIDA",
           "status": "MATCH",
-          "ref": "CEC1F10B_V - FL PL",
+          "ref": "CEC1F10B_V - FL PL + LINHA VIDA",
           "ref_source": "plan",
           "reason": "substring"
         },
@@ -657,7 +654,7 @@
           "status": "NA",
           "ref": "198.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         }
       },
@@ -723,7 +720,7 @@
           "status": "NA",
           "ref": "575.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "ltopo": {
@@ -731,7 +728,7 @@
           "status": "NA",
           "ref": "179.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         }
       },

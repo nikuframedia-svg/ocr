@@ -4,13 +4,13 @@
   "operador": "VITOR CARVALHO",
   "date": "2026-05-06",
   "sheet_status": "extracted",
-  "checked_at": "2026-05-12T08:19:44+00:00",
-  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "checked_at": "2026-05-12T17:44:24+00:00",
+  "refs_loaded_at": "2026-05-12T17:44:23+00:00",
   "summary": {
-    "match": 108,
-    "no_match": 0,
-    "na": 18,
-    "total": 126
+    "match": 109,
+    "no_match": 3,
+    "na": 15,
+    "total": 127
   },
   "rows": [
     {
@@ -116,7 +116,7 @@
           "status": "NA",
           "ref": "6100",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "lote": {
@@ -251,7 +251,7 @@
           "status": "NA",
           "ref": "CD11MJ06 - 13M/6.5KN Nº2 CD11M504 1/2",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (4/4 of,cliente,ov,comp_mm MATCH)",
+          "reason": "stub-accept w15 (4/4 of,cliente,ov,comp_mm MATCH)",
           "suspended_by_stub": true
         },
         "comp_mm": {
@@ -278,26 +278,24 @@
           "ref_source": "sap"
         },
         "lbase": {
-          "value": "710",
-          "status": "NA",
+          "value": "700.0",
+          "status": "MATCH",
           "ref": "700.0",
-          "ref_source": "plan",
-          "reason": "stub-accept w13 (any_dim_sibling_match)",
-          "suspended_by_stub": true
+          "ref_source": "plan"
         },
         "ltopo": {
           "value": "460",
           "status": "NA",
           "ref": "518.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (any_dim_sibling_match)",
+          "reason": "stub-accept w15 (row_match_ratio:0.78)",
           "suspended_by_stub": true
         }
       },
       "summary": {
-        "match": 7,
+        "match": 8,
         "no_match": 0,
-        "na": 3
+        "na": 2
       }
     },
     {
@@ -398,11 +396,10 @@
         },
         "comp_mm": {
           "value": "2878",
-          "status": "NA",
+          "status": "NO_MATCH",
           "ref": "8000",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (any_dim_sibling_match)",
-          "suspended_by_stub": true
+          "reason": "OCR=2878 vs plan=8000 (Δ5122mm > 100mm)"
         },
         "lote": {
           "value": "M24B0880",
@@ -423,25 +420,23 @@
         },
         "lbase": {
           "value": "447",
-          "status": "NA",
+          "status": "NO_MATCH",
           "ref": "431.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (any_dim_sibling_match)",
-          "suspended_by_stub": true
+          "reason": "OCR=447 vs plan=431 (Δ16mm)"
         },
         "ltopo": {
           "value": "117",
-          "status": "NA",
+          "status": "NO_MATCH",
           "ref": "180.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (any_dim_sibling_match)",
-          "suspended_by_stub": true
+          "reason": "OCR=117 vs plan=180 (Δ63mm)"
         }
       },
       "summary": {
         "match": 5,
-        "no_match": 0,
-        "na": 5
+        "no_match": 3,
+        "na": 2
       }
     },
     {
@@ -687,7 +682,7 @@
           "status": "NA",
           "ref": "6000",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "lote": {
@@ -766,14 +761,14 @@
         "larg_mm": {
           "value": "1410",
           "status": "MATCH",
-          "ref": "1410",
+          "ref": "1400",
           "ref_source": "sap"
         },
         "esp": {
           "value": "2,6",
           "status": "MATCH",
           "ref": "2.6",
-          "ref_source": "plan"
+          "ref_source": "sap"
         },
         "lbase": {
           "value": "501",
@@ -836,14 +831,14 @@
         "larg_mm": {
           "value": "1410",
           "status": "MATCH",
-          "ref": "1410",
+          "ref": "1400",
           "ref_source": "sap"
         },
         "esp": {
           "value": "2,6",
           "status": "MATCH",
           "ref": "2.6",
-          "ref_source": "plan"
+          "ref_source": "sap"
         },
         "lbase": {
           "value": "488",
@@ -865,5 +860,30 @@
       }
     }
   ],
-  "to_analisar": []
+  "to_analisar": [
+    {
+      "row_index": 5,
+      "field": "comp_mm",
+      "value": "2878",
+      "ref": "8000",
+      "ref_source": "plan",
+      "reason": "OCR=2878 vs plan=8000 (Δ5122mm > 100mm)"
+    },
+    {
+      "row_index": 5,
+      "field": "lbase",
+      "value": "447",
+      "ref": "431.0",
+      "ref_source": "plan",
+      "reason": "OCR=447 vs plan=431 (Δ16mm)"
+    },
+    {
+      "row_index": 5,
+      "field": "ltopo",
+      "value": "117",
+      "ref": "180.0",
+      "ref_source": "plan",
+      "reason": "OCR=117 vs plan=180 (Δ63mm)"
+    }
+  ]
 }

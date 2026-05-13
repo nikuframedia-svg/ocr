@@ -4,13 +4,13 @@
   "operador": "AUGUSTO MONTEIRO",
   "date": "2026-05-04",
   "sheet_status": "extracted",
-  "checked_at": "2026-05-12T08:19:44+00:00",
-  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "checked_at": "2026-05-12T17:44:24+00:00",
+  "refs_loaded_at": "2026-05-12T17:44:23+00:00",
   "summary": {
-    "match": 53,
+    "match": 52,
     "no_match": 0,
-    "na": 13,
-    "total": 66
+    "na": 15,
+    "total": 67
   },
   "rows": [
     {
@@ -57,7 +57,7 @@
           "status": "NA",
           "ref": "1410",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "esp": {
@@ -129,7 +129,7 @@
           "status": "NA",
           "ref": "1320",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "esp": {
@@ -193,16 +193,15 @@
         },
         "lote": {
           "value": "M26B0373",
-          "status": "MATCH",
-          "ref_source": "sap"
+          "status": "NA",
+          "ref_source": "sap",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
+          "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "805",
           "status": "NA",
-          "ref": "1410",
-          "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
-          "suspended_by_stub": true
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "2,6",
@@ -224,9 +223,9 @@
         }
       },
       "summary": {
-        "match": 9,
+        "match": 8,
         "no_match": 0,
-        "na": 1
+        "na": 2
       }
     },
     {
@@ -273,7 +272,7 @@
           "status": "NA",
           "ref": "1410",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "esp": {
@@ -323,9 +322,9 @@
           "ref_source": "plan"
         },
         "modelo": {
-          "value": "CBCBE08DI - 2 SC - 1 prioridade",
+          "value": "CBCBE08DI - 2 SC - 1 prioridade - 352ud",
           "status": "MATCH",
-          "ref": "CBCBE08DI - 2 SC - 1 prioridade",
+          "ref": "CBCBE08DI - 2 SC - 1 prioridade - 352ud",
           "ref_source": "plan",
           "reason": "substring"
         },
@@ -345,7 +344,7 @@
           "status": "NA",
           "ref": "1410",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "esp": {
@@ -395,9 +394,9 @@
           "ref_source": "plan"
         },
         "modelo": {
-          "value": "CBCBE08DI - 2 SC - 1 prioridade",
+          "value": "CBCBE08DI - 2 SC - 1 prioridade - 352ud",
           "status": "MATCH",
-          "ref": "CBCBE08DI - 2 SC - 1 prioridade",
+          "ref": "CBCBE08DI - 2 SC - 1 prioridade - 352ud",
           "ref_source": "plan",
           "reason": "substring"
         },
@@ -411,14 +410,13 @@
           "value": "M26B0369",
           "status": "NA",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,esp MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
           "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "805",
           "status": "NA",
-          "reason": "stub-accept w13 (promote_na_if_lote_missing, 5/5 of,cliente,modelo,esp,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "2,6",

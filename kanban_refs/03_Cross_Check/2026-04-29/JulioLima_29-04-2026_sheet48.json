@@ -4,13 +4,13 @@
   "operador": "JULIO LIMA",
   "date": "2026-04-29",
   "sheet_status": "extracted",
-  "checked_at": "2026-05-12T08:19:44+00:00",
-  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "checked_at": "2026-05-12T17:44:24+00:00",
+  "refs_loaded_at": "2026-05-12T17:44:23+00:00",
   "summary": {
-    "match": 92,
+    "match": 98,
     "no_match": 0,
-    "na": 24,
-    "total": 116
+    "na": 19,
+    "total": 117
   },
   "rows": [
     {
@@ -194,26 +194,22 @@
         },
         "larg_mm": {
           "value": "1490",
-          "status": "NA",
-          "ref": "1320",
-          "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref": "1490",
+          "ref_source": "sap"
         },
         "esp": {
           "value": "4",
-          "status": "NA",
-          "ref": "4.8",
-          "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref": "4",
+          "ref_source": "sap"
         },
         "lbase": {
           "value": "534",
           "status": "NA",
           "ref": "531.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "ltopo": {
@@ -221,14 +217,14 @@
           "status": "NA",
           "ref": "179.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         }
       },
       "summary": {
-        "match": 6,
+        "match": 8,
         "no_match": 0,
-        "na": 4
+        "na": 2
       }
     },
     {
@@ -272,26 +268,22 @@
         },
         "larg_mm": {
           "value": "1490",
-          "status": "NA",
-          "ref": "1320",
-          "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref": "1490",
+          "ref_source": "sap"
         },
         "esp": {
           "value": "4",
-          "status": "NA",
-          "ref": "4.8",
-          "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref": "4",
+          "ref_source": "sap"
         },
         "lbase": {
           "value": "534",
           "status": "NA",
           "ref": "531.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "ltopo": {
@@ -299,14 +291,14 @@
           "status": "NA",
           "ref": "179.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         }
       },
       "summary": {
-        "match": 6,
+        "match": 8,
         "no_match": 0,
-        "na": 4
+        "na": 2
       }
     },
     {
@@ -350,26 +342,22 @@
         },
         "larg_mm": {
           "value": "1490",
-          "status": "NA",
-          "ref": "1320",
-          "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref": "1490",
+          "ref_source": "sap"
         },
         "esp": {
           "value": "4",
-          "status": "NA",
-          "ref": "4.8",
-          "ref_source": "sap",
-          "reason": "stub-accept w13 (4/4 of,cliente,modelo,comp_mm MATCH)",
-          "suspended_by_stub": true
+          "status": "MATCH",
+          "ref": "4",
+          "ref_source": "sap"
         },
         "lbase": {
           "value": "534",
           "status": "NA",
           "ref": "531.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "ltopo": {
@@ -377,14 +365,14 @@
           "status": "NA",
           "ref": "179.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         }
       },
       "summary": {
-        "match": 6,
+        "match": 8,
         "no_match": 0,
-        "na": 4
+        "na": 2
       }
     },
     {
@@ -420,7 +408,7 @@
           "status": "NA",
           "ref": "7100",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "lote": {
@@ -492,7 +480,7 @@
           "status": "NA",
           "ref": "7100",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "lote": {
@@ -657,7 +645,7 @@
           "status": "NA",
           "ref": "427.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "ltopo": {
@@ -706,7 +694,7 @@
           "status": "NA",
           "ref": "9200",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "lote": {
@@ -731,7 +719,7 @@
           "status": "NA",
           "ref": "575.0",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "ltopo": {
@@ -773,7 +761,7 @@
           "status": "NA",
           "ref": "6194T500 - FUSTES - 1 PRIORIDADE - 100ud",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (4/4 of,cliente,ov,comp_mm MATCH)",
+          "reason": "stub-accept w15 (4/4 of,cliente,ov,comp_mm MATCH)",
           "suspended_by_stub": true
         },
         "comp_mm": {

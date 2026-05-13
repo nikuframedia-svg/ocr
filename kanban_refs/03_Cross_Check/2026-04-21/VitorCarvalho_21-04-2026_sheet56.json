@@ -4,13 +4,13 @@
   "operador": "VITOR CARVALHO",
   "date": "2026-04-21",
   "sheet_status": "extracted",
-  "checked_at": "2026-05-12T08:19:43+00:00",
-  "refs_loaded_at": "2026-05-12T08:19:42+00:00",
+  "checked_at": "2026-05-12T17:44:24+00:00",
+  "refs_loaded_at": "2026-05-12T17:44:23+00:00",
   "summary": {
-    "match": 115,
+    "match": 97,
     "no_match": 0,
-    "na": 11,
-    "total": 126
+    "na": 30,
+    "total": 127
   },
   "rows": [
     {
@@ -105,9 +105,9 @@
           "ref_source": "plan"
         },
         "modelo": {
-          "value": "CLC8F05Ri",
+          "value": "CLC8F05RI - 250ud",
           "status": "MATCH",
-          "ref": "CLC8F05RI",
+          "ref": "CLC8F05RI - 250ud",
           "ref_source": "plan",
           "reason": "substring"
         },
@@ -127,7 +127,7 @@
           "status": "NA",
           "ref": "1200",
           "ref_source": "sap",
-          "reason": "stub-accept w13 (3/3 of,cliente,modelo MATCH)",
+          "reason": "stub-accept w15 (3/3 of,cliente,modelo MATCH)",
           "suspended_by_stub": true
         },
         "esp": {
@@ -261,20 +261,21 @@
         },
         "lote": {
           "value": "M26B0058",
-          "status": "MATCH",
-          "ref_source": "sap"
+          "status": "NA",
+          "ref_source": "sap",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
+          "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "950",
-          "status": "MATCH",
-          "ref": "950",
-          "ref_source": "sap"
+          "status": "NA",
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "4",
           "status": "MATCH",
           "ref": "4",
-          "ref_source": "sap"
+          "ref_source": "plan"
         },
         "lbase": {
           "value": "604",
@@ -290,9 +291,9 @@
         }
       },
       "summary": {
-        "match": 10,
+        "match": 8,
         "no_match": 0,
-        "na": 0
+        "na": 2
       }
     },
     {
@@ -319,9 +320,9 @@
         "modelo": {
           "value": "CFC5F04Ri",
           "status": "NA",
-          "ref": "CFH2F09RI_V1 - BASE INOX + FURACAO - TOPO",
+          "ref": "CFH2F09RI - BASE INOX - TOPO",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (4/4 of,cliente,ov,comp_mm MATCH)",
+          "reason": "stub-accept w15 (4/4 of,cliente,ov,comp_mm MATCH)",
           "suspended_by_stub": true
         },
         "comp_mm": {
@@ -332,20 +333,21 @@
         },
         "lote": {
           "value": "M26B0058",
-          "status": "MATCH",
-          "ref_source": "sap"
+          "status": "NA",
+          "ref_source": "sap",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
+          "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "950",
-          "status": "MATCH",
-          "ref": "950",
-          "ref_source": "sap"
+          "status": "NA",
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "4",
           "status": "MATCH",
           "ref": "4",
-          "ref_source": "sap"
+          "ref_source": "plan"
         },
         "lbase": {
           "value": "604",
@@ -361,9 +363,9 @@
         }
       },
       "summary": {
-        "match": 9,
+        "match": 7,
         "no_match": 0,
-        "na": 1
+        "na": 3
       }
     },
     {
@@ -390,9 +392,9 @@
         "modelo": {
           "value": "CFC5F04Ri",
           "status": "NA",
-          "ref": "CFH2F09RI_V1 - BASE INOX + FURACAO - TOPO",
+          "ref": "CFH2F09RI - BASE INOX - TOPO",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (4/4 of,cliente,ov,comp_mm MATCH)",
+          "reason": "stub-accept w15 (4/4 of,cliente,ov,comp_mm MATCH)",
           "suspended_by_stub": true
         },
         "comp_mm": {
@@ -403,20 +405,21 @@
         },
         "lote": {
           "value": "M26B0058",
-          "status": "MATCH",
-          "ref_source": "sap"
+          "status": "NA",
+          "ref_source": "sap",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
+          "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "950",
-          "status": "MATCH",
-          "ref": "950",
-          "ref_source": "sap"
+          "status": "NA",
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "4",
           "status": "MATCH",
           "ref": "4",
-          "ref_source": "sap"
+          "ref_source": "plan"
         },
         "lbase": {
           "value": "604",
@@ -432,9 +435,9 @@
         }
       },
       "summary": {
-        "match": 9,
+        "match": 7,
         "no_match": 0,
-        "na": 1
+        "na": 3
       }
     },
     {
@@ -461,9 +464,9 @@
         "modelo": {
           "value": "CFC5F04Ri",
           "status": "NA",
-          "ref": "CFH2F09RI_V1 - BASE INOX + FURACAO - TOPO",
+          "ref": "CFH2F09RI - BASE INOX - TOPO",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (4/4 of,cliente,ov,comp_mm MATCH)",
+          "reason": "stub-accept w15 (4/4 of,cliente,ov,comp_mm MATCH)",
           "suspended_by_stub": true
         },
         "comp_mm": {
@@ -474,20 +477,21 @@
         },
         "lote": {
           "value": "M26B0058",
-          "status": "MATCH",
-          "ref_source": "sap"
+          "status": "NA",
+          "ref_source": "sap",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
+          "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "950",
-          "status": "MATCH",
-          "ref": "950",
-          "ref_source": "sap"
+          "status": "NA",
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "4",
           "status": "MATCH",
           "ref": "4",
-          "ref_source": "sap"
+          "ref_source": "plan"
         },
         "lbase": {
           "value": "604",
@@ -503,9 +507,9 @@
         }
       },
       "summary": {
-        "match": 9,
+        "match": 7,
         "no_match": 0,
-        "na": 1
+        "na": 3
       }
     },
     {
@@ -544,20 +548,21 @@
         },
         "lote": {
           "value": "M26B0178",
-          "status": "MATCH",
-          "ref_source": "sap"
+          "status": "NA",
+          "ref_source": "sap",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
+          "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "1175",
-          "status": "MATCH",
-          "ref": "1175",
-          "ref_source": "sap"
+          "status": "NA",
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "4",
           "status": "MATCH",
           "ref": "4",
-          "ref_source": "sap"
+          "ref_source": "plan"
         },
         "lbase": {
           "value": "707",
@@ -573,9 +578,9 @@
         }
       },
       "summary": {
-        "match": 10,
+        "match": 8,
         "no_match": 0,
-        "na": 0
+        "na": 2
       }
     },
     {
@@ -614,20 +619,21 @@
         },
         "lote": {
           "value": "M26B0178",
-          "status": "MATCH",
-          "ref_source": "sap"
+          "status": "NA",
+          "ref_source": "sap",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
+          "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "1175",
-          "status": "MATCH",
-          "ref": "1175",
-          "ref_source": "sap"
+          "status": "NA",
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "4",
           "status": "MATCH",
           "ref": "4",
-          "ref_source": "sap"
+          "ref_source": "plan"
         },
         "lbase": {
           "value": "707",
@@ -643,9 +649,9 @@
         }
       },
       "summary": {
-        "match": 10,
+        "match": 8,
         "no_match": 0,
-        "na": 0
+        "na": 2
       }
     },
     {
@@ -674,7 +680,7 @@
           "status": "NA",
           "ref": "1167VP18 - Nº2 1167V501 1/2",
           "ref_source": "plan",
-          "reason": "stub-accept w13 (4/4 of,cliente,ov,comp_mm MATCH)",
+          "reason": "stub-accept w15 (4/4 of,cliente,ov,comp_mm MATCH)",
           "suspended_by_stub": true
         },
         "comp_mm": {
@@ -685,20 +691,21 @@
         },
         "lote": {
           "value": "M26B0178",
-          "status": "MATCH",
-          "ref_source": "sap"
+          "status": "NA",
+          "ref_source": "sap",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
+          "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "1175",
-          "status": "MATCH",
-          "ref": "1175",
-          "ref_source": "sap"
+          "status": "NA",
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "4",
           "status": "MATCH",
           "ref": "4",
-          "ref_source": "sap"
+          "ref_source": "plan"
         },
         "lbase": {
           "value": "652",
@@ -714,9 +721,9 @@
         }
       },
       "summary": {
-        "match": 9,
+        "match": 7,
         "no_match": 0,
-        "na": 1
+        "na": 3
       }
     },
     {
@@ -741,9 +748,9 @@
           "ref_source": "plan"
         },
         "modelo": {
-          "value": "CEC1F10D_V2 - FL PL + FURACAO",
+          "value": "CEC1F10D_V2 - FL PL + FURACAO + LINHA VIDA",
           "status": "MATCH",
-          "ref": "CEC1F10D_V2 - FL PL + FURACAO",
+          "ref": "CEC1F10D_V2 - FL PL + FURACAO + LINHA VIDA",
           "ref_source": "plan",
           "reason": "substring"
         },
@@ -755,20 +762,21 @@
         },
         "lote": {
           "value": "M25B0442",
-          "status": "MATCH",
-          "ref_source": "sap"
+          "status": "NA",
+          "ref_source": "sap",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
+          "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "865",
-          "status": "MATCH",
-          "ref": "865",
-          "ref_source": "sap"
+          "status": "NA",
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "3",
           "status": "MATCH",
           "ref": "3",
-          "ref_source": "sap"
+          "ref_source": "plan"
         },
         "lbase": {
           "value": "593",
@@ -784,9 +792,9 @@
         }
       },
       "summary": {
-        "match": 10,
+        "match": 8,
         "no_match": 0,
-        "na": 0
+        "na": 2
       }
     },
     {
@@ -811,9 +819,9 @@
           "ref_source": "plan"
         },
         "modelo": {
-          "value": "CEC1F10D_V3 - FL PL + FURACAO",
+          "value": "CEC1F10D_V3 - FL PL + FURACAO + LINHA VIDA",
           "status": "MATCH",
-          "ref": "CEC1F10D_V3 - FL PL + FURACAO",
+          "ref": "CEC1F10D_V3 - FL PL + FURACAO + LINHA VIDA",
           "ref_source": "plan",
           "reason": "substring"
         },
@@ -825,20 +833,21 @@
         },
         "lote": {
           "value": "M25B0442",
-          "status": "MATCH",
-          "ref_source": "sap"
+          "status": "NA",
+          "ref_source": "sap",
+          "reason": "stub-accept w15 (3/3 of,cliente,comp_mm MATCH)",
+          "suspended_by_stub": true
         },
         "larg_mm": {
           "value": "865",
-          "status": "MATCH",
-          "ref": "865",
-          "ref_source": "sap"
+          "status": "NA",
+          "reason": "lote não em SAP"
         },
         "esp": {
           "value": "3",
           "status": "MATCH",
           "ref": "3",
-          "ref_source": "sap"
+          "ref_source": "plan"
         },
         "lbase": {
           "value": "593",
@@ -854,9 +863,9 @@
         }
       },
       "summary": {
-        "match": 10,
+        "match": 8,
         "no_match": 0,
-        "na": 0
+        "na": 2
       }
     }
   ],
