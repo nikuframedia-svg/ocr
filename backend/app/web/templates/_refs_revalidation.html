@@ -1,0 +1,23 @@
+{% set rv = revalidation %}
+{% if rv.running %}
+<div class="refs-reval busy" hx-get="/refs/revalidation-status"
+     hx-trigger="every 2s" hx-swap="outerHTML">
+  <div class="refs-reval-top">
+    <span class="refs-dot busy"></span>
+    Re-validação cross-check em curso —
+    <b>{{ rv.done }}</b> / {{ rv.total }} folhas
+  </div>
+  <div class="refs-bar">
+    <div class="refs-bar-fill"
+         style="width:{{ (rv.done * 100 // rv.total) if rv.total else 0 }}%"></div>
+  </div>
+</div>
+{% elif rv.finished_at and rv.total %}
+<div class="refs-reval done">
+  <span class="refs-dot ok"></span>
+  Re-validação concluída — {{ rv.total }} folha(s) re-validada(s)
+  <span class="muted tiny">· {{ rv.finished_at[:16].replace('T', ' ') }}</span>
+</div>
+{% else %}
+<div class="refs-reval" style="display:none"></div>
+{% endif %}

@@ -40,6 +40,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.cross_check import refs_cumulative
+
 # R64 — overridable via KANBAN_DOC_DIR env var. Lets the laptop runtime
 # point at a local refs folder (or `kanban_refs/04_Documentacao` inside
 # the repo) instead of the hardcoded desktop path.
@@ -85,7 +87,7 @@ def _empty_refs() -> dict[str, Any]:
         "colab_mtime": 0.0,
         "maquinas_mtime": 0.0,
         "aliases_mtime": 0.0,
-        "stats": {"n_lotes": 0, "n_ofs": 0, "n_plan_rows": 0, "n_clientes": 0, "n_colaboradores": 0, "n_maquinas": 0},
+        "stats": {"n_lotes": 0, "n_ofs": 0, "n_plan_rows": 0, "n_clientes": 0, "n_colaboradores": 0, "n_maquinas": 0, "n_ofs_file": 0, "n_lotes_file": 0},
         "available": False,
     }
 
@@ -124,6 +126,65 @@ def _mine_colaboradores(colab_path: Path) -> dict[int, dict[str, str]]:
     return out
 
 
+def _derive_plan_indexes(of_to_entries: dict[str, list[dict]]) -> dict[str, Any]:
+    """Build every plan-derived index + count from an ``OF → entries`` map.
+
+    Shared by the fresh Excel mine and the cumulative-merge result (R104),
+    so the two can never drift apart. Pure function — no I/O.
+    """
+    of_to_ovs = {
+        of_str: frozenset(e["ov"] for e in entries if e.get("ov"))
+        for of_str, entries in of_to_entries.items()
+    }
+    of_to_designacoes = {
+        of_str: tuple(e["designacao"].upper().strip()
+                      for e in entries if e.get("designacao"))
+        for of_str, entries in of_to_entries.items()
+    }
+    # R83 — global sets + inverted indexes for OF-independent / holistic
+    # plan-row search when the OCR's OF doesn't bate plan.
+    clientes: set[str] = set()
+    ovs_global: set[str] = set()
+    modelo_fts: set[str] = set()
+    cli_idx: dict[str, list[dict]] = {}
+    mod_idx: dict[str, list[dict]] = {}
+    n_rows = 0
+    for of_str, entries in of_to_entries.items():
+        for e in entries:
+            n_rows += 1
+            cli = (e.get("cliente") or "").strip().upper()
+            if cli:
+                clientes.add(cli)
+            ov_v = (e.get("ov") or "").strip()
+            if ov_v:
+                ovs_global.add(ov_v)
+            desig = (e.get("designacao") or "").strip()
+            ft = desig.split(" - ", 1)[0].strip().upper() if desig else ""
+            if ft:
+                modelo_fts.add(ft)
+            e_with_of = {**e, "_of": of_str}
+            if cli:
+                cli_idx.setdefault(cli, []).append(e_with_of)
+            if ft:
+                mod_idx.setdefault(ft, []).append(e_with_of)
+    return {
+        "ofs_plan_str": frozenset(of_to_entries.keys()),
+        "of_to_entries": of_to_entries,
+        "of_to_ovs": of_to_ovs,
+        "of_to_designacoes": of_to_designacoes,
+        "clientes_plan": frozenset(clientes),
+        "ovs_plan": frozenset(ovs_global),
+        "modelos_plan": frozenset(modelo_fts),
+        "plan_by_cliente": cli_idx,
+        "plan_by_modelo_ft": mod_idx,
+        "n_ofs": len(of_to_entries),
+        "n_clientes": len(clientes),
+        "n_ovs": len(ovs_global),
+        "n_modelos_fts": len(modelo_fts),
+        "n_plan_rows": n_rows,
+    }
+
+
 def _mine_from_excel(
     sap_path: Path,
     plan_path: Path,
@@ -137,8 +198,8 @@ def _mine_from_excel(
     refs = _empty_refs()
 
     # ---- StockSAP: column0=Lote, col1=Qtd, col2=Espessura, col3=Largura, col4=Desc
+    stock_full: dict[str, dict] = {}
     if sap_path.exists():
-        stock_full: dict[str, dict] = {}
         wb = openpyxl.load_workbook(sap_path, read_only=True, data_only=True)
         ws = wb["Folha1"] if "Folha1" in wb.sheetnames else wb.active
         for i, r in enumerate(ws.iter_rows(values_only=True)):
@@ -166,16 +227,12 @@ def _mine_from_excel(
                 else:
                     stock_full.setdefault("M" + lote, entry)    # add M-prefix alias
         wb.close()
-        refs["lotes_sap"] = frozenset(stock_full.keys())
-        refs["lotes_sap_full"] = stock_full
+        refs["stats"]["n_lotes_file"] = len(stock_full)
         refs["sap_mtime"] = sap_path.stat().st_mtime
 
     # ---- plan_colunas: cliente, ov, of, designacao, quanttrp, bf, esp, lbase, ltopo, ltotal, comp, ...
+    of_to_entries: dict[str, list[dict]] = {}
     if plan_path.exists():
-        of_to_entries: dict[str, list[dict]] = {}
-        ov_to_ofs: dict[str, set[str]] = {}
-        clientes: set[str] = set()
-        n_rows = 0
         wb = openpyxl.load_workbook(plan_path, read_only=True, data_only=True)
         ws = wb["plan_colunas_cpis"] if "plan_colunas_cpis" in wb.sheetnames else wb.active
         hdrs: dict[str, int] = {}
@@ -216,69 +273,28 @@ def _mine_from_excel(
                 # Round 43: closed-OF flag, used for snap disambiguation
                 "fechado": fechado_flag,
             }
-            of_str = str(of_int)
-            of_to_entries.setdefault(of_str, []).append(entry)
-            if ov:
-                ov_to_ofs.setdefault(ov, set()).add(of_str)
-            if cliente:
-                clientes.add(cliente)
-            n_rows += 1
+            of_to_entries.setdefault(str(of_int), []).append(entry)
         wb.close()
-
-        refs["ofs_plan_str"] = frozenset(of_to_entries.keys())
-        refs["of_to_entries"] = of_to_entries
-        refs["of_to_ovs"] = {
-            of_str: frozenset(e["ov"] for e in entries if e.get("ov"))
-            for of_str, entries in of_to_entries.items()
-        }
-        refs["of_to_designacoes"] = {
-            of_str: tuple(e["designacao"].upper().strip()
-                          for e in entries if e.get("designacao"))
-            for of_str, entries in of_to_entries.items()
-        }
-        refs["clientes_plan"] = frozenset(clientes)
-        # R83 — global sets for OF-independent field validation. When the
-        # row's OF isn't in plan, the engine can still validate ov/modelo
-        # against these global sets instead of cascading everything to NA.
-        ovs_global: set[str] = set()
-        modelo_fts: set[str] = set()
-        for entries in of_to_entries.values():
-            for e in entries:
-                ov_v = (e.get("ov") or "").strip()
-                if ov_v:
-                    ovs_global.add(ov_v)
-                desig = (e.get("designacao") or "").strip()
-                if desig:
-                    ft = desig.split(" - ", 1)[0].strip().upper()
-                    if ft:
-                        modelo_fts.add(ft)
-        refs["ovs_plan"] = frozenset(ovs_global)
-        refs["modelos_plan"] = frozenset(modelo_fts)
-        # R83 — Inverted indexes for holistic plan-row search. Used when
-        # OCR's OF doesn't bate plan: search all plan entries by other
-        # signals (cliente, modelo first-token) to find the most likely
-        # plan row this OCR row actually corresponds to.
-        cli_idx: dict[str, list[dict]] = {}
-        mod_idx: dict[str, list[dict]] = {}
-        for of_str, entries in of_to_entries.items():
-            for e in entries:
-                e_with_of = {**e, "_of": of_str}
-                cli = (e.get("cliente") or "").strip().upper()
-                if cli:
-                    cli_idx.setdefault(cli, []).append(e_with_of)
-                desig = (e.get("designacao") or "").strip().upper()
-                if desig:
-                    ft = desig.split(" - ", 1)[0].strip()
-                    if ft:
-                        mod_idx.setdefault(ft, []).append(e_with_of)
-        refs["plan_by_cliente"] = cli_idx
-        refs["plan_by_modelo_ft"] = mod_idx
+        refs["stats"]["n_ofs_file"] = len(of_to_entries)
         refs["plan_mtime"] = plan_path.stat().st_mtime
-        refs["stats"]["n_plan_rows"] = n_rows
-        refs["stats"]["n_ofs"] = len(of_to_entries)
-        refs["stats"]["n_clientes"] = len(clientes)
-        refs["stats"]["n_ovs"] = len(ovs_global)
-        refs["stats"]["n_modelos_fts"] = len(modelo_fts)
+
+    # R104 — fold the fresh mine into the cumulative historical layer, then
+    # build every index from the *merged* superset. OFs/lotes that have
+    # dropped off the latest export are kept, so old kanbans still validate.
+    merged_of, merged_lotes = refs_cumulative.merge_and_persist(
+        of_to_entries, stock_full)
+    refs["lotes_sap_full"] = merged_lotes
+    refs["lotes_sap"] = frozenset(merged_lotes.keys())
+    _plan_idx = _derive_plan_indexes(merged_of)
+    for _k in ("ofs_plan_str", "of_to_entries", "of_to_ovs",
+               "of_to_designacoes", "clientes_plan", "ovs_plan",
+               "modelos_plan", "plan_by_cliente", "plan_by_modelo_ft"):
+        refs[_k] = _plan_idx[_k]
+    refs["stats"]["n_plan_rows"] = _plan_idx["n_plan_rows"]
+    refs["stats"]["n_ofs"] = _plan_idx["n_ofs"]
+    refs["stats"]["n_clientes"] = _plan_idx["n_clientes"]
+    refs["stats"]["n_ovs"] = _plan_idx["n_ovs"]
+    refs["stats"]["n_modelos_fts"] = _plan_idx["n_modelos_fts"]
 
     # R70 — ListaColaboradores.xlsx (pernr/sname/cod) for operator snap
     if colab_path and colab_path.exists():

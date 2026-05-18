@@ -13,6 +13,7 @@ import json
 import os
 import secrets
 import sys
+import threading
 import traceback
 from pathlib import Path
 
@@ -1141,6 +1142,191 @@ def admin_reload_refs() -> JSONResponse:
         "n_lotes": refs.get("stats", {}).get("n_lotes", 0),
         "n_ofs": refs.get("stats", {}).get("n_ofs", 0),
         "sheets_revalidated": revalidated,
+    })
+
+
+# ===================== R104 — página de refs SAP/plan =====================
+# Upload de StockSAP.xlsx / plan_colunas_cpis.xlsx com acumulação histórica.
+
+_REFS_FILENAMES = {"stocksap": "StockSAP.xlsx", "plan": "plan_colunas_cpis.xlsx"}
+
+# Progresso da re-validação cross-check em background (1 corrida de cada vez).
+_revalidation_state: dict = {
+    "running": False, "done": 0, "total": 0,
+    "started_at": None, "finished_at": None,
+}
+_revalidation_lock = threading.Lock()
+
+
+def _revalidate_all_sheets_bg() -> None:
+    """Re-cross-check every non-pending/-error sheet against the freshly
+    loaded refs. Runs in a daemon thread so the upload response is instant."""
+    try:
+        sheets = [
+            s for s in db.list_sheets(limit=10000)
+            if s["status"] not in ("error", "pending")
+        ]
+        with _revalidation_lock:
+            _revalidation_state.update(
+                running=True, done=0, total=len(sheets), finished_at=None,
+                started_at=dt.datetime.now().isoformat(timespec="seconds"),
+            )
+        for s in sheets:
+            try:
+                _run_and_store_cross_check(s["id"])
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()
+            with _revalidation_lock:
+                _revalidation_state["done"] += 1
+    finally:
+        with _revalidation_lock:
+            _revalidation_state["running"] = False
+            _revalidation_state["finished_at"] = (
+                dt.datetime.now().isoformat(timespec="seconds"))
+
+
+def _validate_refs_xlsx(path: Path, kind: str) -> str | None:
+    """Return ``None`` if the workbook looks like the expected refs file,
+    else a human error message. Defensive — a bad upload must never replace
+    a good live refs file."""
+    import openpyxl
+    try:
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    except Exception as e:  # noqa: BLE001
+        return f"não consegui abrir o Excel ({e})"
+    try:
+        if kind == "plan":
+            ws = (wb["plan_colunas_cpis"]
+                  if "plan_colunas_cpis" in wb.sheetnames else wb.active)
+            first = next(ws.iter_rows(values_only=True), None)
+            hdrs = {str(h).strip().lower() for h in (first or ()) if h}
+            if "of" not in hdrs:
+                return "falta a coluna 'of' — não parece o plan_colunas_cpis"
+        else:  # stocksap
+            rows = (wb["Folha1"] if "Folha1" in wb.sheetnames
+                    else wb.active).iter_rows(values_only=True)
+            header = next(rows, None) or ()
+            col0 = str(header[0] or "").strip().lower() if header else ""
+            if "lote" not in col0:
+                return "1ª coluna não é 'Lote' — não parece o StockSAP"
+            data0 = next(rows, None)
+            if data0 is None or data0[0] is None:
+                return "sem linhas de lote — não parece o StockSAP"
+    finally:
+        wb.close()
+    return None
+
+
+def _fmt_mtime(ts: float | None) -> str:
+    """Epoch float → readable local datetime (for the refs status card)."""
+    if not ts:
+        return "—"
+    return dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+
+
+@app.get("/refs", response_class=HTMLResponse)
+def refs_page(request: Request) -> Response:
+    """Página para carregar StockSAP/plan e ver o estado das refs."""
+    from app.cross_check import refs_cumulative
+    refs = get_watcher().get_refs()
+    status = get_watcher().status()
+    return templates.TemplateResponse(request, "refs.html", {
+        "refs_status": status,
+        "stats": refs.get("stats", {}),
+        "cumulative": refs_cumulative.stats(),
+        "revalidation": dict(_revalidation_state),
+        "sap_file_date": _fmt_mtime(status.get("sap", {}).get("mtime")),
+        "plan_file_date": _fmt_mtime(status.get("plan", {}).get("mtime")),
+        "flash_ok": request.query_params.get("ok"),
+        "flash_err": request.query_params.get("err"),
+        "active_tab": "refs",
+    })
+
+
+@app.post("/refs/upload")
+async def refs_upload(
+    kind: str = Form(...),
+    file: UploadFile = File(...),
+) -> Response:
+    """Recebe um StockSAP.xlsx / plan_colunas_cpis.xlsx, valida-o, substitui
+    o ficheiro vivo, funde no histórico cumulativo e dispara a re-validação."""
+    from app.cross_check import refs_cumulative
+    if kind not in _REFS_FILENAMES:
+        raise HTTPException(400, "kind inválido")
+    if not file.filename:
+        return RedirectResponse("/refs?err=sem+ficheiro", status_code=303)
+    if Path(file.filename).suffix.lower() not in (".xlsx", ".xlsm"):
+        return RedirectResponse(
+            "/refs?err=o+ficheiro+tem+de+ser+.xlsx", status_code=303)
+
+    watcher = get_watcher()
+    target = watcher.sap_path if kind == "stocksap" else watcher.plan_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # Temp file keeps the .xlsx suffix — openpyxl validates by extension.
+    tmp = target.with_name(f"{target.stem}.upload-tmp{target.suffix}")
+
+    bytes_written = 0
+    with tmp.open("wb") as f:
+        while chunk := await file.read(1024 * 1024):
+            bytes_written += len(chunk)
+            if bytes_written > _MAX_UPLOAD_BYTES:
+                f.close()
+                tmp.unlink(missing_ok=True)
+                return RedirectResponse(
+                    "/refs?err=ficheiro+demasiado+grande", status_code=303)
+            f.write(chunk)
+
+    err = _validate_refs_xlsx(tmp, kind)
+    if err:
+        tmp.unlink(missing_ok=True)
+        return RedirectResponse(
+            f"/refs?err=ficheiro+rejeitado:+{err}", status_code=303)
+
+    counter = "n_ofs" if kind == "plan" else "n_lotes"
+    n_before = refs_cumulative.stats()[counter]
+    # os.replace falha se o ficheiro vivo estiver aberto (ex.: Excel) — tenta
+    # algumas vezes antes de desistir com um erro claro.
+    replaced = False
+    for _ in range(5):
+        try:
+            os.replace(tmp, target)
+            replaced = True
+            break
+        except PermissionError:
+            await asyncio.sleep(0.3)
+    if not replaced:
+        tmp.unlink(missing_ok=True)
+        return RedirectResponse(
+            "/refs?err=ficheiro+em+uso+-+fecha+o+Excel+e+tenta+outra+vez",
+            status_code=303)
+    get_watcher().force_reload()  # re-mina + funde no histórico cumulativo
+    n_after = refs_cumulative.stats()[counter]
+    refs_cumulative.record_upload(kind, target.name, n_before, n_after)
+
+    # Re-validação cross-check de todas as folhas, em background. Marca já
+    # running=True (sob lock) para a página, ao redirecionar, mostrar logo
+    # a faixa de progresso sem corrida com o arranque da thread.
+    spawn = False
+    with _revalidation_lock:
+        if not _revalidation_state["running"]:
+            _revalidation_state.update(
+                running=True, done=0, total=0, finished_at=None,
+                started_at=dt.datetime.now().isoformat(timespec="seconds"),
+            )
+            spawn = True
+    if spawn:
+        threading.Thread(target=_revalidate_all_sheets_bg, daemon=True).start()
+
+    added = max(0, n_after - n_before)
+    return RedirectResponse(
+        f"/refs?ok={kind}+atualizado+(%2B{added})", status_code=303)
+
+
+@app.get("/refs/revalidation-status", response_class=HTMLResponse)
+def refs_revalidation_status(request: Request) -> Response:
+    """Fragmento HTMX com o progresso da re-validação cross-check."""
+    return templates.TemplateResponse(request, "_refs_revalidation.html", {
+        "revalidation": dict(_revalidation_state),
     })
 
 

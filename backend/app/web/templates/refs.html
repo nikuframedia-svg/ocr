@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}Refs SAP & Plan{% endblock %}
+{% block content %}
+
+<div class="page-h">
+  <div>
+    <div class="page-eyebrow">Inteligência</div>
+    <h1 class="page-title">Refs SAP &amp; Plan</h1>
+  </div>
+</div>
+
+<div class="page-content">
+
+  {% if flash_ok %}
+  <div class="refs-flash ok">✓ {{ flash_ok }}</div>
+  {% endif %}
+  {% if flash_err %}
+  <div class="refs-flash err">✕ {{ flash_err }}</div>
+  {% endif %}
+
+  {# ---- Estado atual ---- #}
+  <div class="card" style="margin-bottom:14px;">
+    <div class="card-h">
+      <div class="card-h-title">Estado das refs</div>
+      <div class="card-h-sub">
+        a base de dados acumula todo o histórico — uma OF/lote nunca se perde,
+        mesmo que saia do export mais recente
+      </div>
+    </div>
+    <div class="card-b">
+      <div class="refs-status">
+        <div class="refs-stat">
+          <div class="refs-stat-name">plan_colunas_cpis.xlsx</div>
+          <div class="refs-stat-big">{{ cumulative.n_ofs }}</div>
+          <div class="refs-stat-lbl">OFs acumuladas (histórico)</div>
+          <div class="refs-stat-sub">
+            ficheiro atual: <b>{{ stats.get('n_ofs_file', 0) }}</b> OFs ·
+            {{ stats.get('n_clientes', 0) }} clientes ·
+            {{ stats.get('n_plan_rows', 0) }} linhas
+          </div>
+          <div class="refs-stat-sub muted">atualizado: {{ plan_file_date }}</div>
+        </div>
+        <div class="refs-stat">
+          <div class="refs-stat-name">StockSAP.xlsx</div>
+          <div class="refs-stat-big">{{ cumulative.n_lotes }}</div>
+          <div class="refs-stat-lbl">lotes acumulados (histórico)</div>
+          <div class="refs-stat-sub">
+            ficheiro atual: <b>{{ stats.get('n_lotes_file', 0) }}</b> lotes
+          </div>
+          <div class="refs-stat-sub muted">atualizado: {{ sap_file_date }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ---- Re-validação em curso ---- #}
+  {% include "_refs_revalidation.html" %}
+
+  {# ---- Uploads ---- #}
+  <div class="refs-uploads">
+    <div class="card">
+      <div class="card-h">
+        <div class="card-h-title">Carregar plano</div>
+        <div class="card-h-sub">plan_colunas_cpis.xlsx — OFs, OVs, clientes</div>
+      </div>
+      <div class="card-b">
+        <form method="post" action="/refs/upload" enctype="multipart/form-data"
+              class="refs-form">
+          <input type="hidden" name="kind" value="plan">
+          <input type="file" name="file" accept=".xlsx,.xlsm" required>
+          <button class="btn primary" type="submit">Carregar plano</button>
+        </form>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-h">
+        <div class="card-h-title">Carregar StockSAP</div>
+        <div class="card-h-sub">StockSAP.xlsx — lotes, espessura, largura</div>
+      </div>
+      <div class="card-b">
+        <form method="post" action="/refs/upload" enctype="multipart/form-data"
+              class="refs-form">
+          <input type="hidden" name="kind" value="stocksap">
+          <input type="file" name="file" accept=".xlsx,.xlsm" required>
+          <button class="btn primary" type="submit">Carregar StockSAP</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  {# ---- Histórico de uploads ---- #}
+  <div class="card" style="margin-top:14px;">
+    <div class="card-h">
+      <div class="card-h-title">Últimas atualizações</div>
+      <div class="card-h-sub">cada upload soma os registos novos ao histórico</div>
+    </div>
+    <div class="card-b">
+      {% if not cumulative.uploads %}
+      <div class="muted">Ainda não há uploads registados.</div>
+      {% else %}
+      <table class="refs-log">
+        <thead>
+          <tr><th>Data</th><th>Ficheiro</th><th>Tipo</th>
+              <th class="num">Adicionados</th><th class="num">Total</th></tr>
+        </thead>
+        <tbody>
+          {% for u in cumulative.uploads %}
+          <tr>
+            <td>{{ u.at[:16].replace('T', ' ') }}</td>
+            <td>{{ u.filename }}</td>
+            <td>{{ 'Plano' if u.kind == 'plan' else 'StockSAP' }}</td>
+            <td class="num">+{{ u.added }}</td>
+            <td class="num">{{ u.total }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+{% endblock %}

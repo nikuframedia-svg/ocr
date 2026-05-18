@@ -26,6 +26,7 @@
 {% set is_trends = active_tab is defined and active_tab == 'trends' %}
 {% set is_alerts = active_tab is defined and active_tab == 'alerts' %}
 {% set is_learnings = path.startswith('/learnings') %}
+{% set is_refs = path.startswith('/refs') %}
 {% set is_downtime = active_tab is defined and active_tab == 'downtime' %}
 {% set is_nesting = active_tab is defined and active_tab == 'nesting' %}
 <div class="app">
@@ -92,6 +93,10 @@
     <a class="sb-item {% if is_learnings %}active{% endif %}" href="/learnings">
       <span class="sb-num">✦</span>
       <span>Aprendizagens</span>
+    </a>
+    <a class="sb-item {% if is_refs %}active{% endif %}" href="/refs">
+      <span class="sb-num">⤓</span>
+      <span>Refs SAP</span>
     </a>
 
     <div class="sb-section">Notificações</div>
