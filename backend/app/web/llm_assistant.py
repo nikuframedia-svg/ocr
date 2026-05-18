@@ -20,6 +20,8 @@ import re
 import httpx
 
 from app.config import get_settings
+from app.cross_check import storage as cc_storage
+from app.cross_check.ref_watcher import get_watcher
 from app.learning import metrics, store
 from app.web import attractors, db
 
@@ -29,10 +31,150 @@ _CHAT_TIMEOUT_S = 120.0
 _MAX_HISTORY = 12
 
 
-def build_data_dossier() -> dict:
+# A bare run of 4-7 digits — candidate OF or OV. Membership against the
+# real plan decides which (or neither). Lotes: NNB... with optional prefix.
+_NUM_TOKEN_RE = re.compile(r"\b\d{4,7}\b")
+_LOTE_TOKEN_RE = re.compile(r"\b[A-Za-z]?\d{2}[Bb]\d{1,6}\b")
+
+
+def _get_refs() -> dict:
+    """Live SAP+plan refs, or {} on any failure (Excel parse, missing
+    file). Never raises into the chat path."""
+    try:
+        return get_watcher().get_refs() or {}
+    except Exception:  # ref watcher / openpyxl — optional context
+        logger.warning("ref watcher unavailable for LLM dossier", exc_info=True)
+        return {}
+
+
+def _plan_db_stats(refs: dict) -> dict:
+    """Top-level shape of the SAP+plan database — so the LLM knows the
+    data exists and how big it is, even before any specific lookup."""
+    stats = refs.get("stats") or {}
+    clientes = sorted(refs.get("clientes_plan") or [])
+    return {
+        "n_ofs": stats.get("n_ofs", 0),
+        "n_ovs": stats.get("n_ovs", 0),
+        "n_clientes": stats.get("n_clientes", 0),
+        "n_lotes_stocksap": stats.get("n_lotes", 0),
+        "n_linhas_plan": stats.get("n_plan_rows", 0),
+        "n_modelos": stats.get("n_modelos_fts", 0),
+        "clientes_amostra": clientes[:30],
+        "carregado_em": refs.get("loaded_at"),
+    }
+
+
+def _lookup_refs(user_message: str, refs: dict) -> dict:
+    """Resolve OF / OV / lote / cliente identifiers mentioned in the
+    user's message against the real plan_colunas + StockSAP data.
+
+    The local model can't tool-call, so instead of giving it the whole
+    10k-OF database we inject only the records it actually asked about.
+    Returns {} when nothing matches."""
+    msg = user_message or ""
+    of_to_entries: dict = refs.get("of_to_entries") or {}
+    of_to_ovs: dict = refs.get("of_to_ovs") or {}
+    ovs_plan = refs.get("ovs_plan") or frozenset()
+    lotes_full: dict = refs.get("lotes_sap_full") or {}
+    plan_by_cliente: dict = refs.get("plan_by_cliente") or {}
+
+    ofs_out: list = []
+    ovs_out: list = []
+    lotes_out: list = []
+    clientes_out: list = []
+
+    for tok in sorted(set(_NUM_TOKEN_RE.findall(msg))):
+        if tok in of_to_entries and len(ofs_out) < 6:
+            entries = of_to_entries[tok]
+            ofs_out.append({
+                "of": tok,
+                "ovs": sorted(of_to_ovs.get(tok, [])),
+                "n_linhas_plan": len(entries),
+                "linhas": entries[:8],
+            })
+        if tok in ovs_plan and len(ovs_out) < 4:
+            ofs_for = sorted(
+                of for of, ovset in of_to_ovs.items() if tok in ovset)
+            ovs_out.append({"ov": tok, "ofs": ofs_for[:25]})
+
+    for tok in sorted(set(_LOTE_TOKEN_RE.findall(msg))):
+        key = tok.upper()
+        rec = lotes_full.get(key) or lotes_full.get(key.lstrip("M"))
+        if rec and len(lotes_out) < 6:
+            lotes_out.append({"lote": key, **rec})
+
+    msg_up = msg.upper()
+    for cli in sorted(plan_by_cliente):
+        if len(cli) >= 4 and cli in msg_up and len(clientes_out) < 3:
+            entries = plan_by_cliente[cli]
+            ofs_cli = sorted({e.get("_of", "") for e in entries if e.get("_of")})
+            clientes_out.append({
+                "cliente": cli,
+                "n_linhas_plan": len(entries),
+                "ofs_amostra": ofs_cli[:25],
+            })
+
+    out = {
+        "ofs": ofs_out, "ovs": ovs_out,
+        "lotes": lotes_out, "clientes": clientes_out,
+    }
+    return {k: v for k, v in out.items() if v}
+
+
+def _cross_check_dossier(user_message: str = "") -> dict:
+    """Real cross-check + SAP/plan facts the assistant must reason over:
+    how accurate the OCR actually is, the NO_MATCH inbox, the shape of
+    the plan database, and the specific OF/OV/lote/cliente records the
+    user asked about. Every part degrades to absent on failure (no 500s).
+    """
+    out: dict = {}
+    try:
+        summary = cc_storage.load_summary()
+        totals = summary.get("totals", {}) or {}
+        m = totals.get("match", 0) or 0
+        nm = totals.get("no_match", 0) or 0
+        denom = m + nm
+        out["totals"] = {"match": m, "no_match": nm, "na": totals.get("na", 0)}
+        out["match_rate"] = round(m / denom, 4) if denom else None
+        out["n_sheets"] = summary.get("n_sheets", 0)
+        by_op: dict[str, float] = {}
+        for op, t in (summary.get("by_operador") or {}).items():
+            d = (t.get("match", 0) or 0) + (t.get("no_match", 0) or 0)
+            if d:
+                by_op[op] = round((t.get("no_match", 0) or 0) / d, 4)
+        out["error_rate_by_operador"] = by_op
+    except OSError:
+        pass
+    try:
+        inbox = cc_storage.load_to_analisar(limit=15)
+        out["no_match_total"] = inbox.get("total", 0)
+        out["no_match_sample"] = [
+            {
+                "sheet_id": it.get("sheet_id"),
+                "field": it.get("field"),
+                "ocr_value": it.get("value"),
+                "sap_value": it.get("plan_value"),
+                "reason": it.get("reason"),
+            }
+            for it in inbox.get("items", [])
+        ]
+    except OSError:
+        pass
+    refs = _get_refs()
+    if refs:
+        out["plan_db"] = _plan_db_stats(refs)
+        consultas = _lookup_refs(user_message, refs)
+        if consultas:
+            out["consultas"] = consultas
+    return out
+
+
+def build_data_dossier(user_message: str = "") -> dict:
     """Pre-aggregate the system state the LLM is allowed to reason over.
 
-    Only top-N aggregates — never raw rows — so the prompt stays small.
+    Mostly top-N aggregates so the prompt stays small; the SAP/plan part
+    is resolved on demand from ``user_message`` (only the OFs/OVs/lotes
+    the user named are injected — never the whole 10k-OF database).
     """
     with db.conn() as c:
         status_counts = {
@@ -50,12 +192,16 @@ def build_data_dossier() -> dict:
             "scope": a["scope"],
             "label": a["label"],
             "correction_count": a["correction_count"],
-            "error_rate": a["error_rate"],
+            "cc_error_rate": a["cc_error_rate"],
+            "cc_match": a["cc_match"],
+            "cc_no_match": a["cc_no_match"],
+            "review_rate": a["review_rate"],
             "severity": a["severity"],
             "top_confusions": a["top_confusions"][:3],
         })
     return {
         "sheets_by_status": status_counts,
+        "cross_check": _cross_check_dossier(user_message),
         "corrections_per_sheet_latest": metrics.corrections_per_sheet(),
         "corrections_trend": metrics.corrections_trend()[-12:],
         "attractors": attractor_rows,
@@ -97,8 +243,37 @@ Respondes SEMPRE e SÓ com um objeto JSON com esta estrutura exata:
   ]
 }}
 
+DADOS REAIS — como ler o dossier:
+- A EXATIDÃO REAL do OCR está em "cross_check": "match_rate" é a taxa de
+  acerto (célula a célula contra as refs SAP). A taxa de erro real é
+  1 − match_rate (tipicamente <1%). "no_match_sample" traz as células que
+  o OCR leu mal — com o valor lido ("ocr_value") e o valor certo do plano
+  SAP ("sap_value").
+- "cross_check.plan_db" é a BD REAL de fabrico, minerada dos ficheiros
+  plan_colunas_cpis.xlsx e StockSAP.xlsx: número de OFs, OVs, clientes,
+  lotes e linhas do plano, com uma amostra de clientes.
+- "cross_check.consultas" traz os REGISTOS REAIS das OFs/OVs/lotes/clientes
+  que o utilizador mencionou na pergunta: "ofs" (linhas do plano dessa OF —
+  cliente, ov, designação, esp, comprimentos, material), "ovs" (que OFs
+  têm essa OV), "lotes" (qtd/esp/larg do StockSAP), "clientes" (linhas e
+  OFs desse cliente). Responde SEMPRE a partir destes dados — NUNCA
+  inventes OFs, OVs ou lotes. Se o utilizador perguntar por uma OF/OV/lote
+  e ela NÃO estiver em "consultas", diz que não existe no plano/StockSAP.
+- Nos "attractors", "cc_error_rate" é a taxa de erro REAL desse campo/
+  template/operador (do cross-check). "review_rate" é a fração de folhas
+  que precisaram de UM retoque humano — é CARGA DE REVISÃO, NÃO erro.
+  NUNCA digas "100% de erro" a partir do "review_rate": um campo pode ter
+  review_rate alto e mesmo assim ter o OCR quase sempre certo. Quando
+  falares de qualidade/erro usa SEMPRE o cross-check (match_rate /
+  cc_error_rate).
+
 Regras:
-- "reply" é obrigatório e é texto simples — SEM HTML, SEM markdown, sem tags.
+- "reply" é OBRIGATÓRIO e traz SEMPRE uma explicação clara (2 a 5 frases) —
+  mesmo quando devolves um gráfico ou uma regra, explicas o que estás a
+  mostrar e porquê.
+- "reply" é escrito em **Markdown** (português de Portugal): parágrafos
+  curtos, **negrito** nos números e nomes-chave, listas com "- " quando
+  enumeras. NÃO uses HTML nem tags. NÃO uses cabeçalhos maiores que "###".
 - "charts" e "proposed_rules" podem ser listas vazias [].
 - Inclui "charts" só quando um gráfico ajuda mesmo, e NUNCA com menos de 2
   valores (um gráfico de 1 barra é inútil — mete o número no texto).
@@ -140,7 +315,8 @@ def chat(user_message: str, history: list[dict] | None = None) -> dict:
     """Run one chat turn. Always returns an envelope dict with keys
     ``reply``, ``charts`` and ``proposed_rules``."""
     settings = get_settings()
-    dossier = json.dumps(build_data_dossier(), ensure_ascii=False, default=str)
+    dossier = json.dumps(
+        build_data_dossier(user_message), ensure_ascii=False, default=str)
     messages: list[dict] = [
         {"role": "system", "content": _SYSTEM_TEMPLATE.format(dossier=dossier)}
     ]
@@ -203,8 +379,10 @@ def _parse_envelope(raw: str) -> dict:
         return _envelope_fallback(str(obj))
     charts = obj.get("charts")
     rules = obj.get("proposed_rules")
-    # Strip any HTML tags the model may have slipped into the reply.
-    reply = re.sub(r"<[^>]+>", "", str(obj.get("reply") or "")).strip()
+    # Strip real HTML tags the model may slip in (it should send Markdown).
+    # The pattern matches only tag-like spans so a stray "<" in maths text
+    # (e.g. "comp < 500mm") is left untouched.
+    reply = re.sub(r"</?[a-zA-Z][^>]*>", "", str(obj.get("reply") or "")).strip()
     return {
         "reply": reply,
         "charts": charts if isinstance(charts, list) else [],

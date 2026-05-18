@@ -278,6 +278,28 @@ def load_to_analisar(limit: int | None = None) -> dict:
         return {"total": 0, "items": []}
 
 
+def iter_sheet_cross_checks() -> list[dict]:
+    """Read every per-sheet cross-check JSON listed in the index.
+
+    Returns the full per-sheet payloads (sheet_id, operador, date, summary,
+    rows, header, footer, to_analisar, ...). Used by the attractors module
+    to aggregate real MATCH/NO_MATCH counts per field/template/operador.
+    Missing or corrupt files are skipped silently.
+    """
+    raw = _read_index()
+    sheets = raw.get("sheets", raw) if isinstance(raw, dict) and "sheets" in raw else raw
+    out: list[dict] = []
+    for entry in sheets.values():
+        sheet_file = _base_dir() / entry["file"]
+        if not sheet_file.exists():
+            continue
+        try:
+            out.append(json.loads(sheet_file.read_text(encoding="utf-8")))
+        except (json.JSONDecodeError, OSError):
+            continue
+    return out
+
+
 def load_sheet_cross_check(sheet_id: int) -> dict | None:
     """Read the per-sheet cross-check JSON. Returns None if not found."""
     raw = _read_index()
