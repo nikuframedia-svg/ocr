@@ -1,0 +1,3321 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Histórico — Metalogalva OCR</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Caveat:wght@500;700&display=swap">
+  <link rel="stylesheet" href="/static/design.css">
+  <script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
+  <script src="https://unpkg.com/alpinejs@3.13.10/dist/cdn.min.js" defer></script>
+</head>
+
+<body class="desktop">
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="app">
+  
+  <aside class="sidebar">
+    <div class="sb-brand">
+      <div class="sb-brand-title">Metalogalva</div>
+      <div class="sb-brand-sub">OCR · Captura · Inteligência</div>
+    </div>
+
+    <div class="sb-section">Chão de Fábrica</div>
+    <a class="sb-item " href="/capture">
+      <span class="sb-num">01</span>
+      <span>Captura</span>
+    </a>
+    <a class="sb-item " href="/kanbans">
+      <span class="sb-num">02</span>
+      <span>Kanban Viewer</span>
+    </a>
+    <a class="sb-item active" href="/queue">
+      <span class="sb-num">03</span>
+      <span>Histórico</span>
+    </a>
+    <a class="sb-item " href="/pair">
+      <span class="sb-num">↗</span>
+      <span>Pair telemóvel</span>
+    </a>
+    <a class="sb-item " href="/excel">
+      <span class="sb-num">⬇</span>
+      <span>Excel</span>
+    </a>
+
+    <div class="sb-section">Dashboards</div>
+    <a class="sb-item " href="/dashboard/production">
+      <span class="sb-num">★</span>
+      <span>Produção</span>
+    </a>
+    <a class="sb-item " href="/dashboard">
+      <span class="sb-num">03</span>
+      <span>Hoje</span>
+    </a>
+    <a class="sb-item " href="/dashboard/workers">
+      <span class="sb-num">04</span>
+      <span>Trabalhador</span>
+    </a>
+    <a class="sb-item " href="/dashboard/jobs">
+      <span class="sb-num">05</span>
+      <span>Obra</span>
+    </a>
+    <a class="sb-item " href="/dashboard/trends">
+      <span class="sb-num">06</span>
+      <span>Tendências</span>
+    </a>
+    <a class="sb-item " href="/dashboard/downtime">
+      <span class="sb-num">⏸</span>
+      <span>Paragens</span>
+    </a>
+    <a class="sb-item " href="/dashboard/nesting">
+      <span class="sb-num">▱</span>
+      <span>Nesting</span>
+    </a>
+
+    <div class="sb-section">Notificações</div>
+    <a class="sb-item " href="/dashboard/alerts">
+      <span class="sb-num">07</span>
+      <span>Alertas</span>
+    </a>
+
+    <div class="sb-foot">
+      MVP · v1.0<br>
+      
+    </div>
+  </aside>
+  
+
+  <main class="main">
+    
+    
+    <div class="topbar"
+         style="display:flex; justify-content:flex-end; align-items:center;
+                gap:10px; padding:10px 24px; border-bottom:1px solid var(--rule-2);
+                background:var(--bg-1, #fff); position:sticky; top:0; z-index:50;">
+      <button class="btn primary" type="button"
+              @click="$dispatch('open-export-modal')" x-data>
+        ⬇ Exportar Excel
+      </button>
+    </div>
+    
+    
+<div class="page-h">
+  <div>
+    <div class="page-eyebrow">Chão de Fábrica · Histórico</div>
+    <h1 class="page-title">Folhas Kanban</h1>
+  </div>
+  <a class="btn primary" href="/capture">+ Nova captura</a>
+</div>
+
+<div id="dash-data" class="page-content"
+     hx-get="http://127.0.0.1:8080/queue"
+     hx-trigger="every 30s"
+     hx-select="#dash-data"
+     hx-swap="outerHTML">
+  <div style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap; align-items:center;">
+    
+      <a href="/queue?"
+         class="btn primary">Todas</a>
+    
+      <a href="/queue?status=extracted"
+         class="btn ">Pendentes</a>
+    
+      <a href="/queue?status=validated"
+         class="btn ">Validadas</a>
+    
+      <a href="/queue?status=error"
+         class="btn ">Erro</a>
+    
+  </div>
+
+  
+  <form method="get" action="/queue"
+        style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:16px;">
+    
+
+    <label style="display:inline-flex; align-items:center; gap:6px;">
+      <span class="lbl" style="margin:0;">OPERADOR</span>
+      <select name="operador" class="kv-select" onchange="this.form.submit()">
+        <option value="">— Todos —</option>
+        
+          <option value="Ana Maria" >Ana Maria</option>
+        
+          <option value="ANDRE SILVA" >ANDRE SILVA</option>
+        
+          <option value="CARLOS COSTA" >CARLOS COSTA</option>
+        
+          <option value="CARLOS MAIA" >CARLOS MAIA</option>
+        
+          <option value="Daniel Nordeon" >Daniel Nordeon</option>
+        
+          <option value="GAGANDEEP SINGH" >GAGANDEEP SINGH</option>
+        
+          <option value="GASPARINI" >GASPARINI</option>
+        
+          <option value="HARJINDER BAL" >HARJINDER BAL</option>
+        
+          <option value="HARJINDER SINGH" >HARJINDER SINGH</option>
+        
+          <option value="HELDER FERNANDES" >HELDER FERNANDES</option>
+        
+          <option value="HELENA FERNANDEZ" >HELENA FERNANDEZ</option>
+        
+          <option value="HEORHII POSTEVKA" >HEORHII POSTEVKA</option>
+        
+          <option value="Jker" >Jker</option>
+        
+          <option value="JOAO LOPES" >JOAO LOPES</option>
+        
+          <option value="JORGE CARNEIRO" >JORGE CARNEIRO</option>
+        
+          <option value="JORGE MAIA" >JORGE MAIA</option>
+        
+          <option value="JOSE MONTEIRO" >JOSE MONTEIRO</option>
+        
+          <option value="Jose Naga" >Jose Naga</option>
+        
+          <option value="Juan Pablo Chataub." >Juan Pablo Chataub.</option>
+        
+          <option value="MANJIT SINGH" >MANJIT SINGH</option>
+        
+          <option value="MANPREET SINGH" >MANPREET SINGH</option>
+        
+          <option value="MANUEL LIMA" >MANUEL LIMA</option>
+        
+          <option value="MARCO MENDES" >MARCO MENDES</option>
+        
+          <option value="NUNO MARTINS" >NUNO MARTINS</option>
+        
+          <option value="PAULO MONTEIRO" >PAULO MONTEIRO</option>
+        
+          <option value="PEDRO PINTO" >PEDRO PINTO</option>
+        
+          <option value="PRABHJOT SINGH" >PRABHJOT SINGH</option>
+        
+          <option value="RAFAEL NASCIMENTO" >RAFAEL NASCIMENTO</option>
+        
+          <option value="RICARDO COSTA" >RICARDO COSTA</option>
+        
+          <option value="Rui Silva" >Rui Silva</option>
+        
+          <option value="Sandeep Singh" >Sandeep Singh</option>
+        
+          <option value="SATNAM SINGH" >SATNAM SINGH</option>
+        
+          <option value="Sthony Soub" >Sthony Soub</option>
+        
+          <option value="SUKHDEEP SEKHON" >SUKHDEEP SEKHON</option>
+        
+          <option value="SUKHJINDER SINGH" >SUKHJINDER SINGH</option>
+        
+          <option value="SYED ADNAN" >SYED ADNAN</option>
+        
+          <option value="VITOR CARVALHO" >VITOR CARVALHO</option>
+        
+          <option value="VITOR CAVALHO" >VITOR CAVALHO</option>
+        
+          <option value="VOLODYMYR BILYK" >VOLODYMYR BILYK</option>
+        
+          <option value="YOGENDRA YOGENDRA" >YOGENDRA YOGENDRA</option>
+        
+      </select>
+    </label>
+
+    <label style="display:inline-flex; align-items:center; gap:6px;">
+      <span class="lbl" style="margin:0;">DATA</span>
+      <input type="date" name="data" value=""
+             class="kv-select" onchange="this.form.submit()">
+    </label>
+
+    <label style="display:inline-flex; align-items:center; gap:6px;">
+      <span class="lbl" style="margin:0;">SETOR</span>
+      <select name="setor" class="kv-select" onchange="this.form.submit()">
+        <option value="">— Todos —</option>
+        
+          <option value="BOBINE-FORMATO" >BOBINE-FORMATO</option>
+        
+          <option value="EXPEDIÇÃO" >EXPEDIÇÃO</option>
+        
+          <option value="GASPARINI" >GASPARINI</option>
+        
+          <option value="GUIFIL" >GUIFIL</option>
+        
+          <option value="GUILHOTINA" >GUILHOTINA</option>
+        
+          <option value="HPE32" >HPE32</option>
+        
+          <option value="LASER" >LASER</option>
+        
+          <option value="LINHA DE CORTE" >LINHA DE CORTE</option>
+        
+          <option value="MANUAL" >MANUAL</option>
+        
+          <option value="QUINADORA PAV.4" >QUINADORA PAV.4</option>
+        
+          <option value="ROBOT" >ROBOT</option>
+        
+          <option value="SOLDLINE 4" >SOLDLINE 4</option>
+        
+      </select>
+    </label>
+
+    <label style="display:inline-flex; align-items:center; gap:6px;">
+      <span class="lbl" style="margin:0;">OF</span>
+      <input type="text" name="of" value=""
+             class="kv-select" style="min-width:120px;"
+             placeholder="ex.: 261699">
+      <button class="btn" type="submit">Filtrar</button>
+    </label>
+
+    
+  </form>
+
+  
+  
+<div class="cc-legend"
+     style="display:flex; gap:14px 18px; flex-wrap:wrap;
+            align-items:center; font-size:11px; padding:8px 12px;
+            background:var(--paper); border:1px solid var(--rule);
+            border-radius:4px; margin-bottom:12px;">
+  <span class="lbl" style="margin:0;">LEGENDA</span>
+  <span style="display:inline-flex; align-items:center; gap:8px;">
+    <span class="legend-swatch cc-match"></span>
+    <span>MATCH — bate plan/SAP</span>
+  </span>
+  <span style="display:inline-flex; align-items:center; gap:8px;">
+    <span class="legend-swatch cc-warn"></span>
+    <span>Dim / Lote — verificar (Δ acima da tolerância ou lote ausente em SAP)</span>
+  </span>
+  <span style="display:inline-flex; align-items:center; gap:8px;">
+    <span class="legend-swatch cc-no-match"></span>
+    <span>NO_MATCH — operator ≠ ref</span>
+  </span>
+  <span style="display:inline-flex; align-items:center; gap:8px;">
+    <span class="legend-swatch cc-na-suspended"></span>
+    <span>Stub-accept — outros campos OK, este pendente</span>
+  </span>
+  <span style="display:inline-flex; align-items:center; gap:8px;">
+    <span class="legend-swatch cc-na"></span>
+    <span>NA — sem ref para validar</span>
+  </span>
+  
+  <span style="display:inline-flex; align-items:center; gap:8px;">
+    <span class="cc-snapped-mark"
+          style="width:14px; text-align:center; vertical-align:baseline;
+                 font-size:13px; opacity:1;">*</span>
+    <span>Valor corrigido automaticamente pelo cross-check</span>
+  </span>
+</div>
+
+  <div class="card">
+    <div class="scroll-x">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Capturada</th>
+            <th>Operador</th>
+            <th>Template</th>
+            <th>Estado</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          
+          <tr>
+            <td class="mono"><b>185</b></td>
+            <td class="muted tiny">2026-05-15 13:15:17</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: HPE32">
+                hpe32
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/185?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #185? Acção irreversível.')) {
+                                fetch('/sheet/185/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>184</b></td>
+            <td class="muted tiny">2026-05-15 13:15:17</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: HPE32">
+                hpe32
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/184?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #184? Acção irreversível.')) {
+                                fetch('/sheet/184/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>183</b></td>
+            <td class="muted tiny">2026-05-15 11:15:23</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/183?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #183? Acção irreversível.')) {
+                                fetch('/sheet/183/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>182</b></td>
+            <td class="muted tiny">2026-05-15 11:15:23</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GUILHOTINA">
+                guilhotina
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/182?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #182? Acção irreversível.')) {
+                                fetch('/sheet/182/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>181</b></td>
+            <td class="muted tiny">2026-05-15 11:15:23</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: EXPEDIÇÃO">
+                expedicao
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/181?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #181? Acção irreversível.')) {
+                                fetch('/sheet/181/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>180</b></td>
+            <td class="muted tiny">2026-05-15 09:43:06</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GUIFIL">
+                guifil
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/180?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #180? Acção irreversível.')) {
+                                fetch('/sheet/180/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>179</b></td>
+            <td class="muted tiny">2026-05-15 09:43:06</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GUIFIL">
+                guifil
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/179?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #179? Acção irreversível.')) {
+                                fetch('/sheet/179/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>178</b></td>
+            <td class="muted tiny">2026-05-15 09:43:06</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GUIFIL">
+                guifil
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/178?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #178? Acção irreversível.')) {
+                                fetch('/sheet/178/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>177</b></td>
+            <td class="muted tiny">2026-05-15 09:41:21</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GUILHOTINA">
+                guilhotina
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/177?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #177? Acção irreversível.')) {
+                                fetch('/sheet/177/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>176</b></td>
+            <td class="muted tiny">2026-05-15 09:41:21</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GUILHOTINA">
+                guilhotina
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/176?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #176? Acção irreversível.')) {
+                                fetch('/sheet/176/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>175</b></td>
+            <td class="muted tiny">2026-05-15 09:41:20</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GUILHOTINA">
+                guilhotina
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/175?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #175? Acção irreversível.')) {
+                                fetch('/sheet/175/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>174</b></td>
+            <td class="muted tiny">2026-05-15 09:39:40</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GASPARINI">
+                gasparini
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/174?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #174? Acção irreversível.')) {
+                                fetch('/sheet/174/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>173</b></td>
+            <td class="muted tiny">2026-05-15 09:39:40</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GASPARINI">
+                gasparini
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/173?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #173? Acção irreversível.')) {
+                                fetch('/sheet/173/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>172</b></td>
+            <td class="muted tiny">2026-05-15 09:39:40</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: HPE32">
+                hpe32
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/172?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #172? Acção irreversível.')) {
+                                fetch('/sheet/172/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>171</b></td>
+            <td class="muted tiny">2026-05-15 09:39:40</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: HPE32">
+                hpe32
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/171?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #171? Acção irreversível.')) {
+                                fetch('/sheet/171/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>170</b></td>
+            <td class="muted tiny">2026-05-15 09:36:29</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: QUINADORA PAV.4">
+                pav.4 paragens
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/170?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #170? Acção irreversível.')) {
+                                fetch('/sheet/170/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>169</b></td>
+            <td class="muted tiny">2026-05-15 09:36:29</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: QUINADORA PAV.4">
+                pav.4 paragens
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/169?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #169? Acção irreversível.')) {
+                                fetch('/sheet/169/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>168</b></td>
+            <td class="muted tiny">2026-05-15 09:36:29</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: ">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill crit">erro</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/168?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #168? Acção irreversível.')) {
+                                fetch('/sheet/168/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>167</b></td>
+            <td class="muted tiny">2026-05-15 09:33:27</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: ROBOT">
+                robot
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/167?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #167? Acção irreversível.')) {
+                                fetch('/sheet/167/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>166</b></td>
+            <td class="muted tiny">2026-05-15 09:33:27</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: ROBOT">
+                robot
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/166?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #166? Acção irreversível.')) {
+                                fetch('/sheet/166/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>165</b></td>
+            <td class="muted tiny">2026-05-15 09:33:27</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: ROBOT">
+                robot
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/165?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #165? Acção irreversível.')) {
+                                fetch('/sheet/165/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>164</b></td>
+            <td class="muted tiny">2026-05-15 09:32:37</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: EXPEDIÇÃO">
+                expedicao
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/164?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #164? Acção irreversível.')) {
+                                fetch('/sheet/164/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>163</b></td>
+            <td class="muted tiny">2026-05-15 09:32:37</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: EXPEDIÇÃO">
+                expedicao
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/163?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #163? Acção irreversível.')) {
+                                fetch('/sheet/163/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>162</b></td>
+            <td class="muted tiny">2026-05-15 09:32:36</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: EXPEDIÇÃO">
+                expedicao
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/162?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #162? Acção irreversível.')) {
+                                fetch('/sheet/162/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>161</b></td>
+            <td class="muted tiny">2026-05-15 09:32:19</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: SOLDLINE 4">
+                soldline
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/161?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #161? Acção irreversível.')) {
+                                fetch('/sheet/161/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>160</b></td>
+            <td class="muted tiny">2026-05-15 09:24:39</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: LASER">
+                laser
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/160?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #160? Acção irreversível.')) {
+                                fetch('/sheet/160/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>159</b></td>
+            <td class="muted tiny">2026-05-15 09:24:39</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: LASER">
+                laser
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/159?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #159? Acção irreversível.')) {
+                                fetch('/sheet/159/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>158</b></td>
+            <td class="muted tiny">2026-05-15 09:24:39</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: LASER">
+                laser
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/158?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #158? Acção irreversível.')) {
+                                fetch('/sheet/158/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>157</b></td>
+            <td class="muted tiny">2026-05-15 09:24:38</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/157?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #157? Acção irreversível.')) {
+                                fetch('/sheet/157/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>156</b></td>
+            <td class="muted tiny">2026-05-15 09:24:38</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/156?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #156? Acção irreversível.')) {
+                                fetch('/sheet/156/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>155</b></td>
+            <td class="muted tiny">2026-05-14 09:28:37</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GASPARINI">
+                gasparini
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/155?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #155? Acção irreversível.')) {
+                                fetch('/sheet/155/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>154</b></td>
+            <td class="muted tiny">2026-05-14 09:28:37</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GASPARINI">
+                gasparini
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/154?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #154? Acção irreversível.')) {
+                                fetch('/sheet/154/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>153</b></td>
+            <td class="muted tiny">2026-05-14 09:28:37</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GASPARINI">
+                gasparini
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/153?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #153? Acção irreversível.')) {
+                                fetch('/sheet/153/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>152</b></td>
+            <td class="muted tiny">2026-05-14 09:16:02</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: EXPEDIÇÃO">
+                expedicao
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/152?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #152? Acção irreversível.')) {
+                                fetch('/sheet/152/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>151</b></td>
+            <td class="muted tiny">2026-05-14 09:15:00</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: ">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill crit">erro</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/151?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #151? Acção irreversível.')) {
+                                fetch('/sheet/151/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>150</b></td>
+            <td class="muted tiny">2026-05-14 09:15:00</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: ">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill crit">erro</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/150?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #150? Acção irreversível.')) {
+                                fetch('/sheet/150/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>149</b></td>
+            <td class="muted tiny">2026-05-14 09:14:59</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: ">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill crit">erro</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/149?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #149? Acção irreversível.')) {
+                                fetch('/sheet/149/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>148</b></td>
+            <td class="muted tiny">2026-05-14 08:25:39</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GUIFIL">
+                guifil
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/148?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #148? Acção irreversível.')) {
+                                fetch('/sheet/148/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>147</b></td>
+            <td class="muted tiny">2026-05-14 08:25:39</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GUIFIL">
+                guifil
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/147?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #147? Acção irreversível.')) {
+                                fetch('/sheet/147/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>146</b></td>
+            <td class="muted tiny">2026-05-14 08:25:39</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GUIFIL">
+                guifil
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/146?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #146? Acção irreversível.')) {
+                                fetch('/sheet/146/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>145</b></td>
+            <td class="muted tiny">2026-05-14 08:20:51</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: EXPEDIÇÃO">
+                expedicao
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/145?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #145? Acção irreversível.')) {
+                                fetch('/sheet/145/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>143</b></td>
+            <td class="muted tiny">2026-05-14 08:15:40</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: EXPEDIÇÃO">
+                expedicao
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/143?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #143? Acção irreversível.')) {
+                                fetch('/sheet/143/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>142</b></td>
+            <td class="muted tiny">2026-05-14 08:15:40</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: EXPEDIÇÃO">
+                expedicao
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/142?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #142? Acção irreversível.')) {
+                                fetch('/sheet/142/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>141</b></td>
+            <td class="muted tiny">2026-05-14 08:06:15</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: MANUAL">
+                manual
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/141?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #141? Acção irreversível.')) {
+                                fetch('/sheet/141/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>140</b></td>
+            <td class="muted tiny">2026-05-14 08:06:15</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: ROBOT">
+                robot
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/140?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #140? Acção irreversível.')) {
+                                fetch('/sheet/140/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>139</b></td>
+            <td class="muted tiny">2026-05-14 08:06:15</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: ROBOT">
+                robot
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/139?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #139? Acção irreversível.')) {
+                                fetch('/sheet/139/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>138</b></td>
+            <td class="muted tiny">2026-05-14 08:06:15</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: ROBOT">
+                robot
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/138?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #138? Acção irreversível.')) {
+                                fetch('/sheet/138/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>137</b></td>
+            <td class="muted tiny">2026-05-14 08:06:14</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: ROBOT">
+                robot
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/137?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #137? Acção irreversível.')) {
+                                fetch('/sheet/137/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>130</b></td>
+            <td class="muted tiny">2026-05-14 07:55:28</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: LASER">
+                laser
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/130?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #130? Acção irreversível.')) {
+                                fetch('/sheet/130/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>129</b></td>
+            <td class="muted tiny">2026-05-14 07:55:28</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: LASER">
+                laser
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/129?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #129? Acção irreversível.')) {
+                                fetch('/sheet/129/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>128</b></td>
+            <td class="muted tiny">2026-05-14 07:55:27</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: LASER">
+                laser
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/128?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #128? Acção irreversível.')) {
+                                fetch('/sheet/128/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>127</b></td>
+            <td class="muted tiny">2026-05-14 07:55:27</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: SOLDLINE 4">
+                soldline
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/127?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #127? Acção irreversível.')) {
+                                fetch('/sheet/127/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>126</b></td>
+            <td class="muted tiny">2026-05-14 07:55:27</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: SOLDLINE 4">
+                soldline
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/126?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #126? Acção irreversível.')) {
+                                fetch('/sheet/126/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>122</b></td>
+            <td class="muted tiny">2026-05-14 07:47:09</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: LINHA DE CORTE">
+                linha corte
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/122?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #122? Acção irreversível.')) {
+                                fetch('/sheet/122/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>121</b></td>
+            <td class="muted tiny">2026-05-14 07:47:09</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GUILHOTINA">
+                guilhotina
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/121?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #121? Acção irreversível.')) {
+                                fetch('/sheet/121/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>120</b></td>
+            <td class="muted tiny">2026-05-14 07:47:09</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GUILHOTINA">
+                guilhotina
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/120?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #120? Acção irreversível.')) {
+                                fetch('/sheet/120/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>119</b></td>
+            <td class="muted tiny">2026-05-14 07:47:09</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GUILHOTINA">
+                guilhotina
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/119?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #119? Acção irreversível.')) {
+                                fetch('/sheet/119/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>118</b></td>
+            <td class="muted tiny">2026-05-14 07:44:07</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/118?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #118? Acção irreversível.')) {
+                                fetch('/sheet/118/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>117</b></td>
+            <td class="muted tiny">2026-05-14 07:44:07</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/117?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #117? Acção irreversível.')) {
+                                fetch('/sheet/117/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>116</b></td>
+            <td class="muted tiny">2026-05-14 07:44:07</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/116?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #116? Acção irreversível.')) {
+                                fetch('/sheet/116/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>115</b></td>
+            <td class="muted tiny">2026-05-14 07:28:23</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: HPE32">
+                hpe32
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/115?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #115? Acção irreversível.')) {
+                                fetch('/sheet/115/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>114</b></td>
+            <td class="muted tiny">2026-05-14 07:04:14</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: ">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill crit">erro</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/114?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #114? Acção irreversível.')) {
+                                fetch('/sheet/114/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>113</b></td>
+            <td class="muted tiny">2026-05-14 07:04:14</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: ">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/113?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #113? Acção irreversível.')) {
+                                fetch('/sheet/113/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>112</b></td>
+            <td class="muted tiny">2026-05-14 07:04:14</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: ">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill crit">erro</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/112?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #112? Acção irreversível.')) {
+                                fetch('/sheet/112/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>111</b></td>
+            <td class="muted tiny">2026-05-13 11:59:31</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GUIFIL">
+                guifil
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/111?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #111? Acção irreversível.')) {
+                                fetch('/sheet/111/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>110</b></td>
+            <td class="muted tiny">2026-05-13 11:01:27</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/110?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #110? Acção irreversível.')) {
+                                fetch('/sheet/110/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>109</b></td>
+            <td class="muted tiny">2026-05-13 11:01:27</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: LASER">
+                laser
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/109?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #109? Acção irreversível.')) {
+                                fetch('/sheet/109/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>108</b></td>
+            <td class="muted tiny">2026-05-13 11:01:27</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: LASER">
+                laser
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/108?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #108? Acção irreversível.')) {
+                                fetch('/sheet/108/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>107</b></td>
+            <td class="muted tiny">2026-05-13 10:51:05</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GUIFIL">
+                guifil
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/107?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #107? Acção irreversível.')) {
+                                fetch('/sheet/107/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>106</b></td>
+            <td class="muted tiny">2026-05-13 10:51:05</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: HPE32">
+                hpe32
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/106?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #106? Acção irreversível.')) {
+                                fetch('/sheet/106/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>105</b></td>
+            <td class="muted tiny">2026-05-13 10:51:05</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: ROBOT">
+                robot
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/105?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #105? Acção irreversível.')) {
+                                fetch('/sheet/105/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>104</b></td>
+            <td class="muted tiny">2026-05-13 10:34:06</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/104?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #104? Acção irreversível.')) {
+                                fetch('/sheet/104/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>103</b></td>
+            <td class="muted tiny">2026-05-13 10:34:06</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/103?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #103? Acção irreversível.')) {
+                                fetch('/sheet/103/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>102</b></td>
+            <td class="muted tiny">2026-05-13 10:34:05</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/102?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #102? Acção irreversível.')) {
+                                fetch('/sheet/102/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>101</b></td>
+            <td class="muted tiny">2026-05-13 10:33:54</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/101?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #101? Acção irreversível.')) {
+                                fetch('/sheet/101/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>100</b></td>
+            <td class="muted tiny">2026-05-13 10:19:19</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: ">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill crit">erro</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/100?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #100? Acção irreversível.')) {
+                                fetch('/sheet/100/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>99</b></td>
+            <td class="muted tiny">2026-05-13 10:17:10</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: ">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill crit">erro</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/99?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #99? Acção irreversível.')) {
+                                fetch('/sheet/99/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>98</b></td>
+            <td class="muted tiny">2026-05-13 10:14:23</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: LASER">
+                laser
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/98?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #98? Acção irreversível.')) {
+                                fetch('/sheet/98/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>97</b></td>
+            <td class="muted tiny">2026-05-13 10:12:06</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: ">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill crit">erro</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/97?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #97? Acção irreversível.')) {
+                                fetch('/sheet/97/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>96</b></td>
+            <td class="muted tiny">2026-05-13 09:39:22</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GUILHOTINA">
+                guilhotina
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/96?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #96? Acção irreversível.')) {
+                                fetch('/sheet/96/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>95</b></td>
+            <td class="muted tiny">2026-05-13 09:38:50</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GUILHOTINA">
+                guilhotina
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/95?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #95? Acção irreversível.')) {
+                                fetch('/sheet/95/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>94</b></td>
+            <td class="muted tiny">2026-05-13 09:38:34</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GUILHOTINA">
+                guilhotina
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/94?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #94? Acção irreversível.')) {
+                                fetch('/sheet/94/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>93</b></td>
+            <td class="muted tiny">2026-05-13 09:36:14</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GUILHOTINA">
+                guilhotina
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/93?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #93? Acção irreversível.')) {
+                                fetch('/sheet/93/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>92</b></td>
+            <td class="muted tiny">2026-05-13 08:47:00</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/92?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #92? Acção irreversível.')) {
+                                fetch('/sheet/92/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>91</b></td>
+            <td class="muted tiny">2026-05-13 08:46:35</td>
+            <td>VITOR CARVALHO</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/91?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #91? Acção irreversível.')) {
+                                fetch('/sheet/91/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>90</b></td>
+            <td class="muted tiny">2026-05-13 08:16:07</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/90?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #90? Acção irreversível.')) {
+                                fetch('/sheet/90/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>89</b></td>
+            <td class="muted tiny">2026-05-13 08:15:33</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/89?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #89? Acção irreversível.')) {
+                                fetch('/sheet/89/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>88</b></td>
+            <td class="muted tiny">2026-05-13 07:40:46</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/88?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #88? Acção irreversível.')) {
+                                fetch('/sheet/88/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>87</b></td>
+            <td class="muted tiny">2026-05-13 07:40:29</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/87?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #87? Acção irreversível.')) {
+                                fetch('/sheet/87/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>86</b></td>
+            <td class="muted tiny">2026-05-13 07:39:09</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GUILHOTINA">
+                guilhotina
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/86?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #86? Acção irreversível.')) {
+                                fetch('/sheet/86/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>85</b></td>
+            <td class="muted tiny">2026-05-13 07:38:51</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/85?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #85? Acção irreversível.')) {
+                                fetch('/sheet/85/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>84</b></td>
+            <td class="muted tiny">2026-05-13 07:38:34</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/84?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #84? Acção irreversível.')) {
+                                fetch('/sheet/84/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>83</b></td>
+            <td class="muted tiny">2026-05-13 07:04:21</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/83?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #83? Acção irreversível.')) {
+                                fetch('/sheet/83/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>79</b></td>
+            <td class="muted tiny">2026-05-12 16:43:19</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/79?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #79? Acção irreversível.')) {
+                                fetch('/sheet/79/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>78</b></td>
+            <td class="muted tiny">2026-05-12 16:41:32</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/78?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #78? Acção irreversível.')) {
+                                fetch('/sheet/78/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>77</b></td>
+            <td class="muted tiny">2026-05-12 16:37:59</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: GUILHOTINA">
+                guilhotina
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/77?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #77? Acção irreversível.')) {
+                                fetch('/sheet/77/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>76</b></td>
+            <td class="muted tiny">2026-05-12 11:57:37</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/76?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #76? Acção irreversível.')) {
+                                fetch('/sheet/76/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>75</b></td>
+            <td class="muted tiny">2026-05-12 10:59:30</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/75?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #75? Acção irreversível.')) {
+                                fetch('/sheet/75/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>74</b></td>
+            <td class="muted tiny">2026-05-12 10:57:35</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/74?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #74? Acção irreversível.')) {
+                                fetch('/sheet/74/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+          <tr>
+            <td class="mono"><b>73</b></td>
+            <td class="muted tiny">2026-05-12 10:57:16</td>
+            <td>—</td>
+            <td>
+              
+              
+              <span class="pill neutral mono" style="font-size:10px;"
+                    title="Setor/Máquina: BOBINE-FORMATO">
+                bobine formato
+              </span>
+            </td>
+            <td>
+              
+                <span class="pill warn">pendente</span>
+              
+            </td>
+            <td style="text-align:right; white-space:nowrap;">
+              <a href="/sheet/73?back=/queue" class="btn ghost">abrir</a>
+              
+              <button class="btn ghost" style="color:var(--crit); border-color:var(--crit-soft);"
+                      onclick="if (confirm('Apagar folha #73? Acção irreversível.')) {
+                                fetch('/sheet/73/delete', {method: 'POST'})
+                                  .then(r => r.ok ? window.location.reload() : alert('Erro: ' + r.status));
+                              }">apagar</button>
+            </td>
+          </tr>
+          
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+  </main>
+</div>
+
+
+
+<div x-data="exportModal()" @open-export-modal.window="open()" x-cloak>
+  <div x-show="visible" @click.self="visible=false"
+       style="position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:100;
+              display:flex; align-items:center; justify-content:center; padding:20px;">
+    <div class="card" style="max-width:520px; width:100%; padding:24px;">
+      <h2 style="margin:0 0 4px 0; font-size:20px;">Export Excel</h2>
+      <p class="muted tiny" style="margin:0 0 18px 0;">
+        Resumo: múltiplas folhas (1 aba "Resumo" + 1 aba por dia com sub-tabelas por operador).<br>
+        CPIS: folha única com 17 colunas para migração (MigracaoNikufraCPIS).
+      </p>
+      <form x-ref="exportForm" method="get" style="display:flex; flex-direction:column; gap:12px;">
+        
+        <div>
+          <div class="lbl">PERÍODO</div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            <template x-for="p in presets" :key="p.label">
+              <button type="button" class="btn"
+                      :class="{ 'primary': activePreset === p.label }"
+                      style="font-size:12px; padding:6px 10px;"
+                      @click="applyPreset(p)"
+                      x-text="p.label"></button>
+            </template>
+          </div>
+        </div>
+        <div style="display:flex; gap:10px;">
+          <label style="flex:1;">
+            <div class="lbl">DE</div>
+            <input type="date" name="date_from" :value="dateFrom"
+                   :disabled="!dateFrom"
+                   @change="dateFrom=$event.target.value; activePreset=null"
+                   style="width:100%; padding:8px; border:1px solid var(--rule-2); border-radius:6px;">
+          </label>
+          <label style="flex:1;">
+            <div class="lbl">ATÉ</div>
+            <input type="date" name="date_to" :value="dateTo"
+                   :disabled="!dateTo"
+                   @change="dateTo=$event.target.value; activePreset=null"
+                   style="width:100%; padding:8px; border:1px solid var(--rule-2); border-radius:6px;">
+          </label>
+        </div>
+        <label>
+          <div class="lbl">SETOR (opcional)</div>
+          <select name="sector" style="width:100%; padding:8px; border:1px solid var(--rule-2); border-radius:6px;">
+            <option value="">— Todos —</option>
+            
+              <option value="Bobine Formato">Bobine Formato</option>
+            
+              <option value="Corte">Corte</option>
+            
+              <option value="Quinadora">Quinadora</option>
+            
+              <option value="Soldadura">Soldadura</option>
+            
+              <option value="Abertura Portinholas">Abertura Portinholas</option>
+            
+              <option value="Acabamento">Acabamento</option>
+            
+              <option value="Expedição">Expedição</option>
+            
+          </select>
+        </label>
+        <label>
+          <div class="lbl">OPERADOR (opcional)</div>
+          <select name="operador" style="width:100%; padding:8px; border:1px solid var(--rule-2); border-radius:6px;">
+            <option value="">— Todos —</option>
+            <option value="AUGUSTO MONTEIRO">AUGUSTO MONTEIRO</option>
+            <option value="JÚLIO LIMA">JÚLIO LIMA</option>
+            <option value="VITOR CARVALHO">VITOR CARVALHO</option>
+          </select>
+        </label>
+        <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:8px;">
+          <button type="button" class="btn" @click="visible=false">Cancelar</button>
+          <button type="submit" class="btn"
+                  @click="$refs.exportForm.action='/export/cpis'">CPIS (migração)</button>
+          <button type="submit" class="btn primary"
+                  @click="$refs.exportForm.action='/export'">Resumo</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+<script>
+function exportModal() {
+  return {
+    visible: false,
+    dateFrom: '',
+    dateTo: '',
+    activePreset: '1 mês',
+    presets: [
+      { label: '1 dia',     days: 1 },
+      { label: '1 semana',  days: 7 },
+      { label: '1 mês',     days: 30 },
+      { label: '3 meses',   days: 90 },
+      { label: '6 meses',   days: 180 },
+      { label: '1 ano',     days: 365 },
+      { label: 'Sempre',    days: null },
+    ],
+    applyPreset(p) {
+      // R69: "Sempre" preset clears both dates (= no date filter)
+      if (p.days === null) {
+        this.dateFrom = '';
+        this.dateTo = '';
+      } else {
+        const today = new Date();
+        const t = today.toISOString().substring(0, 10);
+        const ago = new Date(today.getTime() - p.days * 86400000)
+                      .toISOString().substring(0, 10);
+        this.dateFrom = ago;
+        this.dateTo = t;
+      }
+      this.activePreset = p.label;
+    },
+    open() {
+      // Default preset: 1 mês
+      this.applyPreset(this.presets[2]);
+      this.visible = true;
+    }
+  };
+}
+</script>
+
+
+
+
+<div x-data="liveBanner(185)"
+     @htmx:before-request.window="onBefore()"
+     @htmx:after-request.window="onAfter($event)">
+
+  
+  <div x-show="newCount > 0" x-cloak
+       @click="window.location.reload()"
+       style="position:fixed; top:16px; left:50%; transform:translateX(-50%);
+              background:var(--ink); color:var(--paper); padding:10px 18px;
+              border-radius:99px; font-size:13px; font-weight:500; cursor:pointer;
+              z-index:50; box-shadow:0 4px 14px rgba(0,0,0,0.18); display:flex;
+              align-items:center; gap:8px;">
+    <span class="dot ok"></span>
+    <span x-text="newCount === 1 ? '1 folha nova — clica para ver' : (newCount + ' folhas novas — clica para ver')"></span>
+  </div>
+
+  
+  <div class="live-pulse" :class="{ refreshing: refreshing }">
+    <span class="live-pulse-dot"></span>
+    <span x-show="!refreshing">Live · auto-refresh 30s</span>
+    <span x-show="refreshing" x-cloak>A actualizar…</span>
+  </div>
+</div>
+
+<script>
+function liveBanner(initialWatermark) {
+  return {
+    initialWatermark: initialWatermark,
+    refreshing: false,
+    newCount: 0,
+    onBefore() { this.refreshing = true; },
+    onAfter(ev) {
+      this.refreshing = false;
+      // Read X-Sheet-Watermark from the response if present
+      const xhr = ev.detail && ev.detail.xhr;
+      if (!xhr) return;
+      const wm = parseInt(xhr.getResponseHeader('X-Sheet-Watermark') || '0', 10);
+      if (wm > this.initialWatermark) {
+        this.newCount = wm - this.initialWatermark;
+      }
+    },
+  };
+}
+</script>
+
+</body>
+</html>

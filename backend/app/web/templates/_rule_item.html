@@ -1,0 +1,75 @@
+{# One learning card. Expects `r` (a learnings row dict). Self-contained
+   so the /learnings/rules route can return it standalone. #}
+{% set KIND_LABELS = {
+  'cliente_alias': 'alias cliente',
+  'operador_alias': 'alias operador',
+  'modelo_alias': 'alias modelo',
+  'confusion_pair': 'confusão OCR',
+  'observed_value': 'valor novo',
+  'fewshot_example': 'exemplo few-shot',
+  'snap_rule': 'regra de snap',
+} %}
+{% set STATUS_LABELS = {
+  'quarantine': 'em quarentena',
+  'approved': 'aprovada',
+  'rejected': 'rejeitada',
+  'superseded': 'substituída',
+} %}
+<div class="lr-rule {{ r.status }}" id="rule-{{ r.id }}" x-data="{ editing: false }">
+  <div class="lr-rule-main">
+    <div class="lr-rule-desc">
+      <span class="lr-badge {{ r.status }}">{{ KIND_LABELS.get(r.kind, r.kind) }}</span>
+      {% if r.kind in ['cliente_alias', 'operador_alias', 'modelo_alias'] %}
+        <span class="mono">{{ r.payload.get('from', '?') }}</span> &rarr;
+        <span class="mono">{{ r.payload.get('to', '?') }}</span>
+      {% elif r.kind == 'confusion_pair' %}
+        o OCR lê <span class="mono">{{ r.payload.get('ocr_char', '?') }}</span>
+        onde devia ler <span class="mono">{{ r.payload.get('gold_char', '?') }}</span>
+        (peso {{ r.payload.get('weight', '?') }})
+      {% elif r.kind == 'observed_value' %}
+        novo {{ r.payload.get('field', 'valor') }}:
+        <span class="mono">{{ r.payload.get('value', '?') }}</span>
+      {% elif r.kind == 'fewshot_example' %}
+        folha #{{ r.payload.get('sheet_id', '?') }} ·
+        {{ r.payload.get('template_name', r.template_name or '?') }}
+      {% else %}
+        <span class="mono">{{ r.payload }}</span>
+      {% endif %}
+    </div>
+    <div class="lr-rule-meta">
+      <span class="lr-evidence">{{ r.evidence_count }} correç{{ 'ão' if r.evidence_count == 1 else 'ões' }} de suporte</span>
+      · {{ STATUS_LABELS.get(r.status, r.status) }}
+      · risco {{ r.risk }} · origem {{ r.origin }}
+      {% if r.decided_by %}· decidida por {{ r.decided_by }}{% endif %}
+      {% if r.note %}<br><em>{{ r.note }}</em>{% endif %}
+    </div>
+    <form x-show="editing" x-cloak class="lr-edit"
+          hx-post="/learnings/rules/{{ r.id }}/edit"
+          hx-target="#rule-{{ r.id }}" hx-swap="outerHTML">
+      {% if r.kind in ['cliente_alias', 'operador_alias', 'modelo_alias'] %}
+        <input name="to" value="{{ r.payload.get('to', '') }}" placeholder="valor correto">
+      {% elif r.kind == 'confusion_pair' %}
+        <input name="weight" value="{{ r.payload.get('weight', '') }}" placeholder="peso 0–1">
+      {% elif r.kind == 'observed_value' %}
+        <input name="value" value="{{ r.payload.get('value', '') }}" placeholder="valor">
+      {% endif %}
+      <input name="note" placeholder="nota (opcional)">
+      <button class="btn primary" type="submit">Guardar</button>
+      <button class="btn" type="button" @click="editing = false">Cancelar</button>
+    </form>
+  </div>
+  <div class="lr-rule-actions" x-show="!editing">
+    {% if r.status in ['quarantine', 'rejected'] %}
+      <button class="btn primary" hx-post="/learnings/rules/{{ r.id }}/approve"
+              hx-target="#rule-{{ r.id }}" hx-swap="outerHTML">Aprovar</button>
+    {% endif %}
+    {% if r.status in ['quarantine', 'approved'] %}
+      <button class="btn" hx-post="/learnings/rules/{{ r.id }}/reject"
+              hx-target="#rule-{{ r.id }}" hx-swap="outerHTML">Rejeitar</button>
+    {% endif %}
+    <button class="btn" type="button" @click="editing = true">Editar</button>
+    <button class="btn" hx-post="/learnings/rules/{{ r.id }}/delete"
+            hx-confirm="Apagar esta aprendizagem definitivamente?"
+            hx-target="#rule-{{ r.id }}" hx-swap="outerHTML">Apagar</button>
+  </div>
+</div>

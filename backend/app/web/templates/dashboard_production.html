@@ -19,8 +19,12 @@
     </div>
     <input type="hidden" name="period" value="{{ period }}">
     <label class="lbl" style="margin:0;">DATA</label>
+    {# R92: min/max + checkValidity contra anos absurdos. #}
     <input type="date" name="date" value="{{ date_filter or '' }}"
-           class="kv-select" onchange="this.form.submit()">
+           min="2024-01-01" max="2030-12-31"
+           placeholder="aaaa-mm-dd" pattern="\d{4}-\d{2}-\d{2}"
+           class="kv-select"
+           onchange="if (this.checkValidity()) this.form.submit()">
   </form>
 </div>
 
@@ -44,10 +48,23 @@
       <div class="prod-tot-label">HORAS TRAB.</div>
       <div class="prod-tot-value">{{ overview.totals.hours }}</div>
     </div>
+    {# R72 — 4 cards (consumido vs produzido + nº chapas + % desperdício) #}
     <div class="prod-tot-card">
-      <div class="prod-tot-label">TONELADAS</div>
+      <div class="prod-tot-label">TON. CONSUMIDAS</div>
       <div class="prod-tot-value">
-        {% if overview.totals.toneladas is none %}—{% else %}{{ overview.totals.toneladas }}{% endif %}
+        {% if overview.totals.toneladas_consumido is none %}—{% else %}{{ overview.totals.toneladas_consumido }}{% endif %}
+      </div>
+    </div>
+    <div class="prod-tot-card">
+      <div class="prod-tot-label">TON. PRODUZIDAS</div>
+      <div class="prod-tot-value">
+        {% if overview.totals.toneladas_produzido is none %}—{% else %}{{ overview.totals.toneladas_produzido }}{% endif %}
+      </div>
+    </div>
+    <div class="prod-tot-card">
+      <div class="prod-tot-label">CHAPAS USADAS</div>
+      <div class="prod-tot-value">
+        {% if overview.totals.chapas_total is none %}—{% else %}{{ overview.totals.chapas_total }}{% endif %}
       </div>
     </div>
     <div class="prod-tot-card prod-tot-meta">

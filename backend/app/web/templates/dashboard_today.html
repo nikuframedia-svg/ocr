@@ -11,7 +11,11 @@
       <h1 class="page-title">Hoje</h1>
     </div>
     <form method="get" action="/dashboard" style="display:flex; gap:6px; align-items:center;">
-      <input type="date" name="date" value="{{ date_filter or '' }}">
+      {# R92: min/max contra anos absurdos (este form tem submit explícito,
+         logo basta a constraint browser-side). #}
+      <input type="date" name="date" value="{{ date_filter or '' }}"
+             min="2024-01-01" max="2030-12-31"
+             placeholder="aaaa-mm-dd" pattern="\d{4}-\d{2}-\d{2}">
       <button class="btn">Filtrar</button>
     </form>
   </div>

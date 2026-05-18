@@ -81,6 +81,24 @@ class Settings(BaseSettings):
         description="Log level threshold (DEBUG, INFO, WARNING, ERROR).",
     )
 
+    ollama_url: str = Field(
+        default="http://localhost:11434",
+        description=(
+            "Base URL of the Ollama server (no /v1 suffix). Used by the "
+            "/learnings LLM analyst via the native /api/chat endpoint. "
+            "Reads the OLLAMA_URL env var — the same server as the OCR."
+        ),
+    )
+    ollama_text_model: str = Field(
+        default="qwen3.5:9b",
+        description=(
+            "Text model for the /learnings LLM analyst (chat, attractor "
+            "analysis, reports). Defaults to qwen3.5:9b — the same model the "
+            "OCR already uses, so no extra download is needed. Override via "
+            "OLLAMA_TEXT_MODEL to point at a dedicated text model."
+        ),
+    )
+
     preprocess_enabled: bool = Field(
         default=False,
         description=(

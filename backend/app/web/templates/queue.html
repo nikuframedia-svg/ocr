@@ -15,29 +15,84 @@
      hx-trigger="every 30s"
      hx-select="#dash-data"
      hx-swap="outerHTML">
-  <div style="display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap; align-items:center;">
+  {# Status buttons preserve every active filter via querystring so users
+     can switch status without losing operador/data/setor/of. #}
+  {%- set _qs -%}
+    {%- if of_filter %}&of={{ of_filter|urlencode }}{% endif -%}
+    {%- if operador_filter %}&operador={{ operador_filter|urlencode }}{% endif -%}
+    {%- if data_filter %}&data={{ data_filter|urlencode }}{% endif -%}
+    {%- if setor_filter %}&setor={{ setor_filter|urlencode }}{% endif -%}
+  {%- endset -%}
+  {# R88: URL de origem completa para passar ao /sheet via ?back=. Permite
+     ao kanban ter botão "← Voltar à lista" que restaura os filtros. #}
+  {%- set _back_url -%}
+    /queue
+    {%- set _has_status = status_filter and status_filter != 'all' -%}
+    {%- if _has_status or _qs -%}?{% endif -%}
+    {%- if _has_status %}status={{ status_filter }}{% if _qs %}{{ _qs }}{% endif %}
+    {%- elif _qs %}{{ _qs[1:] }}{% endif -%}
+  {%- endset -%}
+  <div style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap; align-items:center;">
     {% for opt, label in [('all','Todas'), ('extracted','Pendentes'), ('validated','Validadas'), ('error','Erro')] %}
-      <a href="/queue?{% if opt != 'all' %}status={{ opt }}&{% endif %}{% if of_filter %}of={{ of_filter|urlencode }}{% endif %}"
+      <a href="/queue?{% if opt != 'all' %}status={{ opt }}{% endif %}{{ _qs }}"
          class="btn {% if status_filter == opt %}primary{% endif %}">{{ label }}</a>
     {% endfor %}
+  </div>
 
-    {# Round 36 — OF filter #}
-    <form method="get" action="/queue"
-          style="display:inline-flex; gap:6px; align-items:center; margin-left:auto;">
-      {% if status_filter and status_filter != 'all' %}
-        <input type="hidden" name="status" value="{{ status_filter }}">
-      {% endif %}
+  {# R81 — multi-filter form (operador / data / setor / of). Same widget
+     pattern as kanban_viewer.html. Dropdowns auto-submit onchange; OF
+     keeps the explicit Filtrar button since it's free text. #}
+  <form method="get" action="/queue"
+        style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:16px;">
+    {% if status_filter and status_filter != 'all' %}
+      <input type="hidden" name="status" value="{{ status_filter }}">
+    {% endif %}
+
+    <label style="display:inline-flex; align-items:center; gap:6px;">
+      <span class="lbl" style="margin:0;">OPERADOR</span>
+      <select name="operador" class="kv-select" onchange="this.form.submit()">
+        <option value="">— Todos —</option>
+        {% for op in operadores %}
+          <option value="{{ op }}" {% if op == operador_filter %}selected{% endif %}>{{ op }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label style="display:inline-flex; align-items:center; gap:6px;">
+      <span class="lbl" style="margin:0;">DATA</span>
+      {# R92: min/max evita anos absurdos (operador escreve 26 rápido e
+         o browser pode interpretar como ano 0026/0097). checkValidity()
+         só submete se o ano está no range razoável. #}
+      <input type="date" name="data" value="{{ data_filter or '' }}"
+             min="2024-01-01" max="2030-12-31"
+             placeholder="aaaa-mm-dd" pattern="\d{4}-\d{2}-\d{2}"
+             class="kv-select"
+             onchange="if (this.checkValidity()) this.form.submit()">
+    </label>
+
+    <label style="display:inline-flex; align-items:center; gap:6px;">
+      <span class="lbl" style="margin:0;">SETOR</span>
+      <select name="setor" class="kv-select" onchange="this.form.submit()">
+        <option value="">— Todos —</option>
+        {% for s in setores %}
+          <option value="{{ s }}" {% if s == setor_filter %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label style="display:inline-flex; align-items:center; gap:6px;">
       <span class="lbl" style="margin:0;">OF</span>
       <input type="text" name="of" value="{{ of_filter or '' }}"
-             class="kv-select" style="min-width:130px;"
+             class="kv-select" style="min-width:120px;"
              placeholder="ex.: 261699">
       <button class="btn" type="submit">Filtrar</button>
-      {% if of_filter %}
-        <a class="btn ghost" style="font-size:12px;"
-           href="/queue{% if status_filter and status_filter != 'all' %}?status={{ status_filter }}{% endif %}">✕</a>
-      {% endif %}
-    </form>
-  </div>
+    </label>
+
+    {% if operador_filter or data_filter or setor_filter or of_filter %}
+      <a class="btn ghost" style="font-size:12px;"
+         href="/queue{% if status_filter and status_filter != 'all' %}?status={{ status_filter }}{% endif %}">✕ Limpar filtros</a>
+    {% endif %}
+  </form>
 
   {# R58 — legenda das cores; ajuda o operador a entender cores ao
      abrir cada folha. Mesmo partial usado em /sheet/{id} e /kanbans. #}
@@ -61,7 +116,9 @@
           <tr>
             <td class="mono"><b>{{ s.id }}</b></td>
             <td class="muted tiny">{{ s.captured_at }}</td>
-            <td>{{ s.operador or '—' }}</td>
+            {# R89: fallback para o operador extraído pelo OCR quando a folha
+               ainda não foi validada (s.operador é populado só na validação). #}
+            <td>{{ s.operador or s.sheet_operador or '—' }}</td>
             <td>
               {# Round 54 — template badge: shows the template canonical
                  name (e.g. bobine_formato → "Bobine-Formato"). Legacy
@@ -85,7 +142,7 @@
               {% endif %}
             </td>
             <td style="text-align:right; white-space:nowrap;">
-              <a href="/sheet/{{ s.id }}" class="btn ghost">abrir</a>
+              <a href="/sheet/{{ s.id }}?back={{ _back_url|urlencode }}" class="btn ghost">abrir</a>
               {% if s.status == 'validated' %}
                 <a href="/sheet/{{ s.id }}/csv" class="btn ghost">csv</a>
               {% endif %}

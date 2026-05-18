@@ -1,0 +1,288 @@
+{% extends "base.html" %}
+{% block title %}Aprendizagens & Regras{% endblock %}
+{% block content %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+<div class="page-h">
+  <div>
+    <div class="page-eyebrow">Inteligência</div>
+    <h1 class="page-title">Aprendizagens & Regras</h1>
+  </div>
+</div>
+
+<script id="metric-trend-data" type="application/json">{{ metric_trend | tojson }}</script>
+<script id="attractors-data" type="application/json">{{ attractors | tojson }}</script>
+
+<div class="page-content" x-data="learningsPage()">
+  <div class="lr-tabs">
+    <button class="lr-tab" :class="{ active: tab === 'regras' }"
+            @click="tab = 'regras'">Regras &amp; Aprendizagens</button>
+    <button class="lr-tab" :class="{ active: tab === 'llm' }"
+            @click="tab = 'llm'">LLM</button>
+  </div>
+
+  {# ===================== TAB 1 — Regras ===================== #}
+  <div x-show="tab === 'regras'">
+    <form class="lr-toolbar" hx-get="/learnings/rules" hx-target="#lr-rules"
+          hx-swap="innerHTML" hx-trigger="change">
+      <select name="status">
+        <option value="">Todos os estados</option>
+        <option value="quarantine" {{ 'selected' if filter_status == 'quarantine' }}>Em quarentena</option>
+        <option value="approved" {{ 'selected' if filter_status == 'approved' }}>Aprovadas</option>
+        <option value="rejected" {{ 'selected' if filter_status == 'rejected' }}>Rejeitadas</option>
+      </select>
+      <select name="kind">
+        <option value="">Todos os tipos</option>
+        <option value="cliente_alias">Alias cliente</option>
+        <option value="operador_alias">Alias operador</option>
+        <option value="modelo_alias">Alias modelo</option>
+        <option value="confusion_pair">Confusão OCR</option>
+        <option value="observed_value">Valor novo</option>
+        <option value="fewshot_example">Exemplo few-shot</option>
+        <option value="snap_rule">Regra de snap</option>
+      </select>
+      <button class="btn primary" type="button"
+              hx-post="/learning/run" hx-target="#lr-rules" hx-swap="innerHTML"
+              hx-indicator="#mine-spin">Minerar agora</button>
+      <span id="mine-spin" class="htmx-indicator muted tiny">a minerar…</span>
+      <div class="lr-metric">
+        Correções por folha: <b>{{ metric_latest }}</b>
+        <span class="muted">· {{ counts.get('quarantine', 0) }} em quarentena</span>
+      </div>
+    </form>
+
+    {% if metric_trend %}
+    <div class="card" style="margin-bottom:14px;">
+      <div class="card-h"><div class="card-h-title">Correções humanas por folha — tendência</div></div>
+      <div class="card-b"><canvas id="metricChart" height="70"></canvas></div>
+    </div>
+    {% endif %}
+
+    <div id="lr-rules">
+      {% include "_learnings_rules.html" %}
+    </div>
+  </div>
+
+  {# ===================== TAB 2 — LLM ===================== #}
+  <div x-show="tab === 'llm'" x-cloak>
+    <div class="card" style="margin-bottom:14px;">
+      <div class="card-h">
+        <div class="card-h-title">Atratores de erro</div>
+        <div class="card-h-sub">onde as correções se concentram</div>
+      </div>
+      <div class="card-b">
+        {% if not attractors %}
+          <div class="muted">Sem correções suficientes para detetar atratores.</div>
+        {% else %}
+          <canvas id="attractorsChart" height="90" style="margin-bottom:14px;"></canvas>
+        {% endif %}
+        {% for a in attractors %}
+        <div class="lr-attractor">
+          <div class="lr-attractor-bar {{ a.severity }}"></div>
+          <div class="lr-attractor-main">
+            <div><b>{{ a.label }}</b> <span class="muted tiny">· {{ a.scope }}</span></div>
+            <div class="muted tiny">
+              {{ a.correction_count }} correções · taxa de erro {{ (a.error_rate * 100) | round(1) }}%
+              · severidade {{ a.severity }}
+            </div>
+          </div>
+          <button class="btn" type="button"
+                  @click="askAboutAttractor({{ a.label | tojson }})">Propor regra</button>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="lr-chat">
+      <div class="lr-chat-log" id="lr-chat-log">
+        <template x-if="messages.length === 0">
+          <div class="muted tiny" style="text-align:center; padding:20px;">
+            Pergunta o que quiseres sobre o sistema — análises, atratores,
+            gráficos ou relatórios. O assistente corre localmente no Ollama.
+          </div>
+        </template>
+        <template x-for="(msg, mi) in messages" :key="mi">
+          <div class="lr-msg" :class="msg.role">
+            <div x-text="msg.content"></div>
+            <template x-for="(chart, ci) in (msg.charts || [])" :key="ci">
+              <div class="lr-msg-chart">
+                <div class="tiny muted" x-text="chart.title || ''"></div>
+                <canvas :data-chart="JSON.stringify(chart)" height="160"></canvas>
+              </div>
+            </template>
+            <template x-for="(rule, ri) in (msg.proposed_rules || [])" :key="ri">
+              <div class="lr-proposed">
+                <div><b x-text="rule.kind"></b> <span x-text="'— ' + (rule.reason || '')"></span></div>
+                <div class="mono tiny" x-text="JSON.stringify(rule.payload || {})"></div>
+                <button class="btn primary" style="margin-top:6px;"
+                        x-show="!rule._added" @click="addRule(rule)">
+                  Adicionar ao Separador 1</button>
+                <span x-show="rule._added" class="lr-badge approved">
+                  Adicionada à quarentena</span>
+              </div>
+            </template>
+          </div>
+        </template>
+        <template x-if="loading">
+          <div class="lr-msg assistant muted">a pensar…</div>
+        </template>
+      </div>
+      <form class="lr-chat-input" @submit.prevent="send()">
+        <textarea x-model="input" rows="2"
+                  placeholder="Escreve a tua pergunta…"
+                  @keydown.enter.prevent="send()"></textarea>
+        <button class="btn primary" type="submit" :disabled="loading">Enviar</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+const LR_PALETTE = ['#D4A574', '#2D5B8A', '#2F7D43', '#B8841C', '#B53024', '#8A5F2D'];
+
+function learningsPage() {
+  return {
+    tab: 'regras',
+    messages: [],
+    input: '',
+    loading: false,
+    metricTrend: JSON.parse(
+      document.getElementById('metric-trend-data').textContent || '[]'),
+    attractorsData: JSON.parse(
+      document.getElementById('attractors-data').textContent || '[]'),
+    attractorsChartDone: false,
+
+    init() {
+      this.$nextTick(() => this.renderMetricChart());
+      // The attractors canvas lives in a hidden tab — Chart.js can't size a
+      // display:none canvas, so render it the first time the LLM tab opens.
+      this.$watch('tab', (v) => {
+        if (v === 'llm') this.$nextTick(() => this.renderAttractorsChart());
+      });
+    },
+
+    renderAttractorsChart() {
+      if (this.attractorsChartDone) return;
+      const el = document.getElementById('attractorsChart');
+      if (!el || !this.attractorsData.length || typeof Chart === 'undefined') return;
+      this.attractorsChartDone = true;
+      new Chart(el, {
+        type: 'bar',
+        data: {
+          labels: this.attractorsData.map(a => a.label),
+          datasets: [{
+            label: 'Correções',
+            data: this.attractorsData.map(a => a.correction_count),
+            backgroundColor: this.attractorsData.map(a =>
+              a.severity === 'alta' ? '#B53024'
+              : a.severity === 'media' ? '#B8841C' : '#2F7D43'),
+          }],
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          plugins: { legend: { display: false } },
+        },
+      });
+    },
+
+    renderMetricChart() {
+      const el = document.getElementById('metricChart');
+      if (!el || !this.metricTrend.length || typeof Chart === 'undefined') return;
+      new Chart(el, {
+        type: 'line',
+        data: {
+          labels: this.metricTrend.map(p => p.validated_count),
+          datasets: [{
+            label: 'Correções por folha',
+            data: this.metricTrend.map(p => p.corrections_per_sheet),
+            borderColor: '#D4A574',
+            backgroundColor: 'rgba(212,165,116,0.15)',
+            tension: 0.3, fill: true,
+          }],
+        },
+        options: { responsive: true, plugins: { legend: { display: false } } },
+      });
+    },
+
+    askAboutAttractor(label) {
+      this.tab = 'llm';
+      this.input = 'Analisa o atrator "' + label +
+        '" e propõe uma regra para o reduzir.';
+      this.$nextTick(() => this.send());
+    },
+
+    async send() {
+      const text = (this.input || '').trim();
+      if (!text || this.loading) return;
+      this.messages.push({ role: 'user', content: text });
+      this.input = '';
+      this.loading = true;
+      const history = this.messages
+        .filter(m => m.role === 'user' || m.role === 'assistant')
+        .map(m => ({ role: m.role, content: m.content }));
+      try {
+        const resp = await fetch('/learnings/llm/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text, history: history.slice(0, -1) }),
+        });
+        const env = await resp.json();
+        this.messages.push({
+          role: 'assistant',
+          content: env.reply || '(sem resposta)',
+          charts: env.charts || [],
+          proposed_rules: (env.proposed_rules || []).map(r => ({ ...r, _added: false })),
+        });
+      } catch (e) {
+        this.messages.push({
+          role: 'assistant',
+          content: 'Erro ao contactar o assistente.',
+        });
+      } finally {
+        this.loading = false;
+        this.$nextTick(() => this.renderCharts());
+      }
+    },
+
+    renderCharts() {
+      document.querySelectorAll('canvas[data-chart]:not([data-rendered])')
+        .forEach(el => {
+          el.setAttribute('data-rendered', '1');
+          if (typeof Chart === 'undefined') return;
+          try {
+            const spec = JSON.parse(el.getAttribute('data-chart'));
+            new Chart(el, {
+              type: spec.type || 'bar',
+              data: {
+                labels: spec.labels || [],
+                datasets: (spec.datasets || []).map((d, i) => ({
+                  label: d.label || '',
+                  data: d.data || [],
+                  backgroundColor: LR_PALETTE[i % LR_PALETTE.length],
+                  borderColor: LR_PALETTE[i % LR_PALETTE.length],
+                })),
+              },
+              options: { responsive: true },
+            });
+          } catch (e) { /* malformed spec — skip */ }
+        });
+      const log = document.getElementById('lr-chat-log');
+      if (log) log.scrollTop = log.scrollHeight;
+    },
+
+    async addRule(rule) {
+      try {
+        const resp = await fetch('/learnings/rules/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(rule),
+        });
+        const j = await resp.json();
+        rule._added = !!j.ok;
+      } catch (e) { /* ignore — button stays */ }
+    },
+  };
+}
+</script>
+{% endblock %}

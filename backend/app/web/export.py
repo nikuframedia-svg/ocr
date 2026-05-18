@@ -23,6 +23,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from app.dq.geometry import row_waste
+from app.templates_registry import detect_template
 
 from .db import conn
 from .kpis import _derive_cod_maquina
@@ -65,10 +66,46 @@ _FILL_OPERATOR = PatternFill("solid", fgColor="DCE6F1")
 _FILL_DAYHEAD = PatternFill("solid", fgColor="F0E2C9")
 
 
-def _query_rows(date_from: str, date_to: str, operador: str | None) -> list[dict]:
+def _filter_by_sector(rows: list[dict], sector: str | None) -> list[dict]:
+    """R69: post-filter rows whose detected template phase matches ``sector``.
+
+    Reuses the canonical ``detect_template()`` which already handles all
+    alias variants (exact + substring) — same logic as engine/UI/dashboards.
+    Rows with unknown setor_maquina fall back to bobine_formato → kept
+    only if ``sector`` is "Bobine Formato".
+    """
+    if not sector:
+        return rows
+    return [
+        r for r in rows
+        if detect_template(r.get("setor_maquina") or "").phase == sector
+    ]
+
+
+def _query_rows(
+    date_from: str | None,
+    date_to: str | None,
+    operador: str | None,
+    sector: str | None = None,
+) -> list[dict]:
     """Return all production_rows in [date_from, date_to] (inclusive),
-    optionally filtered by operador. Joined with sheets to get
-    setor_maquina + canonical sheets.operador (post-validate)."""
+    optionally filtered by operador and sector. Joined with sheets to get
+    setor_maquina + canonical sheets.operador (post-validate).
+
+    R69: dates may be None (= "sempre"); sector applied via post-filter
+    using ``detect_template`` (canonical alias matching).
+    """
+    where: list[str] = []
+    params: list = []
+    if date_from and date_to:
+        where.append("pr.sheet_iso_date BETWEEN ? AND ?")
+        params.extend([date_from, date_to])
+    if operador:
+        where.append(
+            "(UPPER(pr.operador) = UPPER(?) OR UPPER(s.operador) = UPPER(?))"
+        )
+        params.extend([operador, operador])
+
     sql = """
         SELECT pr.*,
                s.operador AS validated_operador,
@@ -77,17 +114,14 @@ def _query_rows(date_from: str, date_to: str, operador: str | None) -> list[dict
                json_extract(s.sheet_data, '$.footer.horas_trabalhadas') AS horas_trabalhadas
           FROM production_rows pr
           JOIN sheets s ON s.id = pr.sheet_id
-         WHERE pr.sheet_iso_date BETWEEN ? AND ?
     """
-    params: list = [date_from, date_to]
-    if operador:
-        # Match either denormalized operador or validated.operador
-        sql += " AND (UPPER(pr.operador) = UPPER(?) OR UPPER(s.operador) = UPPER(?))"
-        params.extend([operador, operador])
+    if where:
+        sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY pr.sheet_iso_date ASC, pr.operador ASC, pr.sheet_id ASC, pr.row_index ASC"
 
     with conn() as c:
-        return [dict(r) for r in c.execute(sql, params).fetchall()]
+        rows = [dict(r) for r in c.execute(sql, params).fetchall()]
+    return _filter_by_sector(rows, sector)
 
 
 def _operador_canon(row: dict) -> str:
@@ -110,8 +144,17 @@ def _style_cell(cell, *, bold=False, fill=None, align="left"):
     cell.alignment = Alignment(horizontal=align, vertical="center")
 
 
-def _write_resumo(ws, all_rows: list[dict], date_from: str, date_to: str) -> None:
-    """First sheet: period summary + per-day summary + per-operator summary."""
+def _write_resumo(
+    ws,
+    all_rows: list[dict],
+    date_from: str | None,
+    date_to: str | None,
+    sector: str | None = None,
+) -> None:
+    """First sheet: period summary + per-day summary + per-operator summary.
+
+    R69: shows "Sempre" when dates are None; adds a SETOR row when filtered.
+    """
     ws.title = "Resumo"
 
     # Title
@@ -120,8 +163,17 @@ def _write_resumo(ws, all_rows: list[dict], date_from: str, date_to: str) -> Non
     ws.merge_cells("A1:F1")
 
     ws["A2"] = "Período"
-    ws["B2"] = f"{_date_iso_to_pt(date_from)} a {_date_iso_to_pt(date_to)}"
+    if date_from and date_to:
+        ws["B2"] = f"{_date_iso_to_pt(date_from)} a {_date_iso_to_pt(date_to)}"
+    else:
+        ws["B2"] = "Sempre"
     ws["A2"].font = _FONT_BOLD
+
+    # R69: SETOR row when a sector filter is applied
+    if sector:
+        ws["A3"] = "Setor"
+        ws["B3"] = sector
+        ws["A3"].font = _FONT_BOLD
 
     # Aggregate
     total_qty = sum(r["qtd"] or 0 for r in all_rows)
@@ -278,13 +330,22 @@ def _write_day_sheet(wb: openpyxl.Workbook, day_iso: str, day_rows: list[dict]) 
         ws.column_dimensions[get_column_letter(ci)].width = w
 
 
-def export_excel(date_from: str, date_to: str, operador: str | None = None) -> bytes:
-    """Build and return the .xlsx file bytes for the given period."""
-    rows = _query_rows(date_from, date_to, operador)
+def export_excel(
+    date_from: str | None,
+    date_to: str | None,
+    operador: str | None = None,
+    sector: str | None = None,
+) -> bytes:
+    """Build and return the .xlsx file bytes for the given period.
+
+    R69: dates may be None (= "sempre"); sector is one of
+    ``PRODUCTION_SECTORS`` or None (= all sectors).
+    """
+    rows = _query_rows(date_from, date_to, operador, sector)
 
     wb = openpyxl.Workbook()
     ws = wb.active
-    _write_resumo(ws, rows, date_from, date_to)
+    _write_resumo(ws, rows, date_from, date_to, sector)
 
     # Group by day, write one sheet per day with data
     by_day: dict[str, list[dict]] = defaultdict(list)
@@ -299,15 +360,31 @@ def export_excel(date_from: str, date_to: str, operador: str | None = None) -> b
     return out.getvalue()
 
 
-def filename_for(date_from: str, date_to: str, operador: str | None = None) -> str:
-    """Slugged filename for the download."""
+def _slugify(value: str) -> str:
+    """Lowercase, replace whitespace with underscore, strip non-ascii."""
+    s = value.strip().lower().replace(" ", "_")
+    return "".join(ch for ch in s if ch.isalnum() or ch == "_")
+
+
+def filename_for(
+    date_from: str | None,
+    date_to: str | None,
+    operador: str | None = None,
+    sector: str | None = None,
+) -> str:
+    """Slugged filename for the download. R69: supports "sempre" + sector."""
+    period = (
+        f"{date_from}_{date_to}"
+        if (date_from and date_to)
+        else "sempre"
+    )
+    sector_suffix = f"_{_slugify(sector)}" if sector else ""
     op_suffix = ""
     if operador:
         slug = operador.upper().replace(" ", "")
-        # Strip non-ascii (rough)
         slug = "".join(ch for ch in slug if ch.isalnum())
         op_suffix = f"_{slug}"
-    return f"metalogalva_{date_from}_{date_to}{op_suffix}.xlsx"
+    return f"metalogalva_{period}{sector_suffix}{op_suffix}.xlsx"
 
 
 # ============================================================================
@@ -326,46 +403,70 @@ CPIS_COLUMNS: tuple[tuple[str, str], ...] = (
     ("cliente", "Cliente"),
     ("modelo", "Modelo"),
     ("qtd", "QTD"),
+    # R97 — Qtd Metros (Soldline/Laser); empty para outros.
+    ("qtd_metros", "Qtd Metros"),
+    # R86 — Gemini-only fields (HPE32/GASPARINI/HD36). Empty in non-Gemini rows.
+    ("m2", "M²"),
+    ("nesting", "Nesting"),
+    # R97 — Cesta Nº (Expedição); Duração (calc fim-inicio para Gemini/Paragens)
+    ("cesta_n", "Cesta Nº"),
+    ("duracao", "Duração"),
     ("comp_mm", "Comprimento (mm)"),
     ("larg_mm", "Largura (mm)"),
     ("esp_mm", "Espessura (mm)"),
     ("coni", "CONI"),
-    ("peso_kg", "Peso (kg)"),
-    ("desperdicio_kg", "Desperdício (kg)"),
+    # R72 — 4 colunas weight-related em toneladas + nº chapas explícito
+    # como pediu o user (2 fórmulas separadas, ambos pesos lado-a-lado).
+    ("n_chapas", "Nº Chapas"),
+    ("peso_consumido_t", "Peso Consumido (t)"),
+    ("peso_produzido_t", "Peso Produzido (t)"),
+    ("desperdicio_t", "Desperdício (t)"),
     ("desperdicio_pct", "% Desperdício"),
 )
 
 
 def _query_cpis_rows(
-    date_from: str,
-    date_to: str,
+    date_from: str | None,
+    date_to: str | None,
     operador: str | None,
+    sector: str | None = None,
 ) -> list[dict]:
     """Pull production_rows + header.n_operador joined from sheets.
 
     Mirrors `_query_rows` but adds `n_operador` (header field, not on
-    production_rows). Filters by sheet_iso_date inclusive.
+    production_rows). R69: dates may be None (= "sempre"); sector applied
+    via post-filter using ``detect_template``.
     """
+    where: list[str] = []
+    params: list = []
+    if date_from and date_to:
+        where.append("pr.sheet_iso_date BETWEEN ? AND ?")
+        params.extend([date_from, date_to])
+    if operador:
+        where.append(
+            "(UPPER(pr.operador) = UPPER(?) OR UPPER(s.operador) = UPPER(?))"
+        )
+        params.extend([operador, operador])
+
     sql = """
         SELECT pr.*,
                s.operador AS validated_operador,
                json_extract(s.sheet_data, '$.header.setor_maquina') AS setor_maquina,
                json_extract(s.sheet_data, '$.header.n_operador') AS n_operador,
-               json_extract(s.sheet_data, '$.header.cod_maquina') AS header_cod_maquina
+               json_extract(s.sheet_data, '$.header.cod_maquina') AS header_cod_maquina,
+               json_extract(s.sheet_data, '$.header.pernr') AS header_pernr
           FROM production_rows pr
           JOIN sheets s ON s.id = pr.sheet_id
-         WHERE pr.sheet_iso_date BETWEEN ? AND ?
     """
-    params: list = [date_from, date_to]
-    if operador:
-        sql += " AND (UPPER(pr.operador) = UPPER(?) OR UPPER(s.operador) = UPPER(?))"
-        params.extend([operador, operador])
+    if where:
+        sql += " WHERE " + " AND ".join(where)
     sql += (
         " ORDER BY pr.sheet_iso_date ASC, pr.operador ASC,"
         "          pr.sheet_id ASC, pr.row_index ASC"
     )
     with conn() as c:
-        return [dict(r) for r in c.execute(sql, params).fetchall()]
+        rows = [dict(r) for r in c.execute(sql, params).fetchall()]
+    return _filter_by_sector(rows, sector)
 
 
 def _iso_to_date(iso: str | None) -> dt.date | None:
@@ -398,8 +499,108 @@ def _to_float(v) -> float | None:
         return None
 
 
-def _build_cpis_row(row: dict) -> dict:
-    """Project a production_rows dict into the 17-column CPIS schema."""
+def _parse_time_to_minutes(s: str | None) -> int | None:
+    """R97 — Parse a free-form time string to total minutes-since-midnight.
+
+    Operators write times in many forms:
+      "08:00"  → 480       (standard HH:MM)
+      "9h15"   → 555       (Portuguese vernacular "9 horas e 15")
+      "11h"    → 660       (only hour, no minutes)
+      "9+15"   → 555       (OCR misread of "h" or ":")
+      "09.30"  → 570       (dot separator)
+      "1430"   → 870       (4-digit no separator)
+
+    Returns None when unparseable.
+    """
+    if s is None:
+        return None
+    raw = str(s).strip().lower()
+    if not raw:
+        return None
+    # Normalize separators to ":"
+    import re as _re
+    norm = _re.sub(r"[h\+\.\s,]", ":", raw)
+    # Remove trailing colon (e.g. "11:" from "11h")
+    norm = norm.rstrip(":")
+    # Pure-digit 4-char like "1430" → "14:30"
+    if norm.isdigit() and len(norm) == 4:
+        norm = f"{norm[:2]}:{norm[2:]}"
+    # Pure-digit ≤2 chars → just hours
+    if norm.isdigit():
+        try:
+            h = int(norm)
+            if 0 <= h <= 23:
+                return h * 60
+        except ValueError:
+            return None
+        return None
+    parts = norm.split(":")
+    try:
+        h = int(parts[0]) if parts[0] else 0
+        m = int(parts[1]) if len(parts) > 1 and parts[1] else 0
+    except ValueError:
+        return None
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        return None
+    return h * 60 + m
+
+
+def _compute_duracao(inicio: str | None, fim: str | None) -> str:
+    """R97 — Duration HH:MM from inicio/fim strings.
+
+    Accepts various time formats via ``_parse_time_to_minutes``. Returns
+    "" when either side is missing/malformed. Handles past-midnight
+    rollover (fim < inicio → add 24h).
+
+    Used in CPIS export so Gemini (HPE32/GASPARINI) and Paragens rows
+    show duration even though it's not persisted in DB.
+    """
+    mi = _parse_time_to_minutes(inicio)
+    mf = _parse_time_to_minutes(fim)
+    if mi is None or mf is None:
+        return ""
+    diff = mf - mi
+    if diff < 0:
+        diff += 24 * 60
+    if diff == 0:
+        return ""
+    return f"{diff // 60:02d}:{diff % 60:02d}"
+
+
+def _derive_ov_from_plan(row: dict, refs: dict | None) -> str:
+    """R96 — Return the row's OV, falling back to plan_colunas when empty.
+
+    Gemini templates (HPE32, GASPARINI) don't have OV in their row schema
+    but each OF has an OV in `plan_colunas_cpis.xlsx`. When OCR row.ov is
+    empty, look up the plan to get the canonical OV.
+    """
+    ov_val = (row.get("ov") or "").strip()
+    if ov_val:
+        return ov_val
+    if not refs:
+        return ""
+    of_val = (row.get("of") or "").strip()
+    if not of_val:
+        return ""
+    entries = (refs.get("of_to_entries") or {}).get(of_val, [])
+    if not entries:
+        return ""
+    return str(entries[0].get("ov") or "").strip()
+
+
+def _build_cpis_row(row: dict, refs: dict | None = None) -> dict:
+    """Project a production_rows dict into the 19-column CPIS schema (R72).
+
+    R72: exposes both peso_consumido (chapa rectangular saída do stock,
+    fórmula explícita do user) and peso_produzido (coluna trapezoidal,
+    R38) em TONELADAS + n_chapas integer. User pediu "mostrar ambos
+    lado-a-lado".
+
+    R96: ``refs`` (optional) lets us derive missing OV from the plan when
+    the kanban didn't capture it. Gemini templates (HPE32, GASPARINI) don't
+    have OV in their row schema — we pull it from ``plan_colunas`` via OF
+    lookup so the CPIS export still has the OV column populated.
+    """
     qtd = _to_int(row.get("qtd"))
     larg = _to_float(row.get("larg_mm"))
     comp = _to_float(row.get("comp_mm"))
@@ -407,15 +608,23 @@ def _build_cpis_row(row: dict) -> dict:
     ltopo = _to_float(row.get("ltopo"))
     esp = _to_float(row.get("esp"))
 
-    # Geometric waste — mirrors kpis.py:814 (uses comp as both
-    # comp_a_cortar and comp_teorico — pure-geometry interpretation).
+    # Geometric waste — mirrors kpis.py (uses comp as both comp_a_cortar
+    # and comp_teorico — pure-geometry interpretation).
     waste = row_waste(qtd, larg, comp, lbase, ltopo, comp, esp)
     if waste.get("valid"):
-        peso_kg = waste["peso_produzido_kg"]
-        desp_kg = waste["peso_desperdicio_kg"]
+        # R72: 4 derived fields — n_chapas = ciclos = ceil(qtd/npecas),
+        # pesos em toneladas (kg/1000).
+        n_chapas = waste.get("ciclos")
+        peso_consumido_t = waste["peso_consumido_kg"] / 1000.0
+        peso_produzido_t = waste["peso_produzido_kg"] / 1000.0
+        desperdicio_t = waste["peso_desperdicio_kg"] / 1000.0
         desp_pct = waste["desperdicio_pct"]
     else:
-        peso_kg = desp_kg = desp_pct = None
+        n_chapas = None
+        peso_consumido_t = None
+        peso_produzido_t = None
+        desperdicio_t = None
+        desp_pct = None
 
     setor_maquina = row.get("setor_maquina") or ""
     # Prefer OCR-extracted cod_maquina if the header has it (future kanbans).
@@ -427,42 +636,83 @@ def _build_cpis_row(row: dict) -> dict:
 
     nome = (row.get("validated_operador") or row.get("operador") or "").strip()
 
+    # R70 + R79 — prefer canonical pernr (8 digits, e.g. "10000095") from
+    # header.pernr (set by snap_operador). R79 fallback: when header.pernr
+    # is empty (legacy sheet not yet snapped), DERIVE pernr structurally
+    # from n_operador via the "1000" + zfill(4) rule. This guarantees the
+    # CPIS export always shows 8-digit pernr regardless of when sheet was
+    # uploaded.
+    pernr_str = (row.get("header_pernr") or "").strip()
+    if not pernr_str:
+        cod_raw = str(row.get("n_operador") or "").strip().lstrip("0") or "0"
+        try:
+            cod_int = int(cod_raw)
+            if cod_int > 0:
+                pernr_str = f"1000{cod_int:04d}" if cod_int < 10000 else str(cod_int)
+        except (ValueError, TypeError):
+            pass
+    cod_funcionario = _to_int(pernr_str) if pernr_str else None
+
     return {
         "data": _iso_to_date(row.get("sheet_iso_date")),
-        "cod_funcionario": _to_int(row.get("n_operador")),
+        "cod_funcionario": cod_funcionario,
         "nome_funcionario": nome,
         "setor_maquina_desc": setor_maquina,
         "cod_maquina": cod_maquina,
         "of": row.get("of") or "",
-        "ov": row.get("ov") or "",
+        # R96 — derive OV from plan when row's OV is empty (Gemini
+        # templates don't capture OV; plan_colunas has it per-OF).
+        "ov": _derive_ov_from_plan(row, refs),
         "cliente": row.get("cliente") or "",
         "modelo": row.get("modelo") or "",
         "qtd": qtd,
+        # R97 — qtd_metros (Soldline/Laser). NULL/0 para outros templates.
+        "qtd_metros": _to_float(row.get("qtd_metros")),
+        # R86 — Gemini-only fields. Empty/NULL for non-Gemini rows.
+        "m2": _to_float(row.get("m2")),
+        "nesting": row.get("nesting") or "",
+        # R97 — cesta_n (Expedição); duracao calc fim-inicio (Gemini/Paragens).
+        "cesta_n": row.get("cesta_n") or "",
+        "duracao": _compute_duracao(row.get("inicio"), row.get("fim")),
         "comp_mm": _to_int(row.get("comp_mm")),
         "larg_mm": _to_int(row.get("larg_mm")),
         "esp_mm": esp,
         "coni": row.get("coni") or "",
-        "peso_kg": round(peso_kg, 2) if peso_kg is not None else None,
-        "desperdicio_kg": round(desp_kg, 2) if desp_kg is not None else None,
+        # R72 — 4 weight-related fields (vs old peso_kg/desperdicio_kg)
+        "n_chapas": n_chapas,
+        "peso_consumido_t": round(peso_consumido_t, 3) if peso_consumido_t is not None else None,
+        "peso_produzido_t": round(peso_produzido_t, 3) if peso_produzido_t is not None else None,
+        "desperdicio_t": round(desperdicio_t, 3) if desperdicio_t is not None else None,
         "desperdicio_pct": round(desp_pct, 2) if desp_pct is not None else None,
     }
 
 
 def build_cpis_workbook(
-    date_from: str,
-    date_to: str,
+    date_from: str | None,
+    date_to: str | None,
     operador: str | None = None,
+    sector: str | None = None,
 ) -> bytes:
     """Return .xlsx bytes matching MigracaoNikufraCPIS.xlsx schema.
 
     Single sheet (`Folha1`) with 17 columns. One row per kanban row in the
     period. Excel-native types: dates as date objects, numerics as numbers.
 
+    R69: dates may be None (= "sempre"); sector filter via canonical
+    ``detect_template`` post-fetch.
+
     Empty-period: still returns a valid file with just the header row, so
     the user can confirm column layout.
     """
-    raw_rows = _query_cpis_rows(date_from, date_to, operador)
-    cpis_rows = [_build_cpis_row(r) for r in raw_rows]
+    raw_rows = _query_cpis_rows(date_from, date_to, operador, sector)
+    # R96 — load refs once so _build_cpis_row can derive OV from plan
+    # when the row doesn't have it (Gemini templates).
+    try:
+        from app.cross_check import get_watcher
+        refs = get_watcher().get_refs()
+    except Exception:  # noqa: BLE001
+        refs = None
+    cpis_rows = [_build_cpis_row(r, refs=refs) for r in raw_rows]
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -482,15 +732,17 @@ def build_cpis_workbook(
             _style_cell(cell)
             if key == "data" and isinstance(v, dt.date):
                 cell.number_format = "DD-MM-YYYY"
-            elif key in ("peso_kg", "desperdicio_kg"):
-                cell.number_format = "0.00"
+            elif key in ("peso_consumido_t", "peso_produzido_t", "desperdicio_t"):
+                cell.number_format = "0.000"   # toneladas com 3 casas
             elif key == "desperdicio_pct":
                 cell.number_format = "0.00"
             elif key == "esp_mm":
                 cell.number_format = "0.0"
+            elif key == "n_chapas":
+                cell.number_format = "0"       # integer
 
-    # Column widths — tuned for Inter font + the labels above
-    widths = [12, 10, 22, 22, 11, 10, 10, 18, 18, 7, 14, 12, 12, 8, 11, 14, 13]
+    # Column widths — 19 entries (R72 added 2 new columns: n_chapas + peso_produzido)
+    widths = [12, 10, 22, 22, 11, 10, 10, 18, 18, 7, 14, 12, 12, 8, 10, 16, 16, 14, 13]
     for ci, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(ci)].width = w
 
@@ -503,13 +755,20 @@ def build_cpis_workbook(
 
 
 def cpis_filename_for(
-    date_from: str,
-    date_to: str,
+    date_from: str | None,
+    date_to: str | None,
     operador: str | None = None,
+    sector: str | None = None,
 ) -> str:
-    """Slugged filename for the CPIS download."""
+    """Slugged filename for the CPIS download. R69: "sempre" + sector."""
+    period = (
+        f"{date_from}_{date_to}"
+        if (date_from and date_to)
+        else "sempre"
+    )
+    sector_suffix = f"_{_slugify(sector)}" if sector else ""
     op_suffix = ""
     if operador:
         slug = "".join(ch for ch in operador.upper().replace(" ", "") if ch.isalnum())
         op_suffix = f"_{slug}"
-    return f"MigracaoNikufraCPIS_{date_from}_{date_to}{op_suffix}.xlsx"
+    return f"MigracaoNikufraCPIS_{period}{sector_suffix}{op_suffix}.xlsx"

@@ -53,6 +53,41 @@ from typing import Any
 # Status enum (3 values, JSON-friendly)
 CROSS_CHECK_STATUSES = ("MATCH", "NO_MATCH", "NA")
 
+
+def _o_zero_variants(s: str) -> list[str]:
+    """R93 — Generate 0/O swap variants for numeric-style fields.
+
+    Operators rarely write the letter O in OF/OV/lote, but OCR sometimes
+    misreads `0` as `O` (and vice-versa). For each swappable position in
+    the string, generate variants with both `0` and `O` to allow lookup
+    against canonical refs.
+
+    Examples:
+        "26216O"   → ["26216O", "262160"]
+        "M26B0307" → ["M26B0307", "M26BO307", "M26B03O7", "M26BO3O7"]
+        "abc"      → ["abc"]  (no swap chars)
+
+    Capped at 8 variants and ≤3 swap positions to avoid combinatorial
+    blowup. Original string is always included so existing exact lookups
+    remain authoritative.
+
+    Not applied to MODELO/CLIENTE — those have legitimate "O" letters
+    (e.g., "CAO3E08B" Metalogalva prefix, "ENEDIS" client).
+    """
+    if not s:
+        return [s]
+    positions = [i for i, ch in enumerate(s) if ch in ("0", "O", "o")]
+    if not positions or len(positions) > 3:
+        return [s]
+    from itertools import product
+    variants: set[str] = {s}
+    chars = list(s)
+    for combo in product(("0", "O"), repeat=len(positions)):
+        for idx, ch in zip(positions, combo):
+            chars[idx] = ch
+        variants.add("".join(chars))
+    return list(variants)[:8]
+
 # Tolerances. Round 43 — moderate widening of dim tolerances:
 # user accepted small OCR misreads (5-15mm) as MATCH provided they're
 # geometrically consistent (ltotal sanity check below).
@@ -372,6 +407,117 @@ def _best_plan_entry(entries: list[dict], modelo_ocr: str, comp_ocr: float | Non
     return pool[0] if pool else entries[0]
 
 
+def _find_best_plan_row_holistic(
+    row: dict[str, Any], refs: dict[str, Any],
+    min_score: int = 3,
+) -> tuple[dict | None, int]:
+    """R83 — Holistic plan-row search. Used when OCR's OF isn't in plan:
+    scan plan entries by cliente + modelo first-token indexes, score each
+    by combined signal match (cliente, ov, modelo, OF-Lev1/indel). Return
+    (best_entry, score) where best_entry has '_of' embedded. Only returns
+    a hit when score >= min_score AND winner has clear margin vs runner-up
+    (to avoid false snaps on ambiguous matches).
+
+    Premise (user-driven): if a row exists on the shop floor, it MUST
+    exist in plan_colunas. The system's job is to FIND the right plan row
+    when OCR captured wrong values.
+    """
+    cli_ocr = (row.get("cliente") or "").strip().upper()
+    mod_ocr_raw = (row.get("modelo") or "").strip().upper()
+    mod_ocr = "".join(mod_ocr_raw.split())  # collapsed
+    ov_ocr = (row.get("ov") or "").strip()
+    of_ocr = (row.get("of") or "").strip()
+
+    cli_idx = refs.get("plan_by_cliente", {}) or {}
+    mod_idx = refs.get("plan_by_modelo_ft", {}) or {}
+
+    # Build candidate set: union of entries indexed by cliente (exact +
+    # substring tokens) + by modelo FT exact + by space-collapsed.
+    candidates: dict[int, dict] = {}  # id(entry) → entry to dedupe
+    if cli_ocr:
+        # exact cliente
+        for e in cli_idx.get(cli_ocr, []):
+            candidates[id(e)] = e
+        # substring match (e.g., "VANTAGE" vs "VANTAGE TOWERS")
+        for cli_plan, ents in cli_idx.items():
+            if cli_ocr in cli_plan or cli_plan in cli_ocr:
+                for e in ents:
+                    candidates[id(e)] = e
+    if mod_ocr:
+        for ft, ents in mod_idx.items():
+            # modelo FT match (exact, or OCR is prefix of FT, or FT is prefix of OCR)
+            if ft == mod_ocr or ft.startswith(mod_ocr[:4]) or mod_ocr.startswith(ft[:4]):
+                for e in ents:
+                    candidates[id(e)] = e
+
+    if not candidates:
+        return None, 0
+
+    def _score(e: dict) -> int:
+        s = 0
+        cli_p = (e.get("cliente") or "").strip().upper()
+        if cli_ocr and cli_p:
+            if cli_ocr == cli_p:
+                s += 4
+            elif cli_ocr in cli_p or cli_p in cli_ocr:
+                s += 3
+            elif any(t in cli_p for t in cli_ocr.split() if len(t) >= 3):
+                s += 1
+        ov_p = (e.get("ov") or "").strip()
+        if ov_ocr and ov_p:
+            if ov_ocr == ov_p:
+                s += 3
+            elif ov_ocr.replace(".", "").replace(",", "") == ov_p:
+                s += 2
+        desig = (e.get("designacao") or "").strip().upper()
+        if mod_ocr and desig:
+            ft_p = desig.split(" - ", 1)[0].strip()
+            if ft_p == mod_ocr:
+                s += 4
+            elif mod_ocr in desig:
+                s += 3
+            elif ft_p.startswith(mod_ocr[:4]) or mod_ocr.startswith(ft_p[:4]):
+                s += 1
+        of_p = e.get("_of", "")
+        if of_ocr and of_p:
+            if of_ocr == of_p:
+                s += 4
+            elif len(of_ocr) == len(of_p) and sum(1 for a, b in zip(of_ocr, of_p) if a != b) == 1:
+                s += 2
+            elif abs(len(of_ocr) - len(of_p)) == 1:
+                short, long_ = (of_ocr, of_p) if len(of_ocr) < len(of_p) else (of_p, of_ocr)
+                for i in range(len(long_)):
+                    if short == long_[:i] + long_[i + 1:]:
+                        s += 2
+                        break
+        return s
+
+    scored = sorted(((_score(e), e) for e in candidates.values()), reverse=True, key=lambda x: x[0])
+    if not scored:
+        return None, 0
+    best_score, best_entry = scored[0]
+    if best_score < min_score:
+        return None, best_score
+    # Safety gate: require at least cliente OR modelo signal (don't snap on
+    # OF-only similarity which could match random plan rows).
+    cli_p = (best_entry.get("cliente") or "").strip().upper()
+    desig_p = (best_entry.get("designacao") or "").strip().upper()
+    has_cli_signal = bool(cli_ocr and cli_p and (cli_ocr == cli_p or cli_ocr in cli_p or cli_p in cli_ocr))
+    has_mod_signal = bool(mod_ocr and desig_p and (mod_ocr in desig_p or desig_p.split(" - ", 1)[0].startswith(mod_ocr[:4])))
+    if not (has_cli_signal or has_mod_signal):
+        return None, best_score
+    # Disambiguation: when many entries tie at top, require uniqueness OR
+    # all top-tied entries to share the same OF (different modelos for the
+    # same row is fine — we'll pick one but the OF is what matters).
+    top_score = best_score
+    top_entries = [e for s, e in scored if s == top_score]
+    if len(top_entries) > 1:
+        ofs_at_top = {e.get("_of") for e in top_entries}
+        if len(ofs_at_top) > 1:
+            return None, best_score  # ambiguous across OFs
+    return best_entry, best_score
+
+
 def _check_row(
     row: dict[str, Any],
     refs: dict[str, Any],
@@ -379,6 +525,15 @@ def _check_row(
     """Run pure verification against refs. Returns per-field status."""
     of_raw = str(row.get("of") or "").strip()
     plan_entries = refs.get("of_to_entries", {}).get(of_raw, [])
+    # R93 — when OF lookup fails, try 0/O swap variants (OCR misreads
+    # 0 as O or vice-versa in otherwise-numeric OFs).
+    if not plan_entries and of_raw:
+        of_to_entries = refs.get("of_to_entries", {})
+        for variant in _o_zero_variants(of_raw):
+            if variant != of_raw and variant in of_to_entries:
+                plan_entries = of_to_entries[variant]
+                of_raw = variant  # use canonical form for downstream checks
+                break
     in_plan = bool(plan_entries)
 
     modelo_raw = str(row.get("modelo") or "").strip()
@@ -390,10 +545,31 @@ def _check_row(
         plan_entries, modelo_raw, comp_v, row=row, refs=refs,
     ) if in_plan else None
 
+    # R83 — Holistic fallback. If OCR's OF wasn't in plan, search all plan
+    # entries by other signals (cliente, modelo, ov). If a clear winner
+    # emerges, treat it as the matched_entry so the row's other fields
+    # validate against the REAL plan row (and the OF itself gets NM with
+    # the canonical OF as ref so R76 auto-overwrite can snap it).
+    holistic_matched = False
+    if not matched_entry:
+        h_entry, h_score = _find_best_plan_row_holistic(row, refs)
+        if h_entry is not None:
+            matched_entry = h_entry
+            holistic_matched = True
+
     lote_raw = str(row.get("lote") or "").strip()
     sap_lotes = refs.get("lotes_sap", frozenset())
     sap_full = refs.get("lotes_sap_full", {})
     sap_entry = sap_full.get(lote_raw.upper()) if lote_raw and lote_raw.upper() in sap_lotes else None
+    # R93 — when lote not in SAP, try 0/O swap variants (OCR may misread
+    # `M26B0307` as `M26BO307` or vice-versa).
+    if sap_entry is None and lote_raw:
+        for variant in _o_zero_variants(lote_raw.upper()):
+            if variant != lote_raw.upper() and variant in sap_lotes:
+                sap_entry = sap_full.get(variant)
+                if sap_entry:
+                    lote_raw = variant  # use canonical form for downstream
+                    break
 
     fields: dict[str, dict] = {}
     summary = {"match": 0, "no_match": 0, "na": 0}
@@ -409,17 +585,29 @@ def _check_row(
         _record("of", "NA", "", reason="vazio")
     elif in_plan:
         _record("of", "MATCH", of_raw, ref=of_raw, ref_source="plan")
+    elif holistic_matched and matched_entry:
+        # R83 — holistic fallback found the right plan row; OCR's OF is
+        # wrong but we know the canonical. Mark NM with canonical ref so
+        # R76 _apply_auto_overwrites can snap it (operator sees `*`).
+        canonical_of = str(matched_entry.get("_of") or "").strip()
+        _record("of", "NO_MATCH", of_raw, ref=canonical_of,
+                ref_source="plan_holistic",
+                reason=f"OF '{of_raw}' não bate plan; holistic encontrou '{canonical_of}'",
+                snapped=True)
     else:
         _record("of", "NO_MATCH", of_raw, ref_source="plan",
                 reason=f"OF '{of_raw}' não está em plan_colunas")
 
     # --- cliente ---
+    # R83 — Field-independent validation. When matched_entry is None
+    # (OF not in plan), DON'T cascade to NA — validate cliente against
+    # the global clientes_plan set so the field gets a verdict on its
+    # own merit. Same approach below for ov and modelo.
     cliente_raw = str(row.get("cliente") or "").strip()
+    clientes_global = refs.get("clientes_plan", frozenset())
     if not cliente_raw:
         _record("cliente", "NA", "", reason="vazio")
-    elif not matched_entry:
-        _record("cliente", "NA", cliente_raw, reason="OF não no plan")
-    else:
+    elif matched_entry:
         plan_cli = str(matched_entry.get("cliente", "")).strip()
         if plan_cli and plan_cli.upper() == cliente_raw.upper():
             _record("cliente", "MATCH", cliente_raw, ref=plan_cli, ref_source="plan")
@@ -427,14 +615,23 @@ def _check_row(
             _record("cliente", "NO_MATCH", cliente_raw, ref=plan_cli or "(vazio)",
                     ref_source="plan",
                     reason=f"OCR '{cliente_raw}' ≠ plan '{plan_cli}'")
+    elif cliente_raw.upper() in clientes_global:
+        # R83 — OF not in plan, but cliente itself is a valid plan client
+        _record("cliente", "MATCH", cliente_raw, ref=cliente_raw.upper(),
+                ref_source="plan_global", reason="cliente exists in plan (OF-independent)")
+    elif clientes_global:
+        _record("cliente", "NO_MATCH", cliente_raw, ref="(não existe em plan)",
+                ref_source="plan_global",
+                reason=f"cliente '{cliente_raw}' não existe na lista de clientes do plan")
+    else:
+        _record("cliente", "NA", cliente_raw, reason="sem refs de clientes")
 
     # --- ov ---
     ov_raw = str(row.get("ov") or "").strip()
+    ovs_global = refs.get("ovs_plan", frozenset())
     if not ov_raw:
         _record("ov", "NA", "", reason="vazio")
-    elif not matched_entry:
-        _record("ov", "NA", ov_raw, reason="OF não no plan")
-    else:
+    elif matched_entry:
         plan_ov = str(matched_entry.get("ov", "")).strip()
         if plan_ov and plan_ov == ov_raw:
             _record("ov", "MATCH", ov_raw, ref=plan_ov, ref_source="plan")
@@ -442,12 +639,51 @@ def _check_row(
             _record("ov", "NO_MATCH", ov_raw, ref=plan_ov or "(vazio)",
                     ref_source="plan",
                     reason=f"OCR '{ov_raw}' ≠ plan '{plan_ov}'")
+    elif ov_raw in ovs_global:
+        # R83 — OF not in plan but OV itself is a valid plan OV
+        _record("ov", "MATCH", ov_raw, ref=ov_raw,
+                ref_source="plan_global", reason="ov exists in plan (OF-independent)")
+    elif ovs_global:
+        # R93 — try 0/O swap variants before declaring NO_MATCH
+        matched_variant = None
+        for v in _o_zero_variants(ov_raw):
+            if v != ov_raw and v in ovs_global:
+                matched_variant = v
+                break
+        if matched_variant:
+            _record("ov", "MATCH", ov_raw, ref=matched_variant,
+                    ref_source="plan_global",
+                    reason="ov matches plan via 0/O swap")
+        else:
+            _record("ov", "NO_MATCH", ov_raw, ref="(não existe em plan)",
+                    ref_source="plan_global",
+                    reason=f"ov '{ov_raw}' não existe na lista de OVs do plan")
+    else:
+        _record("ov", "NA", ov_raw, reason="sem refs de OVs")
 
     # --- modelo ---
+    modelos_global = refs.get("modelos_plan", frozenset())
     if not modelo_raw:
         _record("modelo", "NA", "", reason="vazio")
     elif not matched_entry:
-        _record("modelo", "NA", modelo_raw, reason="OF não no plan")
+        # R83 — Field-independent modelo validation when OF not in plan.
+        # Match against the global set of plan-designacao first-tokens.
+        # Try operator value as-is and space-collapsed (operator-typed
+        # "C 44 H 502" → "C44H502"). MATCH on exact membership only.
+        mod_up = modelo_raw.upper().strip()
+        mod_nospc = "".join(mod_up.split())
+        if mod_up in modelos_global:
+            _record("modelo", "MATCH", modelo_raw, ref=mod_up,
+                    ref_source="plan_global", reason="modelo exists in plan (OF-independent)")
+        elif mod_nospc != mod_up and mod_nospc in modelos_global:
+            _record("modelo", "MATCH", modelo_raw, ref=mod_nospc,
+                    ref_source="plan_global", reason="modelo exists in plan (space-collapsed)")
+        elif modelos_global:
+            _record("modelo", "NO_MATCH", modelo_raw, ref="(não existe em plan)",
+                    ref_source="plan_global",
+                    reason=f"modelo '{modelo_raw}' não existe na lista de modelos do plan")
+        else:
+            _record("modelo", "NA", modelo_raw, reason="sem refs de modelos")
     else:
         plan_des = str(matched_entry.get("designacao", "")).strip()
         matched = False
@@ -553,7 +789,35 @@ def _check_row(
         sap_esp_n = _num(sap_entry.get("esp")) if sap_entry else None
         plan_esp_n = _num(matched_entry.get("esp")) if matched_entry else None
 
-        if ocr_n is None:
+        # R76 + R78: cross-validate plan vs SAP. When they disagree:
+        # - If OCR matches one of the sources exactly, TRUST that source
+        #   (operator's alignment is informative — usually SAP is fresher
+        #   per-lote canonical, but if OCR aligns plan, trust plan).
+        # - Only NO_MATCH when OCR diverges from BOTH sources.
+        if (sap_esp_n is not None and plan_esp_n is not None
+                and abs(sap_esp_n - plan_esp_n) > TOL_ESP):
+            if ocr_n is not None and abs(ocr_n - sap_esp_n) <= TOL_ESP:
+                _record("esp", "MATCH", esp_raw,
+                        ref=str(sap_entry.get("esp")),
+                        ref_source="sap_resolves_conflict",
+                        reason=(
+                            f"plan-sap conflict; OCR aligns SAP={sap_esp_n} "
+                            f"(plan={plan_esp_n})"
+                        ))
+            elif ocr_n is not None and abs(ocr_n - plan_esp_n) <= TOL_ESP:
+                _record("esp", "MATCH", esp_raw,
+                        ref=str(matched_entry.get("esp")),
+                        ref_source="plan_resolves_conflict",
+                        reason=(
+                            f"plan-sap conflict; OCR aligns plan={plan_esp_n} "
+                            f"(sap={sap_esp_n})"
+                        ))
+            else:
+                _record("esp", "NO_MATCH", esp_raw,
+                        ref=f"plan={plan_esp_n} sap={sap_esp_n}",
+                        ref_source="plan_sap_conflict",
+                        reason="plan_sap_esp_conflict (R76)")
+        elif ocr_n is None:
             _record("esp", "NO_MATCH", esp_raw, reason="valor OCR não numérico")
         elif sap_esp_n is not None and abs(ocr_n - sap_esp_n) <= TOL_ESP:
             _record("esp", "MATCH", esp_raw, ref=str(sap_entry.get("esp")), ref_source="sap")
@@ -620,6 +884,16 @@ def _check_row(
     for field in _NO_CHECK_FIELDS:
         val = str(row.get(field) or "").strip()
         _record(field, "NA", val, reason="campo não verificável (sem ref)")
+
+    # R76 — fill operator-empty cells from canonical refs (autofill).
+    # Operator left numeric field blank, but plan/SAP has the value →
+    # autofill MATCH+snapped so main._apply_auto_overwrites persists it.
+    _fill_na_from_ref(fields, matched_entry, sap_entry, summary)
+
+    # R76 — recover garbage lote via SAP cross-search (esp+larg+material).
+    # When operator's lote is not in SAP but other fields confirm OF,
+    # search SAP for the lote whose esp+larg+material match the row.
+    _recover_lote_from_sap(fields, refs, matched_entry, row, summary)
 
     # Round 43 Sol 6 + variants — stub-accept rules (config-driven).
     # _STUB_ACCEPT_RULES is a list of dicts: each rule downgrades
@@ -995,8 +1269,145 @@ def _condition_passes(condition: str, target: str, fields: dict) -> bool:
     return False
 
 
+# R76 — fields that can be auto-overwritten to the canonical ref when
+# stub-accept fires (row context confirms identity). Excludes 'lote'
+# because there's no canonical lote per OF — multiple bobines can
+# produce the same OF. Lote SUSP stays yellow soft (preserved for
+# operator review). Lote recovery via SAP cross-search is handled
+# separately by _recover_lote_from_sap().
+_STUB_AUTO_OVERWRITE = frozenset({
+    "cliente", "ov", "of", "modelo",
+    "comp_mm", "larg_mm", "lbase", "ltopo", "esp",
+})
+
+
+def _fill_na_from_ref(
+    fields: dict, matched_entry: dict | None, sap_entry: dict | None,
+    summary: dict,
+) -> None:
+    """R76 — when operator left a numeric field empty (value="") but plan
+    or SAP has a canonical value, auto-fill the cell to MATCH+snapped=True
+    so main._apply_auto_overwrites persists the value to sheet_data.
+
+    Only fires when:
+      - cell status is NA
+      - operator's value is empty (whitespace-stripped)
+      - canonical ref is available
+    """
+    fill_map = {
+        "esp":     (sap_entry or {}).get("esp")
+                   or (matched_entry or {}).get("esp"),
+        "lbase":   (matched_entry or {}).get("lbase"),
+        "ltopo":   (matched_entry or {}).get("ltopo"),
+        "larg_mm": (sap_entry or {}).get("larg"),
+        "comp_mm": (matched_entry or {}).get("comp"),
+    }
+    for fname, ref_val in fill_map.items():
+        cell = fields.get(fname)
+        if cell is None or cell.get("status") != "NA":
+            continue
+        if (cell.get("value") or "").strip():
+            continue  # operator wrote something; not empty
+        if ref_val is None or ref_val == "":
+            continue
+        cell["status"] = "MATCH"
+        cell["value"] = str(ref_val)
+        cell["ref"] = str(ref_val)
+        cell["snapped"] = True
+        cell["reason"] = "autofill_empty_from_ref (R76)"
+        summary["na"] = max(0, summary.get("na", 0) - 1)
+        summary["match"] = summary.get("match", 0) + 1
+
+
+def _recover_lote_from_sap(
+    fields: dict, refs: dict, matched_entry: dict | None, row_ocr: dict,
+    summary: dict,
+) -> None:
+    """R76 + R77 (A3) — when operator's lote is NO_MATCH (not in SAP) but
+    row's other fields confirm OF identity, search StockSAP for a lote
+    whose esp + larg + material uniquely match the row's plan entry.
+
+    R77 A3 enhancement: if multiple SAP candidates match esp+larg+material,
+    prefer the one that's Lev-1 numeric distance from OCR lote (operator
+    likely misread 1 digit). Only snap if exactly 1 winner emerges.
+    """
+    import re as _re
+    lote_cell = fields.get("lote", {})
+    if lote_cell.get("status") != "NO_MATCH":
+        return
+    if not matched_entry:
+        return
+    plan_esp = _num(matched_entry.get("esp"))
+    plan_material = (matched_entry.get("material") or "").strip().upper()
+    ocr_larg = _num(row_ocr.get("larg_mm"))
+    # R78: only require plan_esp (essential discriminator); material
+    # is optional — when absent, recovery proceeds without material
+    # filter (more permissive but acceptable since esp+larg already
+    # constrain the candidate set strongly).
+    if plan_esp is None:
+        return
+
+    ocr_lote = (lote_cell.get("value") or "").strip().upper()
+    sap_full = refs.get("lotes_sap_full") or {}
+    candidates: list[str] = []
+    # R78: relax filters — material optional (skip when plan_material
+    # empty), larg tolerance to ±30mm (was ±20mm). Recovers more cases
+    # where plan_material absent or sligh dim drift.
+    for lote, e in sap_full.items():
+        sap_esp = _num(e.get("esp"))
+        sap_larg = _num(e.get("larg"))
+        sap_desc = (e.get("desc") or "").upper()
+        if sap_esp is None or abs(sap_esp - plan_esp) > 0.05:
+            continue
+        if ocr_larg is not None and sap_larg is not None and abs(ocr_larg - sap_larg) > 30:
+            continue
+        # R78: skip material filter when plan_material is empty (was abort)
+        if plan_material and plan_material not in sap_desc:
+            continue
+        candidates.append(lote)
+        if len(candidates) > 50:
+            return  # too many — ambiguous, bail
+    if not candidates:
+        return
+    winner = None
+    reason_suffix = ""
+    if len(candidates) == 1:
+        winner = candidates[0]
+        reason_suffix = "single SAP match"
+    elif ocr_lote and _re.match(r"^[A-Z]?\d{2}B\d{4,5}$", ocr_lote):
+        # R77 A3: filter candidates to Lev-1 of OCR lote
+        lev1: list[str] = []
+        for cand in candidates:
+            if len(cand) == len(ocr_lote):
+                diffs = sum(1 for a, b in zip(cand, ocr_lote) if a != b)
+                if diffs <= 1:
+                    lev1.append(cand)
+        if len(lev1) == 1:
+            winner = lev1[0]
+            reason_suffix = f"SAP Lev-1 from OCR {ocr_lote!r}"
+    if winner is None:
+        return
+    lote_cell["status"] = "MATCH"
+    lote_cell["value"] = winner
+    lote_cell["ref"] = winner
+    lote_cell["snapped"] = True
+    lote_cell["reason"] = (
+        f"recovered_from_sap (esp={plan_esp}, material={plan_material}, "
+        f"{reason_suffix})"
+    )
+    summary["no_match"] = max(0, summary.get("no_match", 0) - 1)
+    summary["match"] = summary.get("match", 0) + 1
+
+
 def _apply_stub_accept(fields: dict, summary: dict) -> None:
-    """Apply selected stub-accept variant rules in-place on fields."""
+    """Apply selected stub-accept variant rules in-place on fields.
+
+    R76: when target field is in _STUB_AUTO_OVERWRITE AND gates pass
+    AND ref exists, PROMOTE the cell to MATCH+snapped=True (instead of
+    NA-suspended yellow). main._apply_auto_overwrites then writes the
+    canonical ref value to sheet_data. Effectively converts ~5.4% SUSP
+    cells to MATCH automatically.
+    """
     import os
     variant = os.environ.get("CC_STUB_VARIANT", "w13")
     rules = _STUB_VARIANTS.get(variant, _STUB_VARIANTS["v1"])
@@ -1061,7 +1472,21 @@ def _apply_stub_accept(fields: dict, summary: dict) -> None:
         if condition:
             if not _condition_passes(condition, target, fields):
                 continue
-            # Condition rules don't require gate count; downgrade directly
+            ref_val = (cell.get("ref") or "").strip()
+            # R76: promote to MATCH+snapped for auto-overwriteable fields
+            if (target in _STUB_AUTO_OVERWRITE
+                    and ref_val
+                    and ref_val != "(vazio)"):
+                cell["status"] = "MATCH"
+                cell["snapped"] = True
+                cell["reason"] = (
+                    f"stub-accept→snap {variant} ({condition}; "
+                    f"overwriting {cell.get('value')!r}→{ref_val!r})"
+                )
+                summary["no_match"] = max(0, summary.get("no_match", 0) - 1)
+                summary["match"] = summary.get("match", 0) + 1
+                continue
+            # Fallback: downgrade NO_MATCH to NA-suspended (yellow soft)
             cell["status"] = "NA"
             cell["reason"] = f"stub-accept {variant} ({condition})"
             cell["suspended_by_stub"] = True  # R52 F4: differentiate UI color
@@ -1072,6 +1497,25 @@ def _apply_stub_accept(fields: dict, summary: dict) -> None:
         n_match = sum(1 for f in gates
                       if fields.get(f, {}).get("status") == "MATCH")
         if n_match >= min_gates:
+            ref_val = (cell.get("ref") or "").strip()
+            # R76: when target is auto-overwriteable AND ref exists,
+            # promote to MATCH+snapped=True so main._apply_auto_overwrites
+            # writes the canonical value into sheet_data. Operator's
+            # wrong value is replaced; cell becomes green.
+            if (target in _STUB_AUTO_OVERWRITE
+                    and ref_val
+                    and ref_val != "(vazio)"):
+                cell["status"] = "MATCH"
+                cell["snapped"] = True
+                cell["reason"] = (
+                    f"stub-accept→snap {variant} "
+                    f"({n_match}/{len(gates)} {','.join(gates)} MATCH; "
+                    f"overwriting {cell.get('value')!r}→{ref_val!r})"
+                )
+                summary["no_match"] = max(0, summary.get("no_match", 0) - 1)
+                summary["match"] = summary.get("match", 0) + 1
+                continue
+            # Fallback: keep as yellow soft (lote, or fields without ref)
             cell["status"] = "NA"
             cell["reason"] = (
                 f"stub-accept {variant} "

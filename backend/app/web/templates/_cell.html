@@ -73,13 +73,19 @@
     }'
     {% endif %}
     id="{{ cell_id }}">
+  {# R80: small * indicator on cells auto-corrected by cross-check.
+     Purely visual — pointer-events:none on the span so clicks fall
+     through to the cell's edit handler. #}
+  {% set _was_snapped = cc_snapped_by_path is defined and cc_snapped_by_path.get(field_path) %}
   {% if _is_validated %}
   <div style="min-height:18px;">
     {%- if value -%}{{ value }}{%- else -%}&nbsp;{%- endif -%}
+    {% if _was_snapped %}<span class="cc-snapped-mark" aria-hidden="true">*</span>{% endif %}
   </div>
   {% else %}
   <div x-show="!editing" @click="handleClick()" style="min-height:18px;">
     {%- if value -%}{{ value }}{%- else -%}&nbsp;{%- endif -%}
+    {% if _was_snapped %}<span class="cc-snapped-mark" aria-hidden="true">*</span>{% endif %}
   </div>
   <form x-show="editing" x-cloak
         hx-post="/sheet/{{ sheet_id }}/edit"

@@ -74,7 +74,59 @@ CREATE TABLE IF NOT EXISTS production_rows (
     esp REAL,
     lbase INTEGER,
     ltopo INTEGER,
+    -- R86 — Gemini (TPL102) fields: m² (area) + nesting code.
+    -- Populated only for HPE32/GASPARINI/HD36; NULL for other templates.
+    m2 REAL,
+    nesting TEXT,
+    -- R97 — extra fields per template family:
+    --   qtd_metros: linear metres (Soldline, Laser)
+    --   cesta_n:    basket number (Expedição)
+    --   inicio/fim: start/end times HH:MM (Gemini + Paragens)
+    qtd_metros REAL,
+    cesta_n TEXT,
+    inicio TEXT,
+    fim TEXT,
     UNIQUE (sheet_id, row_index)
+);
+
+-- Learning engine — canonical store of learned proposals.
+-- Mined from `edits` (human corrections) + validated sheets every 50
+-- validated sheets. Low-risk proposals land as 'approved', behaviour-
+-- changing ones as 'quarantine' awaiting human review on /learnings.
+CREATE TABLE IF NOT EXISTS learnings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,            -- cliente_alias|operador_alias|modelo_alias
+                                   -- |confusion_pair|fewshot_example|snap_rule
+    field TEXT,                    -- affected field (cliente/modelo/operador/...)
+    template_name TEXT,            -- scope; NULL = global
+    payload TEXT NOT NULL,         -- JSON: the learning content
+    risk TEXT NOT NULL DEFAULT 'behavior',   -- 'low' | 'behavior'
+    status TEXT NOT NULL DEFAULT 'quarantine',  -- approved|quarantine|rejected|superseded
+    origin TEXT NOT NULL DEFAULT 'edits_mining', -- edits_mining|validated_sheets|llm|manual
+    evidence_count INTEGER NOT NULL DEFAULT 1,
+    evidence_refs TEXT,            -- JSON: list of edit_id / sheet_id
+    dedup_key TEXT NOT NULL UNIQUE,  -- stable key for idempotent upsert
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    decided_at TIMESTAMP,
+    decided_by TEXT,
+    note TEXT
+);
+
+-- Learning engine — one row per engine run. Doubles as the time series
+-- for the "corrections per sheet" success metric.
+CREATE TABLE IF NOT EXISTS learning_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    finished_at TIMESTAMP,
+    validated_count_at_run INTEGER,
+    edits_scanned INTEGER,
+    proposals_new INTEGER,
+    proposals_auto_applied INTEGER,
+    proposals_quarantined INTEGER,
+    corrections_per_sheet REAL,
+    status TEXT NOT NULL DEFAULT 'running',  -- running|done|error
+    error_message TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_sheets_status ON sheets(status);
@@ -85,6 +137,8 @@ CREATE INDEX IF NOT EXISTS idx_rows_cliente ON production_rows(cliente);
 CREATE INDEX IF NOT EXISTS idx_rows_operador ON production_rows(operador);
 CREATE INDEX IF NOT EXISTS idx_rows_iso_date ON production_rows(sheet_iso_date);
 CREATE INDEX IF NOT EXISTS idx_rows_modelo ON production_rows(modelo);
+CREATE INDEX IF NOT EXISTS idx_learnings_status ON learnings(status);
+CREATE INDEX IF NOT EXISTS idx_learnings_kind ON learnings(kind);
 """
 
 
@@ -121,6 +175,39 @@ def init_db() -> None:
         cols = {r["name"] for r in c.execute("PRAGMA table_info(sheets)").fetchall()}
         if "image_rotation" not in cols:
             c.execute("ALTER TABLE sheets ADD COLUMN image_rotation INTEGER NOT NULL DEFAULT 0")
+        # R86 — production_rows ganhou m2 + nesting (Gemini fields).
+        # R97 — production_rows ganhou qtd_metros (Soldline/Laser),
+        # cesta_n (Expedição), inicio/fim (Gemini/Paragens).
+        pr_cols = {r["name"] for r in c.execute("PRAGMA table_info(production_rows)").fetchall()}
+        if "m2" not in pr_cols:
+            c.execute("ALTER TABLE production_rows ADD COLUMN m2 REAL")
+        if "nesting" not in pr_cols:
+            c.execute("ALTER TABLE production_rows ADD COLUMN nesting TEXT")
+        for col, type_ in (
+            ("qtd_metros", "REAL"),
+            ("cesta_n", "TEXT"),
+            ("inicio", "TEXT"),
+            ("fim", "TEXT"),
+        ):
+            if col not in pr_cols:
+                c.execute(f"ALTER TABLE production_rows ADD COLUMN {col} {type_}")
+        # Learning engine — `edits.source` distinguishes human corrections
+        # ('human') from auto-snaps written by cross-check / operador_snap
+        # ('system'). The success metric only counts 'human'.
+        edit_cols = {r["name"] for r in c.execute("PRAGMA table_info(edits)").fetchall()}
+        if "source" not in edit_cols:
+            c.execute("ALTER TABLE edits ADD COLUMN source TEXT NOT NULL DEFAULT 'human'")
+        # One-time backfill: edits on header.pernr / header.cod_maquina are
+        # ALWAYS written by the system (operador_snap / codmaq fill), never
+        # typed by a human. The 'source' column defaults to 'human', so pre-
+        # existing rows were mislabelled — reclassify them so they don't
+        # pollute the learning attractors / metric. Idempotent: after the
+        # first pass these rows are 'system' and the WHERE no longer matches.
+        c.execute(
+            "UPDATE edits SET source = 'system' "
+            "WHERE source = 'human' "
+            "AND field_path IN ('header.pernr', 'header.cod_maquina')"
+        )
 
 
 def insert_sheet(image_path: str) -> int:
@@ -311,8 +398,10 @@ def _sync_production_rows(c: sqlite3.Connection, sheet_id: int, sheet_data: dict
                 operador, sheet_date, sheet_iso_date, captured_at, validated_at,
                 sheet_status, sheet_hours, sheet_total_qty,
                 pri, cliente, ov, of, modelo, qtd,
-                comp_mm, larg_mm, lote, coni, esp, lbase, ltopo)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                comp_mm, larg_mm, lote, coni, esp, lbase, ltopo,
+                m2, nesting,
+                qtd_metros, cesta_n, inicio, fim)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 sheet_id, i,
                 operador, sheet_date_raw, sheet_iso, captured_at, validated_at,
@@ -330,6 +419,16 @@ def _sync_production_rows(c: sqlite3.Connection, sheet_id: int, sheet_data: dict
                 _parse_float(row.get("esp")),
                 _parse_int(row.get("lbase")),
                 _parse_int(row.get("ltopo")),
+                # R86 — Gemini fields (m2 + nesting). Optional; bobine/laser
+                # rows leave these NULL.
+                _parse_float(row.get("m2")),
+                (row.get("nesting") or "").strip() or None,
+                # R97 — qtd_metros (Soldline/Laser), cesta_n (Expedição),
+                # inicio/fim (Gemini/Paragens). All optional.
+                _parse_float(row.get("qtd_metros")),
+                (row.get("cesta_n") or "").strip() or None,
+                (row.get("inicio") or "").strip() or None,
+                (row.get("fim") or "").strip() or None,
             ),
         )
 
@@ -340,6 +439,48 @@ def update_error(sheet_id: int, message: str) -> None:
             "UPDATE sheets SET status = 'error', error_message = ? WHERE id = ?",
             (message, sheet_id),
         )
+
+
+# R71 — helpers for the background OCR queue (status transitions + recovery)
+
+def update_status(sheet_id: int, status: str) -> None:
+    """Set the sheet's status without touching other fields. Used by the
+    background queue to flip sheets back to 'pending' on reprocess."""
+    with conn() as c:
+        c.execute(
+            "UPDATE sheets SET status = ? WHERE id = ?",
+            (status, sheet_id),
+        )
+
+
+def clear_error(sheet_id: int) -> None:
+    """Wipe the error_message column. Pair with update_status('pending')
+    when re-enqueueing a previously-errored sheet."""
+    with conn() as c:
+        c.execute(
+            "UPDATE sheets SET error_message = NULL WHERE id = ?",
+            (sheet_id,),
+        )
+
+
+def list_stuck_pending(older_than_seconds: int = 10) -> list[int]:
+    """Return sheet ids that have been in status='pending' for longer
+    than ``older_than_seconds``. Used at startup to re-enqueue uploads
+    that were in-flight when the previous process crashed/restarted.
+
+    Excludes very-recent rows (might be racing with this very startup).
+    """
+    with conn() as c:
+        rows = c.execute(
+            """
+            SELECT id FROM sheets
+             WHERE status = 'pending'
+               AND captured_at < datetime('now', ?)
+             ORDER BY id ASC
+            """,
+            (f"-{int(older_than_seconds)} seconds",),
+        ).fetchall()
+    return [r["id"] for r in rows]
 
 
 def get_sheet(sheet_id: int) -> dict | None:
@@ -356,10 +497,14 @@ def get_sheet(sheet_id: int) -> dict | None:
 
 def list_sheets(status: str | None = None, limit: int = 100) -> list[dict]:
     # Round 54 — also pull template_name + setor_maquina for badge rendering.
+    # R89 — pull `sheet_operador` (header.operador extracted by OCR) as
+    # fallback for the queue UI when `sheets.operador` is still NULL
+    # (sheets.operador only filled on validation).
     # json_extract is sqlite native + indexed via the sheet_data BLOB so no
     # extra cost vs the legacy SELECT.
     sql = """
         SELECT id, captured_at, status, operador, validated_at, image_path,
+               json_extract(sheet_data, '$.header.operador') AS sheet_operador,
                COALESCE(json_extract(sheet_data, '$.template_name'),
                         json_extract(raw_extraction, '$.template_name')) AS template_name,
                json_extract(sheet_data, '$.header.setor_maquina') AS setor_maquina
@@ -373,6 +518,38 @@ def list_sheets(status: str | None = None, limit: int = 100) -> list[dict]:
     params = (*params, limit)
     with conn() as c:
         return [dict(r) for r in c.execute(sql, params).fetchall()]
+
+
+def _normalize_data_pt_to_iso(s: str | None) -> str | None:
+    """R90 — Convert various PT/EU date formats to ISO YYYY-MM-DD.
+
+    Handles formats commonly written by operators on kanbans:
+      - DD-MM-YYYY  (canonical)
+      - DD-MM-YY    (2-digit year -> assume 20YY)
+      - DD.MM.YYYY  (dot separator)
+      - DD/MM/YYYY  (slash separator)
+      - D-M-YYYY    (without zero-pad)
+      - DD-MM-YYYY. (trailing punctuation)
+
+    Returns None when unrecognised so callers can treat as no-match.
+    """
+    if not s:
+        return None
+    import re as _re
+    cleaned = str(s).strip().rstrip(".").rstrip("/").rstrip("-")
+    m = _re.match(r"^(\d{1,2})[-./](\d{1,2})[-./](\d{2,4})$", cleaned)
+    if not m:
+        return None
+    d, mo, y = m.group(1), m.group(2), m.group(3)
+    if len(y) == 2:
+        y = "20" + y  # assume 21st century (2000-2099)
+    try:
+        d_i, m_i, y_i = int(d), int(mo), int(y)
+        if not (1 <= d_i <= 31 and 1 <= m_i <= 12 and 2000 <= y_i <= 2099):
+            return None
+        return f"{y_i:04d}-{m_i:02d}-{d_i:02d}"
+    except ValueError:
+        return None
 
 
 def _normalize_operador(s: str | None) -> str:
@@ -476,10 +653,15 @@ def apply_edit(
     sheet_id: int,
     field_path: str,
     new_value: str,
+    source: str = "human",
 ) -> tuple[str, str]:
     """Apply edit + insert audit row. Returns (old_value, new_value).
 
     Mutates ``sheet_data`` JSON in place; preserves ``raw_extraction``.
+
+    ``source`` is ``'human'`` for operator corrections (the default) and
+    ``'system'`` for auto-snaps written by cross-check / operador_snap.
+    The learning engine's success metric only counts ``'human'`` edits.
     """
     with conn() as c:
         row = c.execute(
@@ -495,8 +677,9 @@ def apply_edit(
             (json.dumps(data, ensure_ascii=False), sheet_id),
         )
         c.execute(
-            "INSERT INTO edits (sheet_id, field_path, old_value, new_value) VALUES (?, ?, ?, ?)",
-            (sheet_id, field_path, old, new_value),
+            "INSERT INTO edits (sheet_id, field_path, old_value, new_value, source) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (sheet_id, field_path, old, new_value, source),
         )
         # Re-sync production_rows so aggregations reflect the edit
         _sync_production_rows(c, sheet_id, data)
@@ -696,13 +879,12 @@ def list_sheets_filtered(
             setor_v = (d.get("sheet_setor") or "").upper().strip()
             if setor_v != target_setor:
                 continue
-        # data filter — header.data is DD-MM-YYYY; convert to YYYY-MM-DD for compare
+        # data filter — header.data has many operator-written formats
+        # (DD-MM-YYYY, DD-MM-YY, DD.MM.YYYY, DD/MM/YYYY, D-M-YYYY, ...).
+        # R90: use the robust normalizer so all variants of the same date
+        # match the requested ISO filter.
         if data_iso:
-            data_pt = (d.get("sheet_data_str") or "").strip()
-            if len(data_pt) == 10 and data_pt[2] == "-":
-                iso = f"{data_pt[6:10]}-{data_pt[3:5]}-{data_pt[0:2]}"
-            else:
-                iso = data_pt
+            iso = _normalize_data_pt_to_iso(d.get("sheet_data_str"))
             if iso != data_iso:
                 continue
         # of filter — sheet must have ≥ 1 row with this OF

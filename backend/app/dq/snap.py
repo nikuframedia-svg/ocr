@@ -22,6 +22,7 @@ flows through L3 → final ``CellAudit``.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,6 +49,19 @@ def _load_learned(repo: Path) -> dict:
     if not p.exists():
         return {}
     return json.loads(p.read_text(encoding="utf-8"))
+
+
+def _load_overlay(repo: Path) -> dict:
+    """Round 98 — learned overlay produced by the learning engine
+    (``backend/app/learning/``). Sits on top of the static lexicons; an
+    absent or unreadable file means an empty overlay (a no-op)."""
+    p = repo / "lexicons" / "learned_overlay.json"
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return {}
 
 
 # Lexicons cached at module load. Re-import the module to refresh
@@ -82,6 +96,70 @@ _REFS = _load_sap_plan(_REPO)
 _LOTES_SAP: frozenset[str] = frozenset(_REFS.get("lotes_sap", []))
 # OFs in plan are integers; we keep both string and int sets for fast lookup
 _OFS_PLAN_STR: frozenset[str] = frozenset(str(of) for of in _REFS.get("ofs_plan", []))
+
+# R73 — frozen set of canonical clientes from plan_colunas. Used by
+# snap_cliente Stage C5 (fuzzy match) when no exact / alias / OF-unique
+# rule fires. Lowercase comparison happens at call site.
+_CLIENTES_PLAN: frozenset[str] = frozenset(
+    str(c).strip().upper() for c in _REFS.get("clientes_plan", []) if c
+)
+
+# R73 — letter→digit OCR confusion map. Each letter maps to digits it's
+# typically confused with (in order of frequency). Used by snap_of Stage
+# A0 to recover alphanumeric OFs like `06015P` → `060158` or `26215F` →
+# `262156` (which the user confirmed against plan_colunas).
+_LETTER_TO_DIGITS: dict[str, tuple[str, ...]] = {
+    "F": ("6", "8", "5", "7", "E"),    # F most often = misread 6
+    "P": ("0", "8", "D", "B"),
+    "S": ("5", "8", "2"),
+    "B": ("8", "6", "3"),
+    "O": ("0", "D", "Q"),
+    "D": ("0", "O", "B"),
+    "I": ("1", "L", "T"),
+    "L": ("1", "I"),
+    "T": ("1", "7"),
+    "Z": ("2", "7"),
+    "G": ("6", "0", "C"),
+    "E": ("3", "B"),
+    "Y": ("7", "V"),
+    "Q": ("0", "9"),
+    "C": ("0", "G"),
+    # Lowercase variants — operator sometimes writes mixed-case
+    "f": ("6", "8"), "p": ("0", "8"), "s": ("5",), "b": ("8", "6"),
+    "o": ("0",), "i": ("1",), "l": ("1",), "t": ("1", "7"),
+}
+
+
+def _generate_digit_substitutions(raw: str, max_combos: int = 32) -> set[str]:
+    """R73 — generate all combinations of letter→digit substitutions
+    for an alphanumeric OF using ``_LETTER_TO_DIGITS``.
+
+    Each letter is replaced with each of its possible digit confusions
+    (cartesian product). Capped at ``max_combos`` to avoid exponential
+    blow-up for OFs with many letters. Letters not in the confusion map
+    stay as-is — those candidates will fail _OFS_PLAN_STR lookup, which
+    is safe.
+
+    Example: ``26215F`` → ``{26215F, 262156, 262158, 262155, 262157,
+    26215E}`` (6 candidates). Caller checks each against the plan.
+    """
+    out: set[str] = {raw}
+    for pos, ch in enumerate(raw):
+        digits = _LETTER_TO_DIGITS.get(ch, ())
+        if not digits:
+            continue
+        new_out: set[str] = set()
+        for cand in out:
+            for d in digits:
+                new_out.add(cand[:pos] + d + cand[pos + 1:])
+                if len(new_out) >= max_combos:
+                    break
+            if len(new_out) >= max_combos:
+                break
+        out.update(new_out)
+        if len(out) >= max_combos:
+            break
+    return out
 # OF (str) -> set of OVs found for that OF in the plan. Used to disambiguate
 # Lev-1 OF candidates: when our row has OV "X" and only one Lev-1 candidate
 # OF has X in its plan entries, snap to it.
@@ -119,6 +197,72 @@ def _load_cliente_aliases(repo: Path) -> dict[str, str]:
         return {}
 
 _CLIENTE_ALIASES: dict[str, str] = _load_cliente_aliases(_REPO)
+
+
+# ============================================================================
+#  Round 98 — learned overlay (learning-engine feedback loop)
+# ============================================================================
+# lexicons/learned_overlay.json is produced by backend/app/learning/ from
+# APPROVED learnings. It is folded ON TOP of the static lexicons above —
+# never replacing them. reload_lexicons() re-applies it at runtime so an
+# approval on the /learnings page takes effect without a server restart.
+
+# Static bases captured before the overlay is folded in, so a reload can
+# always re-merge from a clean starting point.
+_BASE_CLIENTES: tuple[str, ...] = _CLIENTES
+_BASE_CONFUSION: dict[str, dict[str, float]] = _CONFUSION
+_BASE_MODELOS_FULL: tuple[str, ...] = _MODELOS_FULL
+_BASE_CLIENTE_ALIASES: dict[str, str] = dict(_CLIENTE_ALIASES)
+
+
+def _merge_confusion(
+    base: dict[str, dict[str, float]],
+    overlay: dict[str, dict[str, float]],
+) -> dict[str, dict[str, float]]:
+    """Merge overlay confusion weights into the base matrix: weights for
+    the same (gold, ocr) pair add up, capped at 1.0."""
+    out: dict[str, dict[str, float]] = {gc: dict(ocs) for gc, ocs in base.items()}
+    for gc, ocs in (overlay or {}).items():
+        dst = out.setdefault(gc, {})
+        for oc, w in (ocs or {}).items():
+            try:
+                dst[oc] = min(1.0, dst.get(oc, 0.0) + float(w))
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
+def reload_lexicons() -> None:
+    """Re-read the learned overlay and fold it into the overlay-affected
+    globals (``_CLIENTES``, ``_MODELOS_FULL``, ``_CONFUSION``,
+    ``_CLIENTE_ALIASES``).
+
+    Safe to call repeatedly. Called once at import, by the learning engine
+    after a cycle, and by the web layer right after a learning is approved.
+    """
+    global _CLIENTES, _CONFUSION, _MODELOS_FULL, _CLIENTE_ALIASES
+    overlay = _load_overlay(_REPO)
+    _CLIENTES = _BASE_CLIENTES + tuple(
+        str(v).strip() for v in overlay.get("clientes_observed", []) if v
+    )
+    _MODELOS_FULL = _BASE_MODELOS_FULL + tuple(
+        str(v).strip() for v in overlay.get("modelos_observed", []) if v
+    )
+    _CONFUSION = _merge_confusion(
+        _BASE_CONFUSION, overlay.get("confusion_overlay", {})
+    )
+    # Static, operator-curated aliases win over auto-learned ones on conflict.
+    merged = {
+        str(k).upper(): str(v).upper()
+        for k, v in overlay.get("cliente_aliases", {}).items()
+        if isinstance(v, str)
+    }
+    merged.update(_BASE_CLIENTE_ALIASES)
+    _CLIENTE_ALIASES = merged
+
+
+# Fold the overlay in at import time.
+reload_lexicons()
 
 # Round 37 — OF → set of distinct clientes seen in plan_colunas. 99.8 %
 # of OFs have a single cliente, used for unambiguous OF→cliente snap.
@@ -486,34 +630,39 @@ def _num_or_none(v):
         return None
 
 
-def _score_of_holistic(of: str, row: dict) -> int:
-    """Round 51 — equal-weight 0-9 score: count of fields where the
-    operator's row matches plan/SAP canonical for this OF.
+def _score_of_holistic(of: str, row: dict) -> float:
+    """Round 51 + R74 — equal-weight score (0.0 — 9.0) with partial credits.
+
+    Each verifiable field gives:
+      - 1.0 (exact match)
+      - 0.5 (fuzzy/partial match) — R74 addition for cliente/ov/modelo
+      - 0.0 (no match)
 
     User principle: "os campos têm o mesmo peso, encontrar o melhor
-    match em TODOS os campos". Each verifiable field = +1 point.
+    match em TODOS os campos".
 
-    9 fields scored (per-OF discriminating + per-lote informative):
-      1. cliente match (op vs plan[OF].cliente, alias-resolved)
-      2. ov match (op vs plan[OF].ov, exact)
-      3. modelo substring (op upper in plan.designacao upper)
-      4. comp ±50mm
-      5. lbase ±30mm
-      6. ltopo ±30mm
-      7. esp ±0.05
-      8. larg via SAP[op_lote].larg ±20mm
-      9. material consistency (plan[OF].material == SAP[op_lote].desc first token)
+    R74 partial credits help recover rows where OCR mangled multiple
+    fields at once (e.g. STOCK MTG BELUX → STOCK TRS still gives 0.5
+    via shared "STOCK" token). Without these, severely-corrupted rows
+    return empty pool from snap_of.
 
-    Fields 8/9 are tied to op_lote (same across all OF candidates) so
-    they don't discriminate between OFs but contribute to absolute score.
-    Use this score to compare candidates AND assess overall row quality.
+    9 fields scored:
+      1. cliente — exact / shared token (≥3 chars) → 1.0 / 0.5
+      2. ov — exact / same-length Lev-1 or Lev-2 → 1.0 / 0.5
+      3. modelo — substring of designacao / shared 4+ char token → 1.0 / 0.5
+      4. comp ±100mm → 1.0
+      5. lbase ±30mm → 1.0
+      6. ltopo ±30mm → 1.0
+      7. esp ±0.05 → 1.0
+      8. larg via SAP[op_lote].larg ±20mm → 1.0
+      9. material consistency (plan[OF].material == SAP[op_lote].desc) → 1.0
 
     Multiple plan entries per OF: returns max across entries.
-    Returns 0 if OF not in plan.
+    Returns 0.0 if OF not in plan.
     """
     entries = _OF_TO_ENTRIES_FULL.get(of, ())
     if not entries:
-        return 0
+        return 0.0
 
     op_cli_raw = (row.get("cliente") or "").strip().upper()
     op_cli = _CLIENTE_ALIASES.get(op_cli_raw, op_cli_raw)
@@ -526,6 +675,14 @@ def _score_of_holistic(of: str, row: dict) -> int:
     op_larg = _num_or_none(row.get("larg_mm"))
     op_lote = (row.get("lote") or "").strip().upper()
 
+    # R74: pre-tokenize operator fields once for reuse across entries
+    op_cli_tokens = (
+        {t for t in op_cli.split() if len(t) >= 3} if op_cli else set()
+    )
+    op_mod_tokens = (
+        set(re.findall(r"[A-Z0-9]{4,}", op_mod)) if op_mod else set()
+    )
+
     sap_e = _REFS.get("lotes_sap_full", {}).get(op_lote) if op_lote else None
     sap_larg = _num_or_none(sap_e.get("larg")) if sap_e else None
     sap_desc_first = ""
@@ -533,33 +690,58 @@ def _score_of_holistic(of: str, row: dict) -> int:
         d = (sap_e.get("desc") or "").strip().upper()
         sap_desc_first = d.split()[0] if d.split() else ""
 
-    best = 0
+    best = 0.0
     for e in entries:
-        s = 0
-        if op_cli and op_cli == (e.get("cliente") or "").strip().upper():
-            s += 1
-        if op_ov and op_ov == str(e.get("ov") or "").strip():
-            s += 1
+        s = 0.0
+
+        # Cliente: 1.0 exact, 0.5 if any shared token ≥3 chars
+        plan_cli = (e.get("cliente") or "").strip().upper()
+        if op_cli and op_cli == plan_cli:
+            s += 1.0
+        elif plan_cli and op_cli_tokens:
+            plan_cli_tokens = {t for t in plan_cli.split() if len(t) >= 3}
+            if op_cli_tokens & plan_cli_tokens:
+                s += 0.5
+
+        # OV: 1.0 exact, 0.5 if same-length Lev-1 or Lev-2 (digit-only)
+        plan_ov = str(e.get("ov") or "").strip()
+        if op_ov and op_ov == plan_ov:
+            s += 1.0
+        elif (op_ov and plan_ov and len(op_ov) == len(plan_ov)
+                and op_ov.isdigit() and plan_ov.isdigit()):
+            diffs = sum(1 for a, b in zip(op_ov, plan_ov) if a != b)
+            if 1 <= diffs <= 2:
+                s += 0.5
+
+        # Modelo: 1.0 if substring of designacao, 0.5 if any 4+ char
+        # token overlap (alphanum)
         des = (e.get("designacao") or "").upper()
         if op_mod and len(op_mod) >= 4 and op_mod in des:
-            s += 1
+            s += 1.0
+        elif op_mod_tokens and des:
+            des_tokens = set(re.findall(r"[A-Z0-9]{4,}", des))
+            if op_mod_tokens & des_tokens:
+                s += 0.5
+
+        # Dim/esp fields — unchanged from R51 (integer 1.0/0)
         plan_comp = _num_or_none(e.get("comp"))
         if op_comp is not None and plan_comp is not None and abs(op_comp - plan_comp) <= 100:
-            s += 1  # R52: ±100mm matches engine.py TOL_COMP_MM
+            s += 1.0  # R52: ±100mm matches engine.py TOL_COMP_MM
         plan_lb = _num_or_none(e.get("lbase"))
         if op_lb is not None and plan_lb is not None and abs(op_lb - plan_lb) <= 30:
-            s += 1
+            s += 1.0
         plan_lt = _num_or_none(e.get("ltopo"))
         if op_lt is not None and plan_lt is not None and abs(op_lt - plan_lt) <= 30:
-            s += 1
+            s += 1.0
         plan_esp = _num_or_none(e.get("esp"))
         if op_esp is not None and plan_esp is not None and abs(op_esp - plan_esp) <= 0.05:
-            s += 1
+            s += 1.0
         if sap_larg is not None and op_larg is not None and abs(op_larg - sap_larg) <= 20:
-            s += 1
+            s += 1.0
         plan_mat = (e.get("material") or "").strip().upper()
         if plan_mat and sap_desc_first and plan_mat == sap_desc_first:
-            s += 1
+            s += 1.0
+
         if s > best:
             best = s
     return best
@@ -687,6 +869,36 @@ def snap_cliente(value: str, *, row_context: dict | None = None) -> SnapResult:
         candidates = tuple(c for c, s in scored[:5] if s >= 85)
         return SnapResult(raw=raw, snapped=best, rule="cliente.fuzzy",
                           distance=100 - best_score, applied=True, candidates=candidates)
+
+    # Stage C5 (R73): fuzzy against the FULL plan_clientes pool (~712
+    # entries vs the 42 of _CLIENTES). Catches OCR misreads of clientes
+    # that don't exist in the local lexicon (LASER/Gemini sectors). Same
+    # rapidfuzz logic (token_sort + ratio max). Requires:
+    #   - top score ≥ 80 (slightly lower than Stage 4's 85 because pool
+    #     is bigger → more chance of legit close match)
+    #   - gap ≥ 8 to runner-up (uniqueness)
+    if su and len(su) >= 3:
+        plan_scored: list[tuple[str, float]] = []
+        for c in _CLIENTES_PLAN:
+            if len(c) < 3:
+                continue
+            s_token = fuzz.token_sort_ratio(su, c)
+            s_ratio = fuzz.ratio(su, c)
+            plan_scored.append((c, max(s_token, s_ratio)))
+        if plan_scored:
+            plan_scored.sort(key=lambda x: -x[1])
+            best_p, best_p_score = plan_scored[0]
+            runner_score = plan_scored[1][1] if len(plan_scored) > 1 else 0.0
+            if (best_p_score >= 80 and best_p != su
+                    and (best_p_score - runner_score) >= 8):
+                cands = tuple(c for c, s in plan_scored[:5] if s >= 80)
+                return SnapResult(
+                    raw=raw, snapped=best_p,
+                    rule=f"cliente.plan_fuzzy_{int(best_p_score)}",
+                    distance=100 - best_p_score, applied=True,
+                    candidates=cands,
+                )
+
     return SnapResult(raw=raw, snapped=raw, rule="cliente.no_match",
                       distance=100 - best_score if scored else 100.0, applied=False)
 
@@ -1280,6 +1492,29 @@ def _lev1_candidates(target: str, pool) -> list[str]:
     return out
 
 
+def _lev2_same_length_candidates(target: str, pool) -> list[str]:
+    """R77 (A8) — Return same-length Lev-2 candidates from ``pool``.
+
+    For severe OCR errors (e.g. `06015P` → `262157` has 3 diffs but
+    Lev-1 doesn't see it). Lev-2 same-length is a compromise: catches
+    2-char substitutions without exploding combinatorics. Combined with
+    row-context scoring downstream (only added if score after scoring
+    is plausible), false positives are bounded.
+
+    Restricted to same-length to limit pool size — different-length
+    matches typically come from format-clean (cleaned digits).
+    """
+    out: list[str] = []
+    tlen = len(target)
+    for c in pool:
+        if len(c) != tlen:
+            continue
+        diffs = sum(1 for a, b in zip(c, target) if a != b)
+        if diffs == 2:
+            out.append(c)
+    return out
+
+
 def snap_lote(value: str, *, row_context: dict | None = None) -> SnapResult:
     """Lote = `[HM]\\d{2}B\\d{4,5}` (heat-treatment batch identifier).
 
@@ -1446,6 +1681,19 @@ def snap_of(value: str, *, row_context: dict | None = None) -> SnapResult:
     raw_up = pre_snapped.strip()
     cleaned = re.sub(r"\D", "", raw) if re.search(r"[^\d]", raw) else None
 
+    # R74 + R77 (A2): recovery mode — OCR.of contains letters OR doesn't
+    # match any plan OF. In recovery, threshold for pool inclusion drops
+    # to ≥2.5 (was 3.0). Partial credits typically max around 2.5-3.5 for
+    # severely-corrupted rows; lowering recovers rows where only 1 strong
+    # signal + lbase + ltopo trigger snap. Safety: gap requirement ≥ 1.0
+    # vs runner-up enforces uniqueness.
+    in_recovery = (
+        any(c.isalpha() for c in raw_up)
+        or (raw_up not in _OFS_PLAN_STR
+            and (cleaned is None or cleaned not in _OFS_PLAN_STR))
+    )
+    score_threshold = 2.5 if in_recovery else 4.0
+
     # 2. Build candidate pool
     candidates: set[str] = set()
     # 2a. OCR.of (raw + cleaned variants)
@@ -1453,6 +1701,18 @@ def snap_of(value: str, *, row_context: dict | None = None) -> SnapResult:
         candidates.add(raw_up)
     if cleaned and cleaned in _OFS_PLAN_STR:
         candidates.add(cleaned)
+    # 2a' (R73): alphanumeric digit-letter OCR confusion recovery.
+    # When raw contains letters (e.g. `26215F`, `06015P`), generate
+    # candidates by replacing each letter with its possible digit
+    # confusions (F→6/8, P→0/8, etc.). Adds whichever variants exist
+    # in plan to the pool; holistic scoring downstream picks the best
+    # match using row_context. Catches LASER/Gemini sectors where OCR
+    # confuses digits with letters in OFs. Capped at 32 variants to
+    # avoid blow-up on OFs with many letters.
+    if any(c.isalpha() for c in raw_up):
+        for variant in _generate_digit_substitutions(raw_up, max_combos=32):
+            if variant in _OFS_PLAN_STR:
+                candidates.add(variant)
     if row_context:
         # 2b. OFs sharing operator's OV
         ov_ctx = str(row_context.get("ov", "") or "").strip()
@@ -1466,15 +1726,28 @@ def snap_of(value: str, *, row_context: dict | None = None) -> SnapResult:
             candidates.update(_lev1_candidates(raw_up, _OFS_PLAN_STR))
         if cleaned and re.match(r"^\d{5,7}$", cleaned):
             candidates.update(_lev1_candidates(cleaned, _OFS_PLAN_STR))
-        # 2d. Cliente-scoped top-K (filter score ≥ 4 to bound search)
+        # 2c' R77 (A8): Lev-2 same-length candidates in recovery mode.
+        # Catches severe OCR errors (e.g. 06015P → 060150 differs in 1
+        # letter→digit, but real plan OF 262157 is 3 diffs away — Lev-1
+        # misses it). Adds candidates capped at 100 to bound search;
+        # holistic scoring filters by score_threshold downstream.
+        if in_recovery:
+            lev2_source = cleaned if cleaned else raw_up
+            if lev2_source and re.match(r"^\d{5,7}$", lev2_source):
+                lev2_cands = _lev2_same_length_candidates(lev2_source, _OFS_PLAN_STR)
+                # Cap to avoid pool explosion (Lev-2 can return hundreds)
+                if len(lev2_cands) <= 100:
+                    candidates.update(lev2_cands)
+        # 2d. Cliente-scoped top-K (filter score ≥ score_threshold; R74
+        # drops threshold to 3.0 in recovery mode for severely-corrupted rows)
         cli_raw = str(row_context.get("cliente", "") or "").strip().upper()
         cli = _CLIENTE_ALIASES.get(cli_raw, cli_raw)
         if cli:
-            cli_scored: list[tuple[int, str]] = []
+            cli_scored: list[tuple[float, str]] = []
             for cof, clis in _OF_TO_CLIENTES.items():
                 if cli in clis:
                     s = _score_of_holistic(cof, row_context)
-                    if s >= 4:
+                    if s >= score_threshold:
                         cli_scored.append((s, cof))
             cli_scored.sort(reverse=True)
             candidates.update(c for _, c in cli_scored[:20])
@@ -1507,13 +1780,14 @@ def snap_of(value: str, *, row_context: dict | None = None) -> SnapResult:
                             _GEOMETRY_INDEX.get((base_b + db, topo_b + dt), frozenset())
                         )
                 # Geom can return 100s of OFs; pre-filter by score
+                # (R74: threshold honours recovery mode)
                 if len(geom_hits) > 30:
                     geom_scored = sorted(
                         ((_score_of_holistic(o, row_context), o) for o in geom_hits),
                         reverse=True,
                     )
                     candidates.update(
-                        o for s, o in geom_scored[:30] if s >= 4
+                        o for s, o in geom_scored[:30] if s >= score_threshold
                     )
                 else:
                     candidates.update(geom_hits)

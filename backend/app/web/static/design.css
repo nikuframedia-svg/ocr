@@ -722,4 +722,194 @@ label.inline {
 .sev-rail.crit { background: var(--crit); }
 .sev-rail.warn { background: var(--warn); }
 .sev-rail.info { background: var(--info); }
+
+/* =====================================================================
+   R80 — Cross-check snap indicator (cells auto-corrigidas)
+   Marca passiva: pointer-events:none deixa clicks passarem para a célula.
+   ===================================================================== */
+.cc-snapped-mark {
+  display: inline-block;
+  margin-left: 3px;
+  font-weight: 700;
+  font-size: 10px;
+  color: var(--ink);
+  opacity: 0.65;
+  vertical-align: super;
+  line-height: 1;
+  pointer-events: none;
+}
 .sev-rail.idle { background: var(--ink-5); }
+
+/* ===================================================================
+   Aprendizagens & Regras  (/learnings)  — Round 98
+   =================================================================== */
+.lr-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--rule-2);
+  margin-bottom: 18px;
+}
+.lr-tab {
+  padding: 9px 18px;
+  font: 600 13px/1 var(--font-sans);
+  color: var(--ink-4);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+.lr-tab:hover { color: var(--ink-2); }
+.lr-tab.active {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+
+.lr-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.lr-toolbar select {
+  padding: 7px 10px;
+  border: 1px solid var(--rule-2);
+  border-radius: 6px;
+  background: var(--surface-2);
+  font: 500 12px var(--font-sans);
+}
+.lr-metric {
+  margin-left: auto;
+  font: 500 12px var(--font-sans);
+  color: var(--ink-3);
+}
+.lr-metric b { font-size: 18px; color: var(--ink); }
+
+.lr-rule {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--rule);
+  border-left: 4px solid var(--rule-2);
+  border-radius: 8px;
+  background: var(--surface-2);
+  margin-bottom: 8px;
+}
+.lr-rule.quarantine { border-left-color: var(--accent); background: var(--surface); }
+.lr-rule.approved   { border-left-color: var(--ok); }
+.lr-rule.rejected   { border-left-color: var(--ink-5); opacity: 0.6; }
+.lr-rule-main { flex: 1; min-width: 0; }
+.lr-rule-desc { font: 500 13px var(--font-sans); color: var(--ink); }
+.lr-rule-desc .mono { font-family: var(--font-mono); }
+.lr-rule-meta { margin-top: 4px; font: 400 11px var(--font-sans); color: var(--ink-4); }
+.lr-rule-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+.lr-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 99px;
+  font: 600 10px/1.5 var(--font-mono);
+  text-transform: uppercase;
+  background: var(--paper-3);
+  color: var(--ink-3);
+}
+.lr-badge.quarantine { background: var(--accent-soft); color: var(--accent-ink); }
+.lr-badge.approved   { background: var(--ok-soft); color: var(--ok); }
+.lr-badge.rejected   { background: var(--paper-3); color: var(--ink-4); }
+.lr-evidence { color: var(--ink-4); font-size: 11px; }
+
+.lr-edit { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+.lr-edit input {
+  padding: 6px 8px;
+  border: 1px solid var(--rule-2);
+  border-radius: 6px;
+  font: 500 12px var(--font-mono);
+}
+
+/* --- LLM tab --- */
+.lr-attractor {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: var(--surface-2);
+  margin-bottom: 6px;
+}
+.lr-attractor-bar {
+  width: 4px;
+  align-self: stretch;
+  border-radius: 2px;
+  background: var(--ink-5);
+}
+.lr-attractor-bar.alta  { background: var(--crit); }
+.lr-attractor-bar.media { background: var(--warn); }
+.lr-attractor-bar.baixa { background: var(--ok); }
+.lr-attractor-main { flex: 1; min-width: 0; }
+
+.lr-chat {
+  display: flex;
+  flex-direction: column;
+  height: 62vh;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.lr-chat-log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.lr-msg {
+  max-width: 78%;
+  padding: 10px 13px;
+  border-radius: 12px;
+  font: 400 13px/1.5 var(--font-sans);
+  white-space: pre-wrap;
+}
+.lr-msg.user {
+  align-self: flex-end;
+  background: var(--ink);
+  color: var(--paper);
+  border-bottom-right-radius: 3px;
+}
+.lr-msg.assistant {
+  align-self: flex-start;
+  background: var(--paper-2);
+  color: var(--ink);
+  border-bottom-left-radius: 3px;
+}
+.lr-msg-chart {
+  margin-top: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 8px;
+}
+.lr-proposed {
+  margin-top: 10px;
+  padding: 9px 11px;
+  border: 1px dashed var(--accent);
+  border-radius: 8px;
+  background: var(--accent-soft);
+}
+.lr-chat-input {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid var(--rule);
+}
+.lr-chat-input textarea {
+  flex: 1;
+  resize: none;
+  padding: 9px 11px;
+  border: 1px solid var(--rule-2);
+  border-radius: 8px;
+  font: 400 13px var(--font-sans);
+}

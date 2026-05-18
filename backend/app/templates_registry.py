@@ -13,18 +13,22 @@ Templates fall into 3 families:
 | TPL103 Paragens | quinadora_pav4_paragens | `motivo, inicio, fim, duracao, resolvido` |
 | TPL102 Produção Gemini | gasparini, hpe32, hd36 | `pf, cliente, of, modelo, cf, m2, qtd, nesting, inicio, fim, np` |
 
-Phase mapping (matches dashboard R29 sector flow):
+Phase mapping (matches dashboard R29 sector flow). R68: phases
+re-aligned with user's verbatim distribution — Gemini machines merged
+into "Corte"; "Quinagem" renamed to "Quinadora"; "Manual" + "Robot"
+merged into "Abertura Portinholas".
 
-| Phase           | Templates                                  |
-|-----------------|--------------------------------------------|
-| Bobine Formato  | bobine_formato                             |
-| Corte           | guilhotina, linha_corte                    |
-| Corte térmico   | gasparini, hpe32, hd36                     |
-| Quinagem        | quinadora_pav4_paragens, quinadora_pav8,   |
-|                 | guifil                                     |
-| Soldadura       | soldline, laser                            |
-| Manual / Robot  | manual, robot                              |
-| Expedição       | expedicao                                  |
+| Phase                  | Templates                                  |
+|------------------------|--------------------------------------------|
+| Bobine Formato         | bobine_formato                             |
+| Corte                  | guilhotina, linha_corte, gasparini,        |
+|                        | hpe32, hd36                                |
+| Quinadora              | quinadora_pav4_paragens, quinadora_pav8,   |
+|                        | guifil                                     |
+| Soldadura              | soldline, laser                            |
+| Abertura Portinholas   | manual, robot                              |
+| Acabamento             | (template TBD — aguarda foto real, R69+)   |
+| Expedição              | expedicao                                  |
 
 Public API:
     TEMPLATES: dict[str, TemplateSpec]   # 11 entries keyed by canonical name
@@ -178,7 +182,7 @@ _LINHA_CORTE = TemplateSpec(
 _QUINADORA_PAV8 = TemplateSpec(
     name="quinadora_pav8",
     tpl_code="TPL103",
-    phase="Quinagem",
+    phase="Quinadora",
     setor_aliases=("QUINADORA PAV.8", "QUINADORA PAV 8", "QUINADORA PAV8"),
     row_fields=(
         "pri", "cliente", "ov", "of", "modelo", "qtd",
@@ -194,7 +198,7 @@ _QUINADORA_PAV8 = TemplateSpec(
 _GUIFIL = TemplateSpec(
     name="guifil",
     tpl_code="TPL103",
-    phase="Quinagem",
+    phase="Quinadora",
     setor_aliases=("GUIFIL", "QUINADORA GUIFIL"),
     row_fields=(
         "pri", "cliente", "ov", "of", "modelo",
@@ -244,7 +248,7 @@ _LASER = TemplateSpec(
 _MANUAL = TemplateSpec(
     name="manual",
     tpl_code="TPL103",
-    phase="Manual",
+    phase="Abertura Portinholas",
     setor_aliases=("MANUAL",),
     row_fields=(
         "pri", "cliente", "ov", "of", "modelo",
@@ -260,7 +264,7 @@ _MANUAL = TemplateSpec(
 _ROBOT = TemplateSpec(
     name="robot",
     tpl_code="TPL103",
-    phase="Robot",
+    phase="Abertura Portinholas",
     setor_aliases=("ROBOT", "ROBOT COLUNAS"),
     row_fields=(
         "pri", "cliente", "ov", "of", "modelo",
@@ -297,7 +301,7 @@ _EXPEDICAO = TemplateSpec(
 _QUINADORA_PAV4_PARAGENS = TemplateSpec(
     name="quinadora_pav4_paragens",
     tpl_code="TPL103",
-    phase="Quinagem",
+    phase="Quinadora",
     setor_aliases=("QUINADORA PAV.4", "QUINADORA PAV 4", "QUINADORA PAV4"),
     row_fields=(
         "motivo", "inicio", "fim", "duracao", "resolvido",
@@ -324,7 +328,7 @@ _GEMINI_CROSS_CHECK = ("cliente", "of", "modelo")  # nesting domain — limited 
 _GASPARINI = TemplateSpec(
     name="gasparini",
     tpl_code="TPL102",
-    phase="Corte térmico",
+    phase="Corte",
     setor_aliases=("GASPARINI",),
     row_fields=_GEMINI_ROW_FIELDS,
     footer_fields=_GEMINI_FOOTER,
@@ -337,7 +341,7 @@ _GASPARINI = TemplateSpec(
 _HPE32 = TemplateSpec(
     name="hpe32",
     tpl_code="TPL102",
-    phase="Corte térmico",
+    phase="Corte",
     setor_aliases=("HPE32", "HPE 32"),
     row_fields=_GEMINI_ROW_FIELDS,
     footer_fields=_GEMINI_FOOTER,
@@ -350,7 +354,7 @@ _HPE32 = TemplateSpec(
 _HD36 = TemplateSpec(
     name="hd36",
     tpl_code="TPL102",
-    phase="Corte térmico",
+    phase="Corte",
     setor_aliases=("HD36", "HD 36"),
     row_fields=_GEMINI_ROW_FIELDS,
     footer_fields=_GEMINI_FOOTER,

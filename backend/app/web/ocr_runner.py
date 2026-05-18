@@ -78,12 +78,28 @@ def _swap_prompt(prompt_text: str) -> tuple[str, str]:
     return prev
 
 
-def _run_ocr(image_path: Path) -> tuple[dict, dict | None]:
+def _run_ocr(
+    image_path: Path,
+    template: Any = None,
+) -> tuple[dict, dict | None]:
     """Run ocr6.process_image with the currently-installed prompt.
 
     Returns (raw_extraction_dict, metrics_dict). Raises on hard failure.
+
+    R84: pass template's row/header/footer fields to ocr6 so the
+    normalization step preserves the template's schema instead of forcing
+    bobine_formato's 13-column schema. ``template=None`` keeps legacy
+    behavior (bobine schema) for pass-1.
     """
-    result = ocr6.process_image(image_path, idx=1, total=1)
+    if template is not None:
+        result = ocr6.process_image(
+            image_path, idx=1, total=1,
+            row_fields=template.row_fields,
+            header_fields=template.header_fields,
+            footer_fields=template.footer_fields,
+        )
+    else:
+        result = ocr6.process_image(image_path, idx=1, total=1)
     if not result.metrics or result.metrics.status != "ok":
         err = result.metrics.error if result.metrics else "unknown"
         raise RuntimeError(f"OCR failed: {err}")
@@ -153,10 +169,12 @@ def run_pipeline(image_path: Path) -> dict:
         # Bobine path — pass-1 result is canonical, no re-run needed
         raw_extraction = pass1_raw
     else:
-        # Non-bobine — run pass 2 with template-specific prompt
+        # Non-bobine — run pass 2 with template-specific prompt AND
+        # template-specific schema so ocr6.normalize_extraction preserves
+        # the right row keys (R84).
         prev = _swap_prompt(build_prompt(template))
         try:
-            pass2_raw, _ = _run_ocr(image_path)
+            pass2_raw, _ = _run_ocr(image_path, template=template)
         finally:
             # Restore v3 baseline so subsequent uploads start fresh
             ocr6.PROMPT, ocr6.PROMPT_HASH = prev
@@ -215,7 +233,7 @@ def rerun_pipeline_for_template(
     else:
         prev = _swap_prompt(build_prompt(template))
         try:
-            raw_extraction, _ = _run_ocr(image_path)
+            raw_extraction, _ = _run_ocr(image_path, template=template)
         finally:
             ocr6.PROMPT, ocr6.PROMPT_HASH = prev
 

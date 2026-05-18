@@ -3,6 +3,14 @@
 {% block content %}
 <div x-data="cellEditor()" @open-cell-editor.window="open($event.detail)">
 
+{# R88: botão "← Voltar à lista" preserva filtros da página de origem
+   (queue ou kanbans). Só aparece quando o URL veio com ?back=<path>. #}
+{% if back_url %}
+<div style="margin-bottom:10px;">
+  <a href="{{ back_url }}" class="btn ghost" style="font-size:12px;">← Voltar à lista</a>
+</div>
+{% endif %}
+
 <div class="page-h">
   <div style="flex:1; min-width:0;">
     <div class="page-eyebrow">Folha · {{ sheet.captured_at }}</div>
@@ -68,10 +76,27 @@
       <span class="pill ok">✓ Validada · {{ sheet.operador }}</span>
       <a class="btn" href="/sheet/{{ sheet.id }}/csv">Baixar CSV</a>
     {% else %}
-      <form method="post" action="/sheet/{{ sheet.id }}/validate"
-            style="display:inline-flex; gap:8px; align-items:center;">
+      {# R94: validação pede explícita confirmação de data + nº operador
+         (não só do nome). Pré-preenchidos com valores actuais — operador
+         só altera se OCR errou. #}
+      <form id="validate-form" method="post" action="/sheet/{{ sheet.id }}/validate"
+            style="display:inline-flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <label style="display:inline-flex; align-items:center; gap:4px;">
+          <span class="lbl" style="margin:0; font-size:10px;">DATA</span>
+          <input type="date" name="data"
+                 value="{{ data_iso_for_validate or '' }}"
+                 min="2024-01-01" max="2030-12-31"
+                 required class="kv-select" style="width:140px;">
+        </label>
+        <label style="display:inline-flex; align-items:center; gap:4px;">
+          <span class="lbl" style="margin:0; font-size:10px;">Nº OP</span>
+          <input type="text" name="n_operador" inputmode="numeric"
+                 value="{{ header.n_operador or '' }}"
+                 pattern="\d{1,5}" placeholder="ex: 1481"
+                 required class="kv-select" style="width:80px;">
+        </label>
         <select name="operador" required class="kv-select" style="min-width:180px;">
-          <option value="">Confirmar operador…</option>
+          <option value="">Confirmar nome…</option>
           {% for op in operadores %}<option value="{{ op }}">{{ op }}</option>{% endfor %}
         </select>
         <button class="btn primary" type="submit">Validar</button>
@@ -81,6 +106,22 @@
 </div>
 
 <div class="page-content">
+
+{% if sheet.status == 'pending' %}
+  {# R71 — sheet is in the background OCR queue. HTMX polls the
+     status-fragment every 2s. When OCR completes (status flips out
+     of 'pending'), the fragment responds with HX-Refresh:true which
+     triggers a full-page reload to show the extracted data. #}
+  <div class="alert info" style="margin-bottom:16px;"
+       hx-get="/sheet/{{ sheet.id }}/status-fragment"
+       hx-trigger="every 2s"
+       hx-swap="outerHTML">
+    <div>
+      <b>⏳ A processar OCR...</b><br>
+      <span class="muted tiny">A folha está na fila do servidor. Esta página actualiza-se automaticamente quando terminar.</span>
+    </div>
+  </div>
+{% endif %}
 
 {% if sheet.status == 'error' %}
   <div class="alert crit" style="margin-bottom:16px;">
@@ -131,6 +172,54 @@
   <div style="display:flex; flex-direction:column; gap:12px;">
     {# R56 — color legend for the cross-check status of each cell. #}
     {% include "_legend.html" %}
+    {# R95 — Validação manual das cestas para folhas de Expedição.
+       Inputs ligam ao form de validate (id="validate-form") via attribute
+       form="..." e só são submetidos quando o operador clica Validar.
+       Required + pattern impedem submeter com cesta vazia ou não-numérica. #}
+    {% if template_name == "expedicao" and sheet.status != 'validated' %}
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-h">
+        <div class="card-h-title">Confirmar Cestas (Expedição)</div>
+        <div class="card-h-sub muted tiny">
+          Verifica o nº de cada cesta manualmente antes de validar.
+          Os valores aqui são submetidos com o botão "Validar" no topo.
+        </div>
+      </div>
+      <div class="scroll-x">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>L</th>
+              <th>OF</th>
+              <th>Modelo</th>
+              <th style="text-align:right;">QTD</th>
+              <th>Cesta Nº</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in rows %}
+            <tr>
+              <td class="mono"><b>L{{ loop.index }}</b></td>
+              <td class="mono">{{ r.of or '—' }}</td>
+              <td>{{ r.modelo or '—' }}</td>
+              <td class="mono" style="text-align:right;">{{ r.qtd or '—' }}</td>
+              <td>
+                <input type="text" name="cesta_{{ loop.index0 }}"
+                       value="{{ r.cesta_n or '' }}"
+                       pattern="\d{1,4}" inputmode="numeric"
+                       form="validate-form"
+                       placeholder="ex: 024"
+                       required
+                       class="kv-select" style="width:80px;">
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+
     <!-- Rows -->
     <div class="card">
       <div class="card-h">

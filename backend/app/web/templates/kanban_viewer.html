@@ -20,10 +20,25 @@
       {% if sheet.status == 'validated' %}
         <span class="pill ok">✓ Validada · {{ sheet.operador }}</span>
       {% else %}
-        <form method="post" action="/sheet/{{ sheet.id }}/validate"
-              style="display:inline-flex; gap:8px; align-items:center;">
+        {# R94: validação pede confirmação de data + nº operador. #}
+        <form id="validate-form" method="post" action="/sheet/{{ sheet.id }}/validate"
+              style="display:inline-flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <label style="display:inline-flex; align-items:center; gap:4px;">
+            <span class="lbl" style="margin:0; font-size:10px;">DATA</span>
+            <input type="date" name="data"
+                   value="{{ data_iso_for_validate or '' }}"
+                   min="2024-01-01" max="2030-12-31"
+                   required class="kv-select" style="width:140px;">
+          </label>
+          <label style="display:inline-flex; align-items:center; gap:4px;">
+            <span class="lbl" style="margin:0; font-size:10px;">Nº OP</span>
+            <input type="text" name="n_operador" inputmode="numeric"
+                   value="{{ (header.n_operador if header else '') or '' }}"
+                   pattern="\d{1,5}" placeholder="ex: 1481"
+                   required class="kv-select" style="width:80px;">
+          </label>
           <select name="operador" required class="kv-select" style="min-width:180px;">
-            <option value="">Confirmar operador…</option>
+            <option value="">Confirmar nome…</option>
             {% for op in valid_operadores %}
               <option value="{{ op }}" {% if op == current_operador %}selected{% endif %}>{{ op }}</option>
             {% endfor %}
@@ -53,9 +68,12 @@
 
     <label style="display:inline-flex; align-items:center; gap:6px;">
       <span class="lbl" style="margin:0;">DATA</span>
+      {# R92: min/max evita anos absurdos; checkValidity gates auto-submit. #}
       <input type="date" name="data" value="{{ current_data or '' }}"
+             min="2024-01-01" max="2030-12-31"
+             placeholder="aaaa-mm-dd" pattern="\d{4}-\d{2}-\d{2}"
              class="kv-select"
-             onchange="this.form.submit()">
+             onchange="if (this.checkValidity()) this.form.submit()">
     </label>
 
     <label style="display:inline-flex; align-items:center; gap:6px;">
@@ -149,6 +167,49 @@
     {% include "_legend.html" %}
   {% endif %}
 
+  {# R95 — Confirmar cestas manualmente em folhas de Expedição. Inputs
+     ligam ao form de validate (id="validate-form") via attribute. #}
+  {% if template_name == "expedicao" and sheet and sheet.status != 'validated' %}
+  <div class="card" style="margin-top:12px;">
+    <div class="card-h">
+      <div class="card-h-title">Confirmar Cestas (Expedição)</div>
+      <div class="card-h-sub muted tiny">Verifica cada cesta antes de validar.</div>
+    </div>
+    <div class="card-b" style="padding:0; overflow-x:auto;">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>L</th>
+            <th>OF</th>
+            <th>Modelo</th>
+            <th style="text-align:right;">QTD</th>
+            <th>Cesta Nº</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td class="mono"><b>L{{ loop.index }}</b></td>
+            <td class="mono">{{ r.of or '—' }}</td>
+            <td>{{ r.modelo or '—' }}</td>
+            <td class="mono" style="text-align:right;">{{ r.qtd or '—' }}</td>
+            <td>
+              <input type="text" name="cesta_{{ loop.index0 }}"
+                     value="{{ r.cesta_n or '' }}"
+                     pattern="\d{1,4}" inputmode="numeric"
+                     form="validate-form"
+                     placeholder="ex: 024"
+                     required
+                     class="kv-select" style="width:80px;">
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
   {# ============== ROWS — TABLE LAYOUT (Round 34) ============== #}
   <div class="card" style="margin-top:12px;">
     <div class="card-h">
@@ -215,9 +276,12 @@
   </div>
 
   {# ============== ACTIONS (CSV download + view alternates) ============== #}
+  {# R88: back_url para preservar filtros quando o user volta da Vista Tabela.
+     Inclui sheet_id para que o /kanbans abra no mesmo kanban quando voltar. #}
+  {%- set _back_kv -%}/kanbans?{{ _qs }}sheet_id={{ sheet.id }}{%- endset -%}
   <div style="display:flex; gap:10px; margin-top:16px; align-items:center; flex-wrap:wrap;">
     <a class="btn" href="/sheet/{{ sheet.id }}/csv">Baixar CSV</a>
-    <a class="btn ghost" href="/sheet/{{ sheet.id }}">Vista Tabela</a>
+    <a class="btn ghost" href="/sheet/{{ sheet.id }}?back={{ _back_kv|urlencode }}">Vista Tabela</a>
   </div>
 
   {# ============== PHOTO (collapsible, default closed) ============== #}

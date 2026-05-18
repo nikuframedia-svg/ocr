@@ -7,7 +7,9 @@ Run:
 """
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
+import json
 import os
 import secrets
 import sys
@@ -25,13 +27,20 @@ sys.path.insert(0, str(_REPO))
 # Ensure backend app importable
 sys.path.insert(0, str(_REPO / "backend"))
 
-from app.web import db, export, kpis, ocr_runner  # noqa: E402
+from app.web import attractors, db, export, kpis, llm_assistant, ocr_queue, ocr_runner  # noqa: E402
 from app.cross_check import (  # noqa: E402
     cross_check_sheet,
     get_watcher,
     load_summary,
     load_to_analisar,
     store_cross_check,
+)
+from app.dq.operador_snap import snap_operador  # noqa: E402
+from app.learning import (  # noqa: E402
+    materialize as learning_materialize,
+    metrics as learning_metrics,
+    scheduler as learning_scheduler,
+    store as learning_store,
 )
 
 # ----- App + paths -----
@@ -82,10 +91,69 @@ app = FastAPI(title="Metalogalva OCR — MVP")
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
+# R69 — production sectors available as a Jinja global so the export
+# modal can iterate them without importing kpis in templates.
+from app.web.kpis import PRODUCTION_SECTORS  # noqa: E402
+templates.env.globals["production_sectors"] = PRODUCTION_SECTORS  # type: ignore[assignment]
+
+
+def _process_sheet_ocr(sheet_id: int) -> None:
+    """R71 — worker callback. Runs OCR + DQ + cross-check + CSV deposit
+    for a single sheet. Identical pipeline to the old inline /upload
+    logic but invoked from the background thread instead of the request
+    handler.
+
+    Idempotent: skips if sheet is no longer 'pending' (e.g. concurrent
+    edit or already processed). Catches every Exception and persists
+    error to the DB so the worker loop never crashes.
+    """
+    try:
+        sheet = db.get_sheet(sheet_id)
+        if sheet is None:
+            return
+        if sheet.get("status") != "pending":
+            return  # idempotency — already processed by another invocation
+        img_path = _DATA_DIR / sheet["image_path"]
+        if not img_path.exists():
+            db.update_error(sheet_id, "image file missing")
+            return
+        result = ocr_runner.run_pipeline(img_path)
+        db.update_extraction(
+            sheet_id=sheet_id,
+            raw_extraction=result["raw"],
+            dq_audit=result["dq"],
+            sheet_data=result["current"],
+        )
+        try:
+            _run_and_store_cross_check(sheet_id)
+        except Exception as cc_err:  # noqa: BLE001
+            print(f"[worker cross-check] sheet {sheet_id}: {cc_err}", file=sys.stderr)
+            traceback.print_exc()
+        try:
+            _deposit_csv_to_factory(sheet_id)
+        except Exception as dep_err:  # noqa: BLE001
+            print(f"[worker deposit] sheet {sheet_id}: {dep_err}", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001
+        try:
+            db.update_error(sheet_id, f"{type(e).__name__}: {e}")
+        except Exception:  # noqa: BLE001
+            pass
+        traceback.print_exc()
+
 
 @app.on_event("startup")
 def _startup() -> None:
     db.init_db()
+    # R71 — boot background OCR worker + recover any sheets stuck in
+    # status='pending' from a previous process. The 10s window skips
+    # sheets that are about to be enqueued by /upload in flight right now.
+    ocr_queue.start_worker(_process_sheet_ocr)
+    n_recovered = ocr_queue.recover_pending(
+        older_than_seconds=10,
+        list_pending_fn=db.list_stuck_pending,
+    )
+    if n_recovered:
+        print(f"[R71 startup] re-enqueued {n_recovered} pending sheet(s)", file=sys.stderr)
 
 
 _MOBILE_UA_PATTERNS = ("mobile", "iphone", "android", "ipad", "ipod")
@@ -177,35 +245,23 @@ async def upload(
     except Exception as crop_err:  # noqa: BLE001
         print(f"[auto-crop] sheet upload {target.name}: {crop_err}", file=sys.stderr)
 
-    error_msg: str | None = None
-    try:
-        result = ocr_runner.run_pipeline(target)
-        db.update_extraction(
-            sheet_id=sheet_id,
-            raw_extraction=result["raw"],
-            dq_audit=result["dq"],
-            sheet_data=result["current"],
-        )
-        # Cross-check + persist to C:\kanban\nifruka\03_Cross_Check\
-        try:
-            _run_and_store_cross_check(sheet_id)
-        except Exception as cc_err:  # noqa: BLE001
-            print(f"[cross-check] sheet {sheet_id}: {cc_err}", file=sys.stderr)
-            traceback.print_exc()
-    except Exception as e:
-        error_msg = f"{type(e).__name__}: {e}"
-        db.update_error(sheet_id, error_msg)
-        traceback.print_exc()
+    # R71 — enqueue for background OCR processing. Returns near-instantly
+    # (single SQLite INSERT + queue.put, ~50ms total) instead of blocking
+    # ~22s for OCR. Worker thread (in ocr_queue) drains FIFO serially,
+    # matching Ollama's single-inference GPU constraint while letting
+    # /upload accept N requests in parallel without timeouts.
+    queue_pos = ocr_queue.enqueue(sheet_id)
 
-    # Mobile flow uses `?return=json` to get a structured response instead of
-    # a 303 redirect. Lets the JS state machine drive next-photo upload without
-    # navigating away from /capture.
+    # Mobile flow uses `?return=json` to drive the polling UI from JS.
+    # Returns sheet_id + queue_pos for immediate display; status updates
+    # come via subsequent /sheet/{id}/status polls.
     if return_mode == "json":
         return JSONResponse(
             {
                 "sheet_id": sheet_id,
-                "status": "error" if error_msg else "ok",
-                "error": error_msg,
+                "status": "pending",
+                "queue_pos": queue_pos,
+                "error": None,
             },
             status_code=200,
         )
@@ -273,11 +329,99 @@ def _apply_auto_overwrites(sheet_id: int, result: dict) -> int:
                 continue
             field_path = f"rows[{i}].{fn}"
             try:
-                db.apply_edit(sheet_id, field_path, canonical)
+                db.apply_edit(sheet_id, field_path, canonical, source="system")
                 n_applied += 1
             except (ValueError, Exception):  # noqa: BLE001
                 continue
     return n_applied
+
+
+def _apply_operador_snap(sheet_id: int, sheet: dict, refs: dict) -> int:
+    """R70 — resolve operator identity against ListaColaboradores.
+
+    Reads ``header.operador`` + ``header.n_operador`` from sheet_data,
+    runs ``snap_operador`` against ``refs["colaboradores"]``, and persists
+    canonical values via ``db.apply_edit`` when:
+      - ``snapped_name`` differs from current operador, OR
+      - ``snapped_cod`` differs from current n_operador, OR
+      - ``pernr`` is set and differs from current header.pernr
+
+    Returns count of fields edited (0-3). Suspended cells (yellow flag)
+    do not trigger edits; engine handles the visual flag separately.
+    """
+    colabs = refs.get("colaboradores") or {}
+    if not colabs:
+        return 0
+    header = (sheet.get("sheet_data") or {}).get("header") or {}
+    raw_name = (header.get("operador") or "").strip()
+    raw_cod = (header.get("n_operador") or "").strip()
+    cur_pernr = (header.get("pernr") or "").strip()
+
+    if not raw_name and not raw_cod:
+        return 0
+
+    # R91: pass aliases lexicon for memorized OCR-corrupt → canonical
+    # mappings. Empty dict if no aliases registered yet.
+    aliases = refs.get("operador_aliases") or {}
+    sr = snap_operador(raw_name, raw_cod, colabs, aliases=aliases)
+
+    n_applied = 0
+
+    # Persist pernr whenever we have a confident match (HIGH levels A/B/C),
+    # even if no-op on name/cod (Condition A still has pernr to record).
+    if sr.pernr and sr.pernr != cur_pernr:
+        try:
+            db.apply_edit(sheet_id, "header.pernr", sr.pernr, source="system")
+            n_applied += 1
+        except (ValueError, Exception):  # noqa: BLE001
+            pass
+
+    # Snap name when changed
+    if sr.applied and sr.snapped_name and sr.snapped_name != raw_name:
+        try:
+            db.apply_edit(sheet_id, "header.operador", sr.snapped_name, source="system")
+            n_applied += 1
+        except (ValueError, Exception):  # noqa: BLE001
+            pass
+
+    # Snap cod when changed (Condition C — Lev-1)
+    if sr.applied and sr.snapped_cod and sr.snapped_cod != raw_cod:
+        try:
+            db.apply_edit(sheet_id, "header.n_operador", sr.snapped_cod, source="system")
+            n_applied += 1
+        except (ValueError, Exception):  # noqa: BLE001
+            pass
+
+    return n_applied
+
+
+def _apply_codmaq_fill(sheet_id: int, sheet: dict, refs: dict) -> int:
+    """R85 — fill header.cod_maquina from setor_maquina via maquinas.xlsx.
+
+    Looks up ``header.setor_maquina`` (e.g. "HPE32", "GUIFIL", "LASER")
+    in ``refs["maquinas_by_kanban"]`` and writes the canonical
+    ``codmaq`` (M024 / M067 / M030) to ``header.cod_maquina`` when empty.
+
+    Idempotent: skips when cod_maquina already set OR when setor doesn't
+    map (e.g. "GUILHOTINA" without width — registry has GUILHOTINA 3M/6M/
+    9M/10M, so the bare label has no unambiguous codmaq).
+
+    Returns 1 if filled, 0 otherwise.
+    """
+    header = (sheet.get("sheet_data") or {}).get("header") or {}
+    if (header.get("cod_maquina") or "").strip():
+        return 0  # already set — don't overwrite
+    setor = (header.get("setor_maquina") or "").strip().upper()
+    if not setor:
+        return 0
+    maq = (refs.get("maquinas_by_kanban") or {}).get(setor)
+    if not maq or not maq.get("codmaq"):
+        return 0
+    try:
+        db.apply_edit(sheet_id, "header.cod_maquina", maq["codmaq"], source="system")
+        return 1
+    except (ValueError, Exception):  # noqa: BLE001
+        return 0
 
 
 def _run_and_store_cross_check(sheet_id: int) -> dict | None:
@@ -309,9 +453,21 @@ def _run_and_store_cross_check(sheet_id: int) -> dict | None:
 
     # R61 — auto-overwrite modelo/cliente when MATCH but value diverges
     n_overwritten = _apply_auto_overwrites(sheet_id, result)
-    if n_overwritten > 0:
+    # R70 — operator snap against ListaColaboradores (SAP employee list).
+    # Resolves OCR name/cod against canonical sname/cod/pernr and applies
+    # auto-substitution when there's strong identity signal (cod + token
+    # overlap). See backend/app/dq/operador_snap.py for the 5 rules.
+    n_op_snapped = _apply_operador_snap(sheet_id, sheet, refs)
+    # R85 — auto-fill cod_maquina from setor_maquina via maquinas.xlsx
+    # lookup. Fills empty cod_maquina when setor maps to a known machine.
+    n_codmaq_filled = _apply_codmaq_fill(sheet_id, sheet, refs)
+    if n_overwritten > 0 or n_op_snapped > 0 or n_codmaq_filled > 0:
         # Re-fetch sheet (sheet_data was modified by apply_edit) and
-        # re-run cross-check to refresh statuses against new values
+        # re-run cross-check to refresh statuses against new values.
+        # R80 note: the `*` indicator is derived in _build_snapped_map_from_raw
+        # by comparing current sheet_data vs raw_extraction, so it survives
+        # this re-run automatically (no need to preserve `snapped` flags
+        # on the cross-check JSON).
         refreshed = db.get_sheet(sheet_id)
         if refreshed is not None and refreshed.get("sheet_data"):
             sheet = refreshed
@@ -337,14 +493,31 @@ def _run_and_store_cross_check(sheet_id: int) -> dict | None:
 
 
 @app.get("/sheet/{sheet_id}", response_class=HTMLResponse)
-def sheet_page(request: Request, sheet_id: int, view: str | None = None) -> Response:
+def sheet_page(
+    request: Request,
+    sheet_id: int,
+    view: str | None = None,
+    back: str | None = None,
+) -> Response:
     """Round 41d: ``view`` query param toggles between 'final' (default,
     post-snap + manual edits) and 'raw' (original OCR before any auto-fix).
     Lets supervisor see what the OCR actually extracted vs what the system
-    auto-corrected via DQ snap + cross-check."""
+    auto-corrected via DQ snap + cross-check.
+
+    R88: ``back`` is an optional URL where the "← Voltar à lista" button
+    should point (typically /queue?... or /kanbans?... with active
+    filters). Only relative paths are accepted (open-redirect guard).
+    """
     sheet = db.get_sheet(sheet_id)
     if sheet is None:
         raise HTTPException(404, f"sheet {sheet_id} not found")
+
+    # R88 — validate back URL: relative path only, no scheme/host
+    back_url: str | None = None
+    if back:
+        candidate = back.strip()
+        if candidate.startswith("/") and not candidate.startswith("//"):
+            back_url = candidate
 
     cells_by_path: dict[str, dict] = {}
     if sheet.get("dq_audit"):
@@ -355,10 +528,14 @@ def sheet_page(request: Request, sheet_id: int, view: str | None = None) -> Resp
         # Show original OCR — disable cross-check colors (they validate
         # the post-snap values, not raw)
         src = sheet["raw_extraction"]
-        cc_status_by_path, cc_ref_by_path, cc_suspended_by_path = ({}, {}, {})
+        cc_status_by_path, cc_ref_by_path, cc_suspended_by_path, cc_snapped_by_path = (
+            {}, {}, {}, {},
+        )
     else:
         src = sheet.get("sheet_data") or {}
-        cc_status_by_path, cc_ref_by_path, cc_suspended_by_path = _build_cc_maps(sheet_id)
+        cc_status_by_path, cc_ref_by_path, cc_suspended_by_path, cc_snapped_by_path = (
+            _build_cc_maps(sheet_id)
+        )
 
     rows = src.get("rows", []) or []
     header = src.get("header", {}) or {}
@@ -367,6 +544,11 @@ def sheet_page(request: Request, sheet_id: int, view: str | None = None) -> Resp
     flagged = sum(1 for c in cells_by_path.values() if c.get("requires_review"))
 
     tpl_ctx = _template_ctx_for_sheet(sheet)
+
+    # R94 — pre-fill ISO date for the validation form's <input type="date">.
+    # header.data is DD-MM-YYYY (and variations); normalize defensively.
+    from app.web.db import _normalize_data_pt_to_iso  # local import to avoid cycle
+    data_iso_for_validate = _normalize_data_pt_to_iso(header.get("data"))
 
     return templates.TemplateResponse(
         request,
@@ -380,26 +562,79 @@ def sheet_page(request: Request, sheet_id: int, view: str | None = None) -> Resp
             "cc_status_by_path": cc_status_by_path,
             "cc_ref_by_path": cc_ref_by_path,
             "cc_suspended_by_path": cc_suspended_by_path,
+            "cc_snapped_by_path": cc_snapped_by_path,
             "operadores": OPERADORES,
             "flagged_count": flagged,
             "view_mode": view_mode,
+            "back_url": back_url,
+            "data_iso_for_validate": data_iso_for_validate,
             **tpl_ctx,  # template, template_name, row/footer/header_fields
         },
     )
 
 
-def _build_cc_maps(sheet_id: int) -> tuple[dict[str, str], dict[str, str], dict[str, bool]]:
+def _build_snapped_map_from_raw(sheet: dict) -> dict[str, bool]:
+    """R80 — compute {field_path: True} for cells whose current value
+    differs from the raw OCR extraction. Captures every cell that was
+    modified after upload (auto-correction via DQ snap, cross-check
+    overwrite, or operator manual edit). Used to render the `*` indicator
+    on cells that aren't the OCR original.
+
+    Compares ``sheet_data`` (current) against ``raw_extraction`` (snapshot
+    at upload time). Fields covered: rows[*].*, header.*, footer.*.
+
+    Returns {} if no raw_extraction available.
+    """
+    raw = sheet.get("raw_extraction") or {}
+    cur = sheet.get("sheet_data") or {}
+    if not raw or not cur:
+        return {}
+
+    def _norm(v: object) -> str:
+        return str(v).strip() if v is not None else ""
+
+    out: dict[str, bool] = {}
+
+    raw_rows = raw.get("rows") or []
+    cur_rows = cur.get("rows") or []
+    for i, cur_r in enumerate(cur_rows):
+        if i >= len(raw_rows):
+            break
+        raw_r = raw_rows[i] or {}
+        for fn in (cur_r or {}).keys():
+            if _norm(cur_r.get(fn)) != _norm(raw_r.get(fn)):
+                out[f"rows[{i}].{fn}"] = True
+
+    for section in ("header", "footer"):
+        raw_sec = raw.get(section) or {}
+        cur_sec = cur.get(section) or {}
+        for fn in cur_sec.keys():
+            if _norm(cur_sec.get(fn)) != _norm(raw_sec.get(fn)):
+                out[f"{section}.{fn}"] = True
+
+    return out
+
+
+def _build_cc_maps(sheet_id: int) -> tuple[
+    dict[str, str], dict[str, str], dict[str, bool], dict[str, bool]
+]:
     """Round 33: load cross-check JSON for sheet, build {field_path: status}
     + {field_path: ref} maps for template rendering of green/red cell colors.
 
     R52 F4: also returns {field_path: suspended_by_stub} for distinguishing
     NA from stub-accept (amarelo soft) vs NA from no-ref (cinza).
 
-    Returns ({}, {}, {}) if no cross-check data available."""
+    R80: also returns {field_path: snapped} derived from comparing current
+    ``sheet_data`` against ``raw_extraction``. Captures every cell that was
+    modified after upload (auto-correction or manual edit). Used for the
+    `*` indicator showing operator which values aren't the OCR original.
+
+    Returns ({}, {}, {}, {}) if no cross-check data available."""
     from app.cross_check.storage import load_sheet_cross_check
     cc = load_sheet_cross_check(sheet_id)
+    snapped_map = _build_snapped_map_from_raw(db.get_sheet(sheet_id) or {})
     if not cc:
-        return {}, {}, {}
+        return {}, {}, {}, snapped_map
     status_map: dict[str, str] = {}
     ref_map: dict[str, str] = {}
     suspended_map: dict[str, bool] = {}
@@ -413,7 +648,73 @@ def _build_cc_maps(sheet_id: int) -> tuple[dict[str, str], dict[str, str], dict[
                 ref_map[path] = str(ref)
             if info.get("suspended_by_stub"):
                 suspended_map[path] = True
-    return status_map, ref_map, suspended_map
+    return status_map, ref_map, suspended_map, snapped_map
+
+
+def _maybe_record_operador_alias(sheet_id: int) -> None:
+    """R91 — Persist OCR-corrupt → canonical mapping in operator aliases.
+
+    Triggered after the operator manually edits header.operador or
+    header.n_operador in the UI. If the new (name, cod) combination
+    resolves to a known colaborador AND the original OCR-captured name
+    was different, save it so future OCRs of the same corrupt string
+    resolve directly via the lexicon (skip confusion-map).
+
+    Idempotent + safe — silently bails when:
+      - sheet has no raw_extraction OR no header
+      - edit doesn't yield a numeric cod
+      - cod not in colaboradores
+      - canonical sname doesn't match the operator-typed name
+    """
+    import datetime as _dt
+    sheet = db.get_sheet(sheet_id)
+    if not sheet or not sheet.get("sheet_data"):
+        return
+    header = (sheet.get("sheet_data") or {}).get("header") or {}
+    raw_header = (sheet.get("raw_extraction") or {}).get("header") or {}
+    raw_ocr_name = str(raw_header.get("operador") or "").strip()
+    new_name = str(header.get("operador") or "").strip()
+    new_cod_str = str(header.get("n_operador") or "").strip()
+    if not raw_ocr_name or not new_name:
+        return
+    if raw_ocr_name.upper() == new_name.upper():
+        return  # nothing to memorize — operator's edit didn't change the name
+    try:
+        cod_int = int(new_cod_str.lstrip("0") or "0")
+    except ValueError:
+        return
+    if cod_int <= 0:
+        return
+    refs = get_watcher().get_refs()
+    colabs = refs.get("colaboradores") or {}
+    entry = colabs.get(cod_int)
+    if not entry or entry.get("sname", "").upper() != new_name.upper():
+        return  # edit doesn't resolve to a known colaborador
+    # Persist alias — keyed by normalized OCR name (UPPER + ASCII-stripped)
+    import unicodedata
+    nfd = unicodedata.normalize("NFD", raw_ocr_name)
+    key = " ".join("".join(ch for ch in nfd if not unicodedata.combining(ch)).upper().split())
+    if not key:
+        return
+    aliases_path = _REPO / "lexicons" / "operador_aliases.json"
+    aliases: dict = {}
+    if aliases_path.exists():
+        try:
+            aliases = json.loads(aliases_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            aliases = {}
+    aliases[key] = {
+        "cod": cod_int,
+        "pernr": entry.get("pernr", ""),
+        "sname": entry.get("sname", ""),
+        "source": "manual",
+        "added_at": _dt.datetime.now(tz=_dt.timezone.utc).isoformat(timespec="seconds"),
+    }
+    aliases_path.parent.mkdir(parents=True, exist_ok=True)
+    aliases_path.write_text(
+        json.dumps(aliases, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 
 @app.post("/sheet/{sheet_id}/edit", response_class=HTMLResponse)
@@ -441,13 +742,23 @@ async def sheet_edit(
     sheet = db.get_sheet(sheet_id)
     if sheet is None:
         raise HTTPException(404, f"sheet {sheet_id} not found")
+    # R91 — after editing header.operador or header.n_operador, try to
+    # memorize the OCR→canonical mapping in the aliases lexicon so future
+    # OCRs of the same corrupt name resolve directly.
+    if field_path in ("header.operador", "header.n_operador"):
+        try:
+            _maybe_record_operador_alias(sheet_id)
+        except Exception as e:  # noqa: BLE001
+            print(f"[alias] sheet {sheet_id}: {e}", file=sys.stderr)
     # Re-run cross-check after edit (auto-fill / status may shift)
     try:
         _run_and_store_cross_check(sheet_id)
     except Exception as cc_err:  # noqa: BLE001
         print(f"[cross-check] sheet {sheet_id} edit: {cc_err}", file=sys.stderr)
     cells_by_path = (sheet.get("dq_audit") or {}).get("cells", {})
-    cc_status_by_path, cc_ref_by_path, cc_suspended_by_path = _build_cc_maps(sheet_id)
+    cc_status_by_path, cc_ref_by_path, cc_suspended_by_path, cc_snapped_by_path = (
+        _build_cc_maps(sheet_id)
+    )
     return templates.TemplateResponse(
         request,
         "_cell.html",
@@ -460,6 +771,7 @@ async def sheet_edit(
             "cc_status_by_path": cc_status_by_path,
             "cc_ref_by_path": cc_ref_by_path,
             "cc_suspended_by_path": cc_suspended_by_path,
+            "cc_snapped_by_path": cc_snapped_by_path,
             "sheet_status": sheet.get("status"),
         },
     )
@@ -511,10 +823,12 @@ def _deposit_csv_to_factory(sheet_id: int) -> Path | None:
 
 
 @app.post("/sheet/{sheet_id}/validate")
-def sheet_validate(
+async def sheet_validate(
     sheet_id: int,
     request: Request,
     operador: str = Form(...),
+    data: str = Form(...),
+    n_operador: str = Form(...),
 ) -> RedirectResponse:
     # Round 34 — mobile cannot validate (server-side enforcement)
     if _is_mobile_request(request):
@@ -527,6 +841,46 @@ def sheet_validate(
         raise HTTPException(404, f"sheet {sheet_id} not found")
     if sheet_pre.get("status") == "validated":
         raise HTTPException(409, "Folha já validada — não é possível re-validar")
+
+    # R94 — confirm date + n_operador before locking validation.
+    data_iso = data.strip()
+    if not _ISO_DATE_RE.match(data_iso):
+        raise HTTPException(400, f"data must be YYYY-MM-DD, got {data!r}")
+    n_op_clean = n_operador.strip()
+    if not n_op_clean.isdigit() or len(n_op_clean) > 5:
+        raise HTTPException(400, f"n_operador must be 1-5 digits, got {n_operador!r}")
+    # Convert ISO → DD-MM-YYYY for storage compatibility with existing format
+    data_pt = f"{data_iso[8:10]}-{data_iso[5:7]}-{data_iso[0:4]}"
+    cur_header = (sheet_pre.get("sheet_data") or {}).get("header") or {}
+    # Apply edits before validation lock — uses standard apply_edit path so
+    # production_rows + cross-check stay in sync.
+    if (cur_header.get("data") or "").strip() != data_pt:
+        try:
+            db.apply_edit(sheet_id, "header.data", data_pt)
+        except (ValueError, Exception):  # noqa: BLE001
+            pass
+    if (cur_header.get("n_operador") or "").strip() != n_op_clean:
+        try:
+            db.apply_edit(sheet_id, "header.n_operador", n_op_clean)
+        except (ValueError, Exception):  # noqa: BLE001
+            pass
+
+    # R95 — apply cesta_N edits before lock (expedicao template only; other
+    # templates simply don't submit any cesta_* and the loop finds nothing).
+    form_data = await request.form()
+    rows_pre = (sheet_pre.get("sheet_data") or {}).get("rows", []) or []
+    for i, row in enumerate(rows_pre):
+        key = f"cesta_{i}"
+        if key not in form_data:
+            continue
+        new_cesta = str(form_data[key] or "").strip()
+        cur_cesta = str(row.get("cesta_n") or "").strip()
+        if new_cesta != cur_cesta:
+            try:
+                db.apply_edit(sheet_id, f"rows[{i}].cesta_n", new_cesta)
+            except (ValueError, Exception):  # noqa: BLE001
+                pass
+
     db.validate_sheet(sheet_id, operador)
     # Closed loop: drop CSV in the factory CSV dir so the next run of
     # ``kanban_csv2excel_novo_layout.py`` picks it up. Failure is silent —
@@ -541,6 +895,13 @@ def sheet_validate(
         _run_and_store_cross_check(sheet_id)
     except Exception as cc_err:  # noqa: BLE001
         print(f"[cross-check] sheet {sheet_id} validate: {cc_err}", file=sys.stderr)
+    # Learning loop — every 50 validated sheets, mine corrections + gold
+    # into learnings. Runs in a background thread; failure is silent.
+    try:
+        from app.learning.scheduler import maybe_trigger_learning
+        maybe_trigger_learning()
+    except Exception as le:  # noqa: BLE001
+        print(f"[learning] sheet {sheet_id} trigger: {le}", file=sys.stderr)
     return RedirectResponse("/queue", status_code=303)
 
 
@@ -703,6 +1064,63 @@ def admin_refs_status() -> JSONResponse:
     })
 
 
+@app.get("/admin/queue-status")
+def admin_queue_status() -> JSONResponse:
+    """R71 — health + depth of the background OCR queue. Used for debug
+    and the /admin pages to show worker liveness."""
+    return JSONResponse({
+        "queue_size": ocr_queue.queue_size(),
+        "worker_alive": ocr_queue.worker_alive(),
+    })
+
+
+@app.get("/sheet/{sheet_id}/status")
+def sheet_status(sheet_id: int) -> JSONResponse:
+    """R71 — JSON polling endpoint for the mobile capture flow + desktop
+    auto-refresh. Returns minimal fields so the JS can drive its state
+    machine without re-rendering the full sheet view.
+    """
+    sheet = db.get_sheet(sheet_id)
+    if sheet is None:
+        raise HTTPException(404)
+    return JSONResponse({
+        "id": sheet_id,
+        "status": sheet.get("status"),
+        "queue_size": ocr_queue.queue_size(),
+        "error_message": sheet.get("error_message"),
+    })
+
+
+@app.get("/sheet/{sheet_id}/status-fragment", response_class=HTMLResponse)
+def sheet_status_fragment(sheet_id: int) -> Response:
+    """R71 — HTMX-friendly partial for the desktop /sheet/{id} pending
+    banner. While status is 'pending', returns the banner so HTMX swaps
+    it back in (preserving the every-2s trigger). When status transitions
+    out of 'pending', returns an empty body with ``HX-Refresh: true``,
+    causing the browser to refresh and render the now-extracted view.
+    """
+    sheet = db.get_sheet(sheet_id)
+    if sheet is None:
+        raise HTTPException(404)
+    if sheet.get("status") != "pending":
+        return Response(
+            content="",
+            status_code=200,
+            headers={"HX-Refresh": "true"},
+        )
+    queue_size = ocr_queue.queue_size()
+    html = (
+        '<div class="alert info" '
+        f'hx-get="/sheet/{sheet_id}/status-fragment" '
+        'hx-trigger="every 2s" hx-swap="outerHTML">'
+        '<b>⏳ A processar OCR...</b><br>'
+        '<span class="muted tiny">'
+        f'{queue_size} folha(s) na fila — esta página actualiza-se sozinha'
+        '</span></div>'
+    )
+    return HTMLResponse(html)
+
+
 @app.post("/admin/reload-refs")
 def admin_reload_refs() -> JSONResponse:
     """Force-reload SAP + plan_colunas Excel files (skip mtime check).
@@ -753,10 +1171,14 @@ def sheet_delete(sheet_id: int, request: Request) -> JSONResponse:
 
 @app.post("/sheet/{sheet_id}/reprocess")
 def sheet_reprocess(sheet_id: int) -> RedirectResponse:
-    """Round 59 — Re-run OCR on a sheet that previously errored.
+    """Round 59/71 — Re-run OCR on a sheet that previously errored.
 
     Reuses the original uploaded image; no need to re-take photo. Triggered
     by the "↻ Re-processar OCR" button on the error banner in /sheet/{id}.
+
+    R71: flips status back to 'pending' and enqueues to the background
+    worker (instead of running OCR synchronously here). /sheet/{id} then
+    shows the "A processar..." banner until the worker finishes.
     """
     sheet = db.get_sheet(sheet_id)
     if sheet is None:
@@ -764,26 +1186,9 @@ def sheet_reprocess(sheet_id: int) -> RedirectResponse:
     img_path = _DATA_DIR / sheet["image_path"]
     if not img_path.exists():
         raise HTTPException(404, "image file missing")
-    try:
-        result = ocr_runner.run_pipeline(img_path)
-        db.update_extraction(
-            sheet_id=sheet_id,
-            raw_extraction=result["raw"],
-            dq_audit=result["dq"],
-            sheet_data=result["current"],
-        )
-        try:
-            _run_and_store_cross_check(sheet_id)
-        except Exception as cc_err:  # noqa: BLE001
-            print(f"[reprocess cross-check] sheet {sheet_id}: {cc_err}", file=sys.stderr)
-        try:
-            _deposit_csv_to_factory(sheet_id)
-        except Exception as dep_err:  # noqa: BLE001
-            print(f"[reprocess deposit] sheet {sheet_id}: {dep_err}", file=sys.stderr)
-    except Exception as e:  # noqa: BLE001
-        error_msg = f"{type(e).__name__}: {e}"
-        db.update_error(sheet_id, error_msg)
-        traceback.print_exc()
+    db.update_status(sheet_id, "pending")
+    db.clear_error(sheet_id)
+    ocr_queue.enqueue(sheet_id)
     return RedirectResponse(f"/sheet/{sheet_id}", status_code=303)
 
 
@@ -1002,9 +1407,16 @@ def kanban_viewer(
     footer = (sheet.get("sheet_data") or {}).get("footer", {}) if sheet else {}
 
     # Round 33: cross-check colors per cell
-    cc_status_by_path, cc_ref_by_path, cc_suspended_by_path = ({}, {}, {})
+    cc_status_by_path, cc_ref_by_path, cc_suspended_by_path, cc_snapped_by_path = (
+        {}, {}, {}, {},
+    )
     if sheet:
-        cc_status_by_path, cc_ref_by_path, cc_suspended_by_path = _build_cc_maps(sheet["id"])
+        cc_status_by_path, cc_ref_by_path, cc_suspended_by_path, cc_snapped_by_path = (
+            _build_cc_maps(sheet["id"])
+        )
+
+    # R94 — ISO date pre-fill for validation form (same as sheet_page)
+    data_iso_for_validate = db._normalize_data_pt_to_iso(header.get("data")) if header else None
 
     return templates.TemplateResponse(
         request, "kanban_viewer.html",
@@ -1026,7 +1438,9 @@ def kanban_viewer(
             "cc_status_by_path": cc_status_by_path,
             "cc_ref_by_path": cc_ref_by_path,
             "cc_suspended_by_path": cc_suspended_by_path,
+            "cc_snapped_by_path": cc_snapped_by_path,
             "valid_operadores": OPERADORES,
+            "data_iso_for_validate": data_iso_for_validate,
             **_template_ctx_for_sheet(sheet),  # per-current-sheet template
         },
     )
@@ -1037,20 +1451,32 @@ def queue_page(
     request: Request,
     status: str | None = None,
     of: str | None = None,
+    operador: str | None = None,
+    data: str | None = None,
+    setor: str | None = None,
 ) -> Response:
-    """Round 36 — accept ``of`` filter; combinable with status."""
+    """Round 36 — OF filter; R81 — operador/data/setor filters (combinable)."""
     of_filter = (of or "").strip() or None
-    if of_filter:
-        # Need OF filter → join via production_rows; reuse list_sheets_filtered
-        # but match the wider status set so 'pending' / 'error' are still
-        # visible in queue (not just extracted/validated).
+    operador_filter = (operador or "").strip() or None
+    data_filter = (data or "").strip() or None
+    setor_filter = (setor or "").strip() or None
+
+    use_filtered = any([of_filter, operador_filter, data_filter, setor_filter])
+    if use_filtered:
         statuses_all = ("pending", "extracted", "validated", "error")
         statuses = (status,) if status and status != "all" else statuses_all
-        sheets = db.list_sheets_filtered(of=of_filter, statuses=statuses)
-        # Sort newest first (list_sheets_filtered returns oldest first)
+        sheets = db.list_sheets_filtered(
+            operador=operador_filter,
+            data_iso=data_filter,
+            setor=setor_filter,
+            of=of_filter,
+            statuses=statuses,
+        )
+        # list_sheets_filtered returns oldest first; flip to newest first
         sheets = sorted(sheets, key=lambda s: s.get("captured_at") or "", reverse=True)
     else:
         sheets = db.list_sheets(status=status)
+
     return templates.TemplateResponse(
         request,
         "queue.html",
@@ -1058,6 +1484,11 @@ def queue_page(
             "sheets": sheets,
             "status_filter": status or "all",
             "of_filter": of_filter,
+            "operador_filter": operador_filter,
+            "data_filter": data_filter,
+            "setor_filter": setor_filter,
+            "operadores": db.list_distinct_operadores(),
+            "setores": db.list_distinct_setores(),
         },
     )
 
@@ -1093,25 +1524,37 @@ def dashboard_today(request: Request, date: str | None = None) -> Response:
 
 @app.get("/export")
 def export_excel(
-    date_from: str,
-    date_to: str,
+    date_from: str | None = None,
+    date_to: str | None = None,
     operador: str | None = None,
+    sector: str | None = None,
 ) -> Response:
     """Round 29 Phase D — Excel multi-sheet bulk export.
 
-    Query params:
-    - ``date_from``, ``date_to``: ISO YYYY-MM-DD inclusive range
+    Query params (R69):
+    - ``date_from``, ``date_to``: ISO YYYY-MM-DD inclusive range. Both
+      omitted = "sempre" (no date filter).
     - ``operador``: optional filter (case-insensitive)
+    - ``sector``: optional filter against one of ``PRODUCTION_SECTORS``
 
     Returns .xlsx with Resumo sheet + 1 sheet per day with sub-tables per
     operador. See export.py for structure.
     """
-    if not _ISO_DATE_RE.match(date_from) or not _ISO_DATE_RE.match(date_to):
-        raise HTTPException(400, "date_from and date_to must be YYYY-MM-DD")
-    if date_to < date_from:
-        raise HTTPException(400, "date_to must be >= date_from")
-    xlsx_bytes = export.export_excel(date_from, date_to, operador)
-    filename = export.filename_for(date_from, date_to, operador)
+    df = (date_from or "").strip() or None
+    dt_ = (date_to or "").strip() or None
+    sec = (sector or "").strip() or None
+    # Date validation: both or neither (XOR rejected for UX clarity)
+    if bool(df) != bool(dt_):
+        raise HTTPException(400, "provide both date_from and date_to, or neither (= sempre)")
+    if df and dt_:
+        if not _ISO_DATE_RE.match(df) or not _ISO_DATE_RE.match(dt_):
+            raise HTTPException(400, "date_from and date_to must be YYYY-MM-DD")
+        if dt_ < df:
+            raise HTTPException(400, "date_to must be >= date_from")
+    if sec and sec not in PRODUCTION_SECTORS:
+        raise HTTPException(400, f"sector must be one of {list(PRODUCTION_SECTORS)}")
+    xlsx_bytes = export.export_excel(df, dt_, operador, sec)
+    filename = export.filename_for(df, dt_, operador, sec)
     return Response(
         content=xlsx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1151,7 +1594,8 @@ def excel_page(
                s.operador AS validated_operador,
                json_extract(s.sheet_data, '$.header.setor_maquina') AS setor_maquina,
                json_extract(s.sheet_data, '$.header.n_operador') AS n_operador,
-               json_extract(s.sheet_data, '$.header.cod_maquina') AS header_cod_maquina
+               json_extract(s.sheet_data, '$.header.cod_maquina') AS header_cod_maquina,
+               json_extract(s.sheet_data, '$.header.pernr') AS header_pernr
           FROM production_rows pr
           JOIN sheets s ON s.id = pr.sheet_id
          WHERE {' AND '.join(where)}
@@ -1192,9 +1636,10 @@ def excel_page(
 
 @app.get("/export/cpis")
 def export_cpis(
-    date_from: str,
-    date_to: str,
+    date_from: str | None = None,
+    date_to: str | None = None,
     operador: str | None = None,
+    sector: str | None = None,
 ) -> Response:
     """CPIS migration export — single-sheet .xlsx matching
     `MigracaoNikufraCPIS.xlsx` (17 columns, `Folha1`).
@@ -1202,14 +1647,23 @@ def export_cpis(
     One row per kanban production row in the period. Peso/Desperdício
     computed via `geometry.row_waste()` (trapezoidal column, steel ρ=7.85
     g/cm³). `Cód. Máquina` derived from setor_maquina (BOBINE-FORMATO →
-    M032, etc.). Query params identical to `/export`.
+    M032, etc.). Query params identical to `/export` (R69: same date /
+    sector semantics).
     """
-    if not _ISO_DATE_RE.match(date_from) or not _ISO_DATE_RE.match(date_to):
-        raise HTTPException(400, "date_from and date_to must be YYYY-MM-DD")
-    if date_to < date_from:
-        raise HTTPException(400, "date_to must be >= date_from")
-    xlsx_bytes = export.build_cpis_workbook(date_from, date_to, operador)
-    filename = export.cpis_filename_for(date_from, date_to, operador)
+    df = (date_from or "").strip() or None
+    dt_ = (date_to or "").strip() or None
+    sec = (sector or "").strip() or None
+    if bool(df) != bool(dt_):
+        raise HTTPException(400, "provide both date_from and date_to, or neither (= sempre)")
+    if df and dt_:
+        if not _ISO_DATE_RE.match(df) or not _ISO_DATE_RE.match(dt_):
+            raise HTTPException(400, "date_from and date_to must be YYYY-MM-DD")
+        if dt_ < df:
+            raise HTTPException(400, "date_to must be >= date_from")
+    if sec and sec not in PRODUCTION_SECTORS:
+        raise HTTPException(400, f"sector must be one of {list(PRODUCTION_SECTORS)}")
+    xlsx_bytes = export.build_cpis_workbook(df, dt_, operador, sec)
+    filename = export.cpis_filename_for(df, dt_, operador, sec)
     return Response(
         content=xlsx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1391,6 +1845,194 @@ def pair_page(request: Request) -> Response:
     same LAN can scan and open the camera page directly without typing
     the IP. The QR is generated client-side from the page URL."""
     return templates.TemplateResponse(request, "pair.html", {})
+
+
+# ============================================================================
+#  Aprendizagens & Regras  (/learnings)  — Round 98 learning engine
+# ============================================================================
+
+def _learning_user(request: Request) -> str:
+    """Best-effort reviewer identity for the learnings audit trail."""
+    return request.headers.get("X-Forwarded-User") or "web"
+
+
+def _refresh_overlay() -> None:
+    """Re-materialise the learned overlay and reload it into the running
+    pipeline. Called after any approve / reject / edit / delete so the
+    OCR snap sees the change without a restart."""
+    try:
+        learning_materialize.materialize_overlay()
+        learning_scheduler.reload_pipeline()
+    except Exception as e:  # noqa: BLE001
+        print(f"[learning] overlay refresh failed: {e}", file=sys.stderr)
+
+
+def _rule_item_response(request: Request, learning_id: int) -> Response:
+    rule = learning_store.get_proposal(learning_id)
+    if rule is None:
+        return HTMLResponse("")
+    return templates.TemplateResponse(request, "_rule_item.html", {"r": rule})
+
+
+@app.get("/learnings", response_class=HTMLResponse)
+def learnings_page(
+    request: Request,
+    status: str = Query(""),
+    kind: str = Query(""),
+) -> Response:
+    """The Aprendizagens & Regras page — rules tab + LLM analyst tab."""
+    rules = learning_store.list_proposals(status=status or None, kind=kind or None)
+    return templates.TemplateResponse(request, "learnings.html", {
+        "rules": rules,
+        "filter_status": status,
+        "filter_kind": kind,
+        "counts": learning_store.count_by_status(),
+        "metric_latest": learning_metrics.corrections_per_sheet(),
+        "metric_trend": learning_metrics.corrections_trend(),
+        "attractors": attractors.compute_attractors(top_n=12),
+        "production_sectors": db.list_distinct_setores(),
+    })
+
+
+@app.get("/learnings/rules", response_class=HTMLResponse)
+def learnings_rules(
+    request: Request,
+    status: str = Query(""),
+    kind: str = Query(""),
+) -> Response:
+    """Rules list fragment (HTMX target for filters)."""
+    rules = learning_store.list_proposals(status=status or None, kind=kind or None)
+    return templates.TemplateResponse(
+        request, "_learnings_rules.html", {"rules": rules}
+    )
+
+
+@app.post("/learnings/rules/{learning_id}/approve", response_class=HTMLResponse)
+def learnings_rule_approve(request: Request, learning_id: int) -> Response:
+    learning_store.approve_proposal(learning_id, _learning_user(request))
+    _refresh_overlay()
+    return _rule_item_response(request, learning_id)
+
+
+@app.post("/learnings/rules/{learning_id}/reject", response_class=HTMLResponse)
+def learnings_rule_reject(request: Request, learning_id: int) -> Response:
+    learning_store.reject_proposal(learning_id, _learning_user(request))
+    _refresh_overlay()
+    return _rule_item_response(request, learning_id)
+
+
+@app.post("/learnings/rules/{learning_id}/edit", response_class=HTMLResponse)
+def learnings_rule_edit(
+    request: Request,
+    learning_id: int,
+    to: str = Form(""),
+    value: str = Form(""),
+    weight: str = Form(""),
+    note: str = Form(""),
+) -> Response:
+    rule = learning_store.get_proposal(learning_id)
+    if rule is None:
+        return HTMLResponse("")
+    payload = dict(rule["payload"]) if isinstance(rule["payload"], dict) else {}
+    if to.strip():
+        payload["to"] = to.strip()
+    if value.strip():
+        payload["value"] = value.strip()
+    if weight.strip():
+        try:
+            payload["weight"] = float(weight.replace(",", "."))
+        except ValueError:
+            pass
+    learning_store.update_proposal_payload(
+        learning_id, payload, _learning_user(request),
+        note=note.strip() or None,
+    )
+    _refresh_overlay()
+    return _rule_item_response(request, learning_id)
+
+
+@app.post("/learnings/rules/{learning_id}/delete", response_class=HTMLResponse)
+def learnings_rule_delete(request: Request, learning_id: int) -> Response:
+    learning_store.delete_proposal(learning_id)
+    _refresh_overlay()
+    return HTMLResponse("")
+
+
+@app.post("/learnings/rules/create")
+async def learnings_rule_create(request: Request) -> JSONResponse:
+    """Create a learning by hand — used by the LLM tab's 'Adicionar ao
+    Separador 1' button. Lands in quarantine awaiting human approval."""
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": "JSON inválido"}, status_code=400)
+    kind = (body.get("kind") or "").strip()
+    payload = body.get("payload")
+    if not kind or not isinstance(payload, dict):
+        return JSONResponse(
+            {"ok": False, "error": "kind/payload em falta"}, status_code=400
+        )
+    res = learning_store.create_manual_proposal(
+        kind, payload,
+        field=body.get("field"),
+        template_name=body.get("template_name"),
+        origin=body.get("origin") or "llm",
+        decided_by=_learning_user(request),
+    )
+    return JSONResponse({"ok": True, "id": res["id"], "created": res["created"]})
+
+
+@app.post("/learning/run", response_class=HTMLResponse)
+def learning_run(
+    request: Request,
+    status: str = Query(""),
+    kind: str = Query(""),
+) -> Response:
+    """Force a learning cycle now (the 'Minerar agora' button)."""
+    try:
+        learning_scheduler.run_learning_cycle()
+    except Exception as e:  # noqa: BLE001
+        print(f"[learning] manual run failed: {e}", file=sys.stderr)
+    rules = learning_store.list_proposals(status=status or None, kind=kind or None)
+    return templates.TemplateResponse(
+        request, "_learnings_rules.html", {"rules": rules}
+    )
+
+
+@app.get("/learning/metrics")
+def learning_metrics_json() -> JSONResponse:
+    return JSONResponse({
+        "latest": learning_metrics.corrections_per_sheet(),
+        "trend": learning_metrics.corrections_trend(),
+    })
+
+
+@app.get("/learnings/llm/atratores")
+def learnings_atratores() -> JSONResponse:
+    return JSONResponse({"attractors": attractors.compute_attractors(top_n=15)})
+
+
+@app.post("/learnings/llm/chat")
+async def learnings_llm_chat(request: Request) -> JSONResponse:
+    """One chat turn with the local Ollama analyst. Returns the JSON
+    envelope {reply, charts, proposed_rules}."""
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSONResponse(
+            {"reply": "Pedido inválido.", "charts": [], "proposed_rules": []},
+            status_code=400,
+        )
+    message = (body.get("message") or "").strip()
+    history = body.get("history") if isinstance(body.get("history"), list) else []
+    if not message:
+        return JSONResponse(
+            {"reply": "Escreve uma pergunta.", "charts": [], "proposed_rules": []}
+        )
+    # llm_assistant.chat() does a blocking HTTP call to Ollama — run it in a
+    # worker thread so it never freezes the async event loop.
+    envelope = await asyncio.to_thread(llm_assistant.chat, message, history)
+    return JSONResponse(envelope)
 
 
 # ----- CSV builder (mirrors ocr6.write_csv but to string) -----

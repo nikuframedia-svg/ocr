@@ -1,0 +1,11 @@
+{# Rules list — returned standalone by GET /learnings/rules and
+   POST /learning/run. Expects `rules` (list of learnings dicts). #}
+{% if not rules %}
+  <div class="muted" style="padding:32px; text-align:center;">
+    Sem aprendizagens para este filtro.<br>
+    O sistema aprende sozinho a cada 50 folhas validadas — ou carrega em
+    <b>Minerar agora</b> para correr já um ciclo.
+  </div>
+{% else %}
+  {% for r in rules %}{% include "_rule_item.html" %}{% endfor %}
+{% endif %}

@@ -145,31 +145,47 @@ class ExtractionResult:
 # ── Pydantic-style schema (validação leve, sem regex agressivo) ───────────────
 ROW_FIELDS = ["pri", "cliente", "ov", "of", "modelo", "qtd", "comp_mm",
               "larg_mm", "lote", "coni", "esp", "lbase", "ltopo"]
+HEADER_FIELDS = ("operador", "n_operador", "setor_maquina", "data")
+FOOTER_FIELDS = ("colunas_produzidas", "horas_trabalhadas")
 
 
-def normalize_extraction(data: dict[str, Any]) -> dict[str, Any]:
+def normalize_extraction(
+    data: dict[str, Any],
+    *,
+    row_fields: list[str] | tuple[str, ...] | None = None,
+    header_fields: list[str] | tuple[str, ...] | None = None,
+    footer_fields: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, Any]:
     """
     Normaliza estrutura sem rejeitar dados. Validação estrita acontece
     a jusante na camada de validação contra ERP/Dossier.
+
+    R84: templated schemas. Callers (template-aware OCR pipeline) pass
+    the schema appropriate to the detected template. Defaults are the
+    bobine_formato schema for backwards compat with legacy callers.
     """
+    rf = list(row_fields) if row_fields else ROW_FIELDS
+    hf = list(header_fields) if header_fields else list(HEADER_FIELDS)
+    ff = list(footer_fields) if footer_fields else list(FOOTER_FIELDS)
+
     header = data.get("header", {}) or {}
     footer = data.get("footer", {}) or {}
     rows = data.get("rows", []) or []
 
     # Garantir campos do header
-    for k in ("operador", "n_operador", "setor_maquina", "data"):
+    for k in hf:
         header[k] = str(header.get(k, "")).strip()
 
     # Garantir campos do footer
-    for k in ("colunas_produzidas", "horas_trabalhadas"):
+    for k in ff:
         footer[k] = str(footer.get(k, "")).strip()
 
-    # Normalizar rows: garantir que cada row tem todos os campos
+    # Normalizar rows: garantir que cada row tem todos os campos do schema
     clean_rows = []
     for row in rows:
         if not isinstance(row, dict):
             continue
-        clean_row = {f: str(row.get(f, "")).strip() for f in ROW_FIELDS}
+        clean_row = {f: str(row.get(f, "")).strip() for f in rf}
         # Filtrar rows totalmente vazios
         if any(clean_row.values()):
             clean_rows.append(clean_row)
@@ -340,7 +356,15 @@ def write_json(output_json: Path, result: ExtractionResult) -> None:
 
 
 # ── Pipeline por imagem ───────────────────────────────────────────────────────
-def process_image(image_path: Path, idx: int, total: int) -> ExtractionResult:
+def process_image(
+    image_path: Path,
+    idx: int,
+    total: int,
+    *,
+    row_fields: list[str] | tuple[str, ...] | None = None,
+    header_fields: list[str] | tuple[str, ...] | None = None,
+    footer_fields: list[str] | tuple[str, ...] | None = None,
+) -> ExtractionResult:
     name = image_path.name
     metrics = ExtractionMetrics(file=name)
     result = ExtractionResult(file=name, metrics=metrics)
@@ -423,7 +447,12 @@ def process_image(image_path: Path, idx: int, total: int) -> ExtractionResult:
         log.debug(f"  raw[:300]: {raw[:300] if raw else '(no raw)'}")
         return result
 
-    normalized = normalize_extraction(extracted)
+    normalized = normalize_extraction(
+        extracted,
+        row_fields=row_fields,
+        header_fields=header_fields,
+        footer_fields=footer_fields,
+    )
     result.header = normalized["header"]
     result.rows = normalized["rows"]
     result.footer = normalized["footer"]

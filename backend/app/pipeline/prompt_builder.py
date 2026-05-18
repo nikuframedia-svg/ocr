@@ -25,7 +25,17 @@ Notes:
 """
 from __future__ import annotations
 
+import json
+import logging
+from pathlib import Path
+
 from app.templates_registry import TemplateSpec
+
+logger = logging.getLogger(__name__)
+
+_OVERLAY_PATH = (
+    Path(__file__).resolve().parents[3] / "lexicons" / "learned_overlay.json"
+)
 
 
 # Field display names for the column header line in the prompt.
@@ -135,6 +145,58 @@ _RULES_GEMINI = """IMPORTANT RULES:
 
 
 # ============================================================================
+#  Few-shot examples (Round 98 — learning-engine feedback loop)
+# ============================================================================
+
+def _fewshot_block(template_name: str) -> str:
+    """Build a few-shot block of confirmed extractions for this template.
+
+    The learning engine selects the best validated sheets per template and
+    records their ids in ``lexicons/learned_overlay.json``. We render up to
+    3 of them as worked JSON examples so the model imitates the structure,
+    field formatting and vocabulary of human-validated sheets.
+
+    Returns ``""`` when there are no examples — the prompt is then
+    byte-identical to the pre-few-shot version (no regression).
+    """
+    try:
+        if not _OVERLAY_PATH.exists():
+            return ""
+        overlay = json.loads(_OVERLAY_PATH.read_text(encoding="utf-8"))
+        sheet_ids = overlay.get("fewshot_by_template", {}).get(template_name, [])
+        if not sheet_ids:
+            return ""
+        from app.web import db
+
+        examples: list[str] = []
+        for sid in sheet_ids[:3]:
+            sheet = db.get_sheet(int(sid))
+            if not sheet or not sheet.get("sheet_data"):
+                continue
+            sd = sheet["sheet_data"]
+            slim = {
+                "header": sd.get("header", {}),
+                "rows": sd.get("rows", []),
+                "footer": sd.get("footer", {}),
+            }
+            examples.append(json.dumps(slim, ensure_ascii=False, indent=2))
+        if not examples:
+            return ""
+        worked = "\n\n".join(
+            f"VALIDATED EXAMPLE {i}:\n{ex}" for i, ex in enumerate(examples, 1)
+        )
+        return (
+            "\nHere are confirmed, human-validated extractions of this exact "
+            "kanban type. Match their JSON structure, field formatting and "
+            "vocabulary — but read THIS image, do not copy their values:\n"
+            f"{worked}\n"
+        )
+    except Exception:  # noqa: BLE001 — few-shot is best-effort, never break OCR
+        logger.exception("few-shot block build failed for %s", template_name)
+        return ""
+
+
+# ============================================================================
 #  Builders
 # ============================================================================
 
@@ -161,6 +223,10 @@ def build_prompt(template: TemplateSpec) -> str:
     else:
         rules = _RULES_PRODUCTION
         domain_hint = "PRODUÇÃO DE COLUNAS"
+
+    # Round 98 — few-shot block from the learning engine. Empty string when
+    # the template has no learned examples, keeping the prompt unchanged.
+    fewshot = _fewshot_block(template.name)
 
     # Header skeleton (identical for all templates)
     # cod_maquina is the printed machine code (e.g. M032 for BOBINE-FORMATO).
@@ -203,7 +269,7 @@ The sheet has:
 {footer_desc}
 
 {rules}
-
+{fewshot}
 Return this exact JSON structure:
 {{
   "header": {{

@@ -102,12 +102,12 @@
     </div>
   </template>
 
-  <!-- ============== STAGE: UPLOADING (progress) ============== -->
+  <!-- ============== STAGE: UPLOADING (fast HTTP enqueue) ============== -->
   <template x-if="stage === 'uploading'">
     <div class="proc">
       <div class="spinner"></div>
       <div>
-        <div style="font-size:18px; font-weight:600;">A enviar e processar</div>
+        <div style="font-size:18px; font-weight:600;">A enviar fotos</div>
         <div class="muted tiny" style="margin-top:4px;">
           <span x-text="uploadIdx + 1"></span> de <span x-text="photos.length"></span>
         </div>
@@ -116,6 +116,46 @@
         <div :style="'width:' + (((uploadIdx) / photos.length) * 100) + '%; height:100%; background:var(--accent); transition: width 0.3s;'"></div>
       </div>
       <div class="muted tiny">Não fechar esta janela.</div>
+    </div>
+  </template>
+
+  <!-- ============== STAGE: PROCESSING (R71 polling) ============== -->
+  <template x-if="stage === 'processing'">
+    <div style="flex:1; padding:18px; display:flex; flex-direction:column; gap:14px; overflow-y:auto;">
+      <div class="card">
+        <div class="card-h">
+          <div class="card-h-title">A processar OCR</div>
+          <div class="card-h-sub muted tiny">
+            <span x-text="processingDone"></span> /
+            <span x-text="pendingSheets.length"></span> fotos prontas
+            <span x-show="queueDepth > 0"> · fila do servidor:
+              <span x-text="queueDepth"></span>
+            </span>
+          </div>
+        </div>
+      </div>
+      <template x-for="(s, idx) in pendingSheets" :key="s.sheet_id">
+        <div class="card" style="padding:14px; display:flex; align-items:center; gap:12px;">
+          <div style="width:48px; height:48px; border-radius:6px; overflow:hidden; background:#2a271f; flex-shrink:0;">
+            <img :src="photoThumb(idx)" style="width:100%; height:100%; object-fit:cover;">
+          </div>
+          <div style="flex:1; min-width:0;">
+            <div style="font-size:13px; font-weight:600;">
+              Foto <span x-text="idx + 1"></span>
+            </div>
+            <div class="muted tiny" x-text="statusLabel(s.status)"></div>
+          </div>
+          <div style="flex-shrink:0;">
+            <span x-show="s.status === 'pending'" class="dot warn"></span>
+            <span x-show="s.status === 'extracted'" class="dot ok"></span>
+            <span x-show="s.status === 'error'" class="dot crit"></span>
+          </div>
+        </div>
+      </template>
+      <div class="muted tiny" style="text-align:center; padding:8px;">
+        Pode fechar a janela — as fotos continuam a processar no servidor.
+        <br>Atualiza-se sozinho.
+      </div>
     </div>
   </template>
 
@@ -265,12 +305,15 @@
 <script>
 function captureApp() {
   return {
-    stage: 'preview',         // preview | confirm | uploading | qtd_confirm | done
+    stage: 'preview',         // preview | confirm | uploading | processing | qtd_confirm | done
     streamReady: false,
     streamErr: '',
     photos: [],               // [{ id, blob, url }]
     uploadIdx: 0,
     uploadedSheetIds: [],     // sheet_ids returned by /upload?return=json
+    pendingSheets: [],        // [{ sheet_id, status, error_message }] — R71 polling
+    queueDepth: 0,            // R71 — server-side queue size (informational)
+    _pollTimer: null,         // R71 — setInterval handle
     qtdSheets: [],            // payload from GET /mobile/qtds for editing QTDs
     savingQtds: false,
     _stream: null,
@@ -292,6 +335,10 @@ function captureApp() {
       if (this._boundVisibility) {
         document.removeEventListener('visibilitychange', this._boundVisibility);
         this._boundVisibility = null;
+      }
+      if (this._pollTimer) {
+        clearInterval(this._pollTimer);
+        this._pollTimer = null;
       }
       this.disarmBackLock();
       this.stopStream();
@@ -441,66 +488,147 @@ function captureApp() {
     },
 
     async uploadAll() {
+      // R71 — split into 2 phases. Phase 1: POST each photo to /upload
+      // (server enqueues, returns near-instantly). Phase 2: poll
+      // /sheet/{id}/status every 2s until all OCRs finish in the
+      // background. Eliminates the 90s client timeout that triggered
+      // when multiple users captured simultaneously.
       if (this.photos.length === 0) return;
       this.stage = 'uploading';
       this.armBackLock();
       this.uploadIdx = 0;
       this.uploadedSheetIds = [];
+      this.pendingSheets = [];
       const totalCount = this.photos.length;
-      let okCount = 0;
       let failures = [];
 
+      // ---- Phase 1: enqueue all photos ----
       for (let i = 0; i < this.photos.length; i++) {
         this.uploadIdx = i;
         const photo = this.photos[i];
         const fd = new FormData();
         fd.append('image', photo.blob, `kanban_${i+1}.jpeg`);
         try {
-          // Generous timeout (60s) — OCR pipeline takes ~25s; give slack for slow networks
+          // /upload now just enqueues + returns; 30s is plenty for image upload
           const ctrl = new AbortController();
-          const timer = setTimeout(() => ctrl.abort(), 90_000);
+          const timer = setTimeout(() => ctrl.abort(), 30_000);
           const res = await fetch('/upload?return=json', {
             method: 'POST',
             body: fd,
             signal: ctrl.signal,
           });
           clearTimeout(timer);
-          console.log(`[upload ${i+1}/${totalCount}] HTTP ${res.status}`);
           if (res.ok) {
             const body = await res.json().catch(() => ({}));
-            console.log(`[upload ${i+1}/${totalCount}] body:`, body);
-            if (body.status === 'ok' && body.sheet_id) {
-              okCount++;
+            if (body.sheet_id) {
               this.uploadedSheetIds.push(body.sheet_id);
+              this.pendingSheets.push({
+                sheet_id: body.sheet_id,
+                status: body.status || 'pending',
+                error_message: null,
+              });
             } else {
-              failures.push({i: i+1, reason: body.error || 'OCR error'});
+              failures.push({i: i+1, reason: body.error || 'no sheet_id'});
             }
           } else {
             failures.push({i: i+1, reason: `HTTP ${res.status}`});
           }
         } catch (e) {
           console.error(`[upload ${i+1}/${totalCount}] error:`, e);
-          failures.push({i: i+1, reason: e.name === 'AbortError' ? 'timeout' : e.message});
+          failures.push({i: i+1, reason: e.name === 'AbortError' ? 'upload timeout' : e.message});
         }
       }
       this.uploadIdx = totalCount;
-      console.log(`[uploadAll] sheet IDs uploaded:`, this.uploadedSheetIds);
 
+      if (failures.length > 0 && this.uploadedSheetIds.length === 0) {
+        // Total failure — show alert and bail out
+        const msg = failures.map(f => `Foto ${f.i}: ${f.reason}`).join('\n');
+        alert(`Nenhuma foto enviada.\n\nFalharam:\n${msg}`);
+        this.stage = 'done';
+        return;
+      }
       if (failures.length > 0) {
         const msg = failures.map(f => `Foto ${f.i}: ${f.reason}`).join('\n');
-        alert(`${okCount} de ${totalCount} enviadas com sucesso.\n\nFalharam:\n${msg}`);
+        alert(`${this.uploadedSheetIds.length} de ${totalCount} enviadas.\n\nFalharam:\n${msg}`);
       }
 
-      // Move to QTD-confirm stage if any sheet succeeded; else go straight to done
-      if (this.uploadedSheetIds.length > 0) {
-        await this.loadQtds();
-        console.log(`[uploadAll] qtdSheets loaded:`, this.qtdSheets);
-        if (this.qtdSheets.length > 0) {
-          this.stage = 'qtd_confirm';
-          return;
-        }
+      // ---- Phase 2: poll until all finish OCR in background ----
+      this.stage = 'processing';
+      this.startPolling();
+    },
+
+    get processingDone() {
+      return this.pendingSheets.filter(
+        s => s.status === 'extracted' || s.status === 'error'
+      ).length;
+    },
+
+    statusLabel(status) {
+      if (status === 'extracted') return '✓ Pronto';
+      if (status === 'error') return '✗ Erro';
+      if (status === 'pending') return 'A aguardar OCR…';
+      return status || '—';
+    },
+
+    photoThumb(idx) {
+      return this.photos[idx] && this.photos[idx].url
+        ? this.photos[idx].url
+        : '';
+    },
+
+    startPolling() {
+      if (this._pollTimer) clearInterval(this._pollTimer);
+      // Immediate first poll, then every 2s
+      this.pollOnce();
+      this._pollTimer = setInterval(() => this.pollOnce(), 2000);
+    },
+
+    async pollOnce() {
+      const pending = this.pendingSheets.filter(s => s.status === 'pending');
+      if (pending.length === 0) {
+        this.onAllDone();
+        return;
       }
-      this.stage = 'done';
+      // Poll each pending sheet in parallel
+      await Promise.all(pending.map(async (s) => {
+        try {
+          const res = await fetch(`/sheet/${s.sheet_id}/status`);
+          if (!res.ok) return;
+          const body = await res.json();
+          s.status = body.status;
+          s.error_message = body.error_message || null;
+          this.queueDepth = body.queue_size || 0;
+        } catch (e) {
+          console.error(`[poll ${s.sheet_id}]`, e);
+        }
+      }));
+      // Re-check after updates
+      const stillPending = this.pendingSheets.filter(s => s.status === 'pending');
+      if (stillPending.length === 0) {
+        this.onAllDone();
+      }
+    },
+
+    async onAllDone() {
+      if (this._pollTimer) {
+        clearInterval(this._pollTimer);
+        this._pollTimer = null;
+      }
+      // Only proceed to qtd_confirm with sheets that extracted successfully
+      const okIds = this.pendingSheets
+        .filter(s => s.status === 'extracted')
+        .map(s => s.sheet_id);
+      this.uploadedSheetIds = okIds;
+      if (okIds.length === 0) {
+        this.stage = 'done';
+        return;
+      }
+      await this.loadQtds();
+      if (this.qtdSheets.length > 0) {
+        this.stage = 'qtd_confirm';
+      } else {
+        this.stage = 'done';
+      }
     },
 
     async loadQtds() {
