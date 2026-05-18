@@ -54,7 +54,9 @@
     {% if metric_trend %}
     <div class="card" style="margin-bottom:14px;">
       <div class="card-h"><div class="card-h-title">Correções humanas por folha — tendência</div></div>
-      <div class="card-b"><canvas id="metricChart" height="70"></canvas></div>
+      <div class="card-b">
+        <div class="lr-chart-box"><canvas id="metricChart"></canvas></div>
+      </div>
     </div>
     {% endif %}
 
@@ -74,7 +76,9 @@
         {% if not attractors %}
           <div class="muted">Sem correções suficientes para detetar atratores.</div>
         {% else %}
-          <canvas id="attractorsChart" height="90" style="margin-bottom:14px;"></canvas>
+          <div class="lr-chart-box tall" style="margin-bottom:14px;">
+            <canvas id="attractorsChart"></canvas>
+          </div>
         {% endif %}
         {% for a in attractors %}
         <div class="lr-attractor">
@@ -107,13 +111,16 @@
             <template x-for="(chart, ci) in (msg.charts || [])" :key="ci">
               <div class="lr-msg-chart">
                 <div class="tiny muted" x-text="chart.title || ''"></div>
-                <canvas :data-chart="JSON.stringify(chart)" height="160"></canvas>
+                <div class="lr-chart-box">
+                  <canvas :data-chart="JSON.stringify(chart)"></canvas>
+                </div>
               </div>
             </template>
             <template x-for="(rule, ri) in (msg.proposed_rules || [])" :key="ri">
               <div class="lr-proposed">
-                <div><b x-text="rule.kind"></b> <span x-text="'— ' + (rule.reason || '')"></span></div>
-                <div class="mono tiny" x-text="JSON.stringify(rule.payload || {})"></div>
+                <span class="lr-badge" x-text="rule.kind"></span>
+                <div style="margin-top:5px;" x-text="describeRule(rule)"></div>
+                <div class="tiny muted" x-show="rule.reason" x-text="rule.reason"></div>
                 <button class="btn primary" style="margin-top:6px;"
                         x-show="!rule._added" @click="addRule(rule)">
                   Adicionar ao Separador 1</button>
@@ -139,6 +146,26 @@
 
 <script>
 const LR_PALETTE = ['#D4A574', '#2D5B8A', '#2F7D43', '#B8841C', '#B53024', '#8A5F2D'];
+
+// Shared, polished Chart.js options. maintainAspectRatio:false makes the
+// chart fill its (fixed-height) .lr-chart-box parent instead of ballooning.
+function lrChartOpts(showLegend) {
+  const grid = { color: 'rgba(22,20,15,0.06)', drawBorder: false };
+  const ticks = { font: { size: 11 }, color: '#756F61' };
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    layout: { padding: 4 },
+    plugins: {
+      legend: { display: !!showLegend, labels: { font: { size: 11 } } },
+      tooltip: { backgroundColor: '#16140F', padding: 8, cornerRadius: 6 },
+    },
+    scales: {
+      x: { beginAtZero: true, grid: grid, ticks: ticks },
+      y: { grid: grid, ticks: ticks },
+    },
+  };
+}
 
 function learningsPage() {
   return {
@@ -166,23 +193,25 @@ function learningsPage() {
       const el = document.getElementById('attractorsChart');
       if (!el || !this.attractorsData.length || typeof Chart === 'undefined') return;
       this.attractorsChartDone = true;
+      const top = this.attractorsData.slice(0, 8);
+      const opts = lrChartOpts(false);
+      opts.indexAxis = 'y';
       new Chart(el, {
         type: 'bar',
         data: {
-          labels: this.attractorsData.map(a => a.label),
+          labels: top.map(a => a.label),
           datasets: [{
             label: 'Correções',
-            data: this.attractorsData.map(a => a.correction_count),
-            backgroundColor: this.attractorsData.map(a =>
+            data: top.map(a => a.correction_count),
+            backgroundColor: top.map(a =>
               a.severity === 'alta' ? '#B53024'
               : a.severity === 'media' ? '#B8841C' : '#2F7D43'),
+            borderRadius: 4,
+            borderWidth: 0,
+            barPercentage: 0.7,
           }],
         },
-        options: {
-          indexAxis: 'y',
-          responsive: true,
-          plugins: { legend: { display: false } },
-        },
+        options: opts,
       });
     },
 
@@ -198,11 +227,27 @@ function learningsPage() {
             data: this.metricTrend.map(p => p.corrections_per_sheet),
             borderColor: '#D4A574',
             backgroundColor: 'rgba(212,165,116,0.15)',
-            tension: 0.3, fill: true,
+            tension: 0.3, fill: true, pointRadius: 3,
           }],
         },
-        options: { responsive: true, plugins: { legend: { display: false } } },
+        options: lrChartOpts(false),
       });
+    },
+
+    describeRule(rule) {
+      const p = (rule && rule.payload) || {};
+      const k = (rule && rule.kind) || '';
+      if (k.endsWith('_alias')) {
+        return '"' + (p.from || '?') + '"  →  "' + (p.to || '?') + '"';
+      }
+      if (k === 'confusion_pair') {
+        return 'OCR lê "' + (p.ocr_char != null ? p.ocr_char : '?')
+          + '" onde devia ler "' + (p.gold_char != null ? p.gold_char : '?') + '"';
+      }
+      if (k === 'observed_value') {
+        return 'Novo ' + (p.field || 'valor') + ': "' + (p.value || '?') + '"';
+      }
+      return JSON.stringify(p);
     },
 
     askAboutAttractor(label) {
@@ -250,22 +295,39 @@ function learningsPage() {
         .forEach(el => {
           el.setAttribute('data-rendered', '1');
           if (typeof Chart === 'undefined') return;
+          let spec;
           try {
-            const spec = JSON.parse(el.getAttribute('data-chart'));
+            spec = JSON.parse(el.getAttribute('data-chart'));
+          } catch (e) { spec = null; }
+          // A chart with fewer than 2 values looks bad — drop the whole
+          // chart box; the number stays in the reply text.
+          if (!spec || !Array.isArray(spec.labels) || spec.labels.length < 2) {
+            const box = el.closest('.lr-msg-chart');
+            if (box) box.remove();
+            return;
+          }
+          const multi = (spec.datasets || []).length > 1;
+          try {
             new Chart(el, {
               type: spec.type || 'bar',
               data: {
-                labels: spec.labels || [],
+                labels: spec.labels,
                 datasets: (spec.datasets || []).map((d, i) => ({
                   label: d.label || '',
                   data: d.data || [],
                   backgroundColor: LR_PALETTE[i % LR_PALETTE.length],
                   borderColor: LR_PALETTE[i % LR_PALETTE.length],
+                  borderRadius: 4,
+                  borderWidth: 0,
+                  tension: 0.3,
                 })),
               },
-              options: { responsive: true },
+              options: lrChartOpts(multi),
             });
-          } catch (e) { /* malformed spec — skip */ }
+          } catch (e) {
+            const box = el.closest('.lr-msg-chart');
+            if (box) box.remove();
+          }
         });
       const log = document.getElementById('lr-chat-log');
       if (log) log.scrollTop = log.scrollHeight;

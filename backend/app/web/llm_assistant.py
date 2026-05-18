@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 import httpx
 
@@ -97,16 +98,42 @@ Respondes SEMPRE e SÓ com um objeto JSON com esta estrutura exata:
 }}
 
 Regras:
-- "reply" é obrigatório. "charts" e "proposed_rules" podem ser listas vazias [].
-- Inclui "charts" apenas quando um gráfico ajuda mesmo a responder.
-- Propõe regras apenas quando há evidência clara nos atratores.
-- confusion_pair → payload {{"gold_char": "0", "ocr_char": "O", "weight": 0.5}}.
-- aliases → payload {{"from": "VALOR ERRADO", "to": "VALOR CERTO"}}.
+- "reply" é obrigatório e é texto simples — SEM HTML, SEM markdown, sem tags.
+- "charts" e "proposed_rules" podem ser listas vazias [].
+- Inclui "charts" só quando um gráfico ajuda mesmo, e NUNCA com menos de 2
+  valores (um gráfico de 1 barra é inútil — mete o número no texto).
+- Propõe regras só quando há evidência clara nos atratores.
+- confusion_pair é SÓ para UM caractere mal lido: "gold_char" e "ocr_char"
+  têm EXATAMENTE 1 caractere. Ex: {{"gold_char": "0", "ocr_char": "O"}}.
+- Para corrigir um VALOR INTEIRO (um modelo, cliente ou operador errado) usa
+  modelo_alias / cliente_alias / operador_alias com payload
+  {{"from": "VALOR ERRADO", "to": "VALOR CERTO"}}. NUNCA metas um valor
+  inteiro num confusion_pair.
 - Não inventes dados que não estejam no dossier."""
 
 
 def _envelope_fallback(text: str) -> dict:
     return {"reply": text, "charts": [], "proposed_rules": []}
+
+
+def _sanitize_rules(rules: list) -> list:
+    """Drop malformed proposed rules. A confusion_pair is strictly a
+    single-character substitution — the LLM sometimes stuffs a whole
+    misread value in there; those belong in an alias, so we drop them."""
+    out: list = []
+    for r in rules:
+        if not isinstance(r, dict):
+            continue
+        payload = r.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        if r.get("kind") == "confusion_pair":
+            gc = str(payload.get("gold_char") or "")
+            oc = str(payload.get("ocr_char") or "")
+            if len(gc) != 1 or len(oc) != 1:
+                continue
+        out.append(r)
+    return out
 
 
 def chat(user_message: str, history: list[dict] | None = None) -> dict:
@@ -176,8 +203,10 @@ def _parse_envelope(raw: str) -> dict:
         return _envelope_fallback(str(obj))
     charts = obj.get("charts")
     rules = obj.get("proposed_rules")
+    # Strip any HTML tags the model may have slipped into the reply.
+    reply = re.sub(r"<[^>]+>", "", str(obj.get("reply") or "")).strip()
     return {
-        "reply": str(obj.get("reply") or ""),
+        "reply": reply,
         "charts": charts if isinstance(charts, list) else [],
-        "proposed_rules": rules if isinstance(rules, list) else [],
+        "proposed_rules": _sanitize_rules(rules) if isinstance(rules, list) else [],
     }

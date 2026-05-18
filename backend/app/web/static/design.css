@@ -913,3 +913,13 @@ label.inline {
   border-radius: 8px;
   font: 400 13px var(--font-sans);
 }
+
+/* Round 99 — sized chart containers. Chart.js with maintainAspectRatio
+   false fills its parent, so the parent must have an explicit height. */
+.lr-chart-box {
+  position: relative;
+  width: 100%;
+  height: 200px;
+}
+.lr-chart-box.tall { height: 300px; }
+.lr-msg-chart .lr-chart-box { height: 190px; }

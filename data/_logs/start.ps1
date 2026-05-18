@@ -48,9 +48,17 @@ if (-not $env:OCR_NO_THINK) { $env:OCR_NO_THINK = "1" }
 # (real divergences supervisor must see). See reports/round44_*.
 if (-not $env:CC_STUB_VARIANT) { $env:CC_STUB_VARIANT = "w13" }
 
-# Start uvicorn detached
+# Start uvicorn detached.
+# DEV_RELOAD=1 (no .env do portátil de desenvolvimento) acrescenta --reload:
+# o servidor recarrega sozinho a cada edição de .py. Em producao a variavel
+# nao esta definida, por isso o comportamento mantem-se inalterado.
+$uvArgs = @("-m","uvicorn","backend.app.web.main:app","--host","0.0.0.0","--port","8080","--log-level","info")
+if ($env:DEV_RELOAD -eq "1") {
+  $uvArgs += "--reload"
+  Write-Host "DEV_RELOAD=1 - uvicorn com auto-reload (modo desenvolvimento)"
+}
 $uv = Start-Process -FilePath "$root\.venv\Scripts\python.exe" `
-  -ArgumentList "-m","uvicorn","backend.app.web.main:app","--host","0.0.0.0","--port","8080","--log-level","info" `
+  -ArgumentList $uvArgs `
   -WorkingDirectory $root `
   -WindowStyle Hidden `
   -RedirectStandardOutput "$logs\uvicorn.log" `

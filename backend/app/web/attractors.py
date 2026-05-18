@@ -3,6 +3,10 @@
 An *attractor* is a field, operador or template that pulls a
 disproportionate share of human corrections. The /learnings LLM tab uses
 these both as a fixed dashboard and as context for the assistant.
+
+``error_rate`` is a true ratio in [0, 1]: the share of sheets that needed
+at least one human correction in that group. ``correction_count`` is the
+raw edit volume (can far exceed the sheet count — many edits per sheet).
 """
 from __future__ import annotations
 
@@ -23,9 +27,10 @@ def _norm_field_path(field_path: str) -> str:
 
 
 def _severity(error_rate: float) -> str:
-    if error_rate >= 0.15:
+    """Severity from a real [0,1] error rate (share of sheets touched)."""
+    if error_rate >= 0.5:
         return "alta"
-    if error_rate >= 0.05:
+    if error_rate >= 0.2:
         return "media"
     return "baixa"
 
@@ -33,7 +38,7 @@ def _severity(error_rate: float) -> str:
 def _human_edits() -> list[dict]:
     with db.conn() as c:
         rows = c.execute(
-            "SELECT e.field_path, e.old_value, e.new_value, "
+            "SELECT e.sheet_id, e.field_path, e.old_value, e.new_value, "
             "       s.operador AS sheet_operador, "
             "       json_extract(s.sheet_data, '$.template_name') AS template_name "
             "FROM edits e LEFT JOIN sheets s ON s.id = e.sheet_id "
@@ -42,24 +47,25 @@ def _human_edits() -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def _denominators() -> tuple[int, int, dict[str, int]]:
-    """(total production rows, total sheets, rows-per-operador)."""
+def _populations() -> tuple[int, dict[str, int], dict[str, int]]:
+    """(total sheets, sheets-per-template, sheets-per-operador) — the
+    denominators for the error-rate ratio."""
     with db.conn() as c:
-        total_rows = c.execute(
-            "SELECT COUNT(*) n FROM production_rows"
-        ).fetchone()["n"]
-        total_sheets = c.execute(
+        total = c.execute(
             "SELECT COUNT(*) n FROM sheets "
             "WHERE status IN ('extracted', 'validated')"
         ).fetchone()["n"]
+        tpl_rows = c.execute(
+            "SELECT json_extract(sheet_data, '$.template_name') tpl, COUNT(*) n "
+            "FROM sheets WHERE status IN ('extracted', 'validated') GROUP BY tpl"
+        ).fetchall()
         op_rows = c.execute(
-            "SELECT operador, COUNT(*) n FROM production_rows "
+            "SELECT operador, COUNT(*) n FROM sheets "
             "WHERE operador IS NOT NULL GROUP BY operador"
         ).fetchall()
-    rows_by_op = {
-        (r["operador"] or "").strip().upper(): r["n"] for r in op_rows
-    }
-    return total_rows, total_sheets, rows_by_op
+    by_tpl = {(r["tpl"] or "").strip(): r["n"] for r in tpl_rows if r["tpl"]}
+    by_op = {(r["operador"] or "").strip().upper(): r["n"] for r in op_rows}
+    return total, by_tpl, by_op
 
 
 def _top_confusions(edits: list[dict]) -> list[dict]:
@@ -74,11 +80,19 @@ def _top_confusions(edits: list[dict]) -> list[dict]:
     ]
 
 
+def _rate(edits: list[dict], population: int) -> float:
+    """Share of distinct sheets touched, in [0, 1]."""
+    if population <= 0:
+        return 0.0
+    distinct_sheets = len({e["sheet_id"] for e in edits})
+    return round(min(1.0, distinct_sheets / population), 4)
+
+
 def compute_attractors(top_n: int = 10) -> list[dict]:
     """Rank attractors by correction volume. Each entry carries an
-    ``error_rate`` (corrections / observations) and a ``severity``."""
+    ``error_rate`` (share of sheets touched, [0,1]) and a ``severity``."""
     edits = _human_edits()
-    total_rows, total_sheets, rows_by_op = _denominators()
+    total_sheets, sheets_by_tpl, sheets_by_op = _populations()
 
     by_field: dict[str, list[dict]] = defaultdict(list)
     by_operador: dict[str, list[dict]] = defaultdict(list)
@@ -94,45 +108,23 @@ def compute_attractors(top_n: int = 10) -> list[dict]:
 
     attractors: list[dict] = []
 
+    def _add(scope: str, label: str, es: list[dict], population: int) -> None:
+        rate = _rate(es, population)
+        attractors.append({
+            "scope": scope,
+            "label": label,
+            "correction_count": len(es),
+            "error_rate": rate,
+            "severity": _severity(rate),
+            "top_confusions": _top_confusions(es),
+        })
+
     for fld, es in by_field.items():
-        denom = total_rows if fld.startswith("rows[].") else total_sheets
-        denom = denom or len(es)
-        rate = round(len(es) / denom, 4) if denom else 0.0
-        attractors.append({
-            "scope": "campo",
-            "label": fld,
-            "correction_count": len(es),
-            "denominator": denom,
-            "error_rate": rate,
-            "severity": _severity(rate),
-            "top_confusions": _top_confusions(es),
-        })
-
+        _add("campo", fld, es, total_sheets)
     for op, es in by_operador.items():
-        denom = rows_by_op.get(op) or len(es)
-        rate = round(len(es) / denom, 4) if denom else 0.0
-        attractors.append({
-            "scope": "operador",
-            "label": op,
-            "correction_count": len(es),
-            "denominator": denom,
-            "error_rate": rate,
-            "severity": _severity(rate),
-            "top_confusions": _top_confusions(es),
-        })
-
+        _add("operador", op, es, sheets_by_op.get(op, 0))
     for tpl, es in by_template.items():
-        denom = total_rows or len(es)
-        rate = round(len(es) / denom, 4) if denom else 0.0
-        attractors.append({
-            "scope": "template",
-            "label": tpl,
-            "correction_count": len(es),
-            "denominator": denom,
-            "error_rate": rate,
-            "severity": _severity(rate),
-            "top_confusions": _top_confusions(es),
-        })
+        _add("template", tpl, es, sheets_by_tpl.get(tpl, 0))
 
     attractors.sort(key=lambda a: a["correction_count"], reverse=True)
     return attractors[:top_n]
