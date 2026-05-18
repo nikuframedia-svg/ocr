@@ -1,0 +1,21 @@
+{
+  "generated_at": "2026-05-18T15:56:32.007670+00:00",
+  "cliente_aliases": {
+    "SK-H.RELUX": "STOCK MTG BELUX",
+    "SYNDICAT": "MTG GMBH",
+    "SDEE": "SDEC ENERGIE",
+    "LEHT NL": "LICHT NL",
+    "SK-T-BELUX": "STOCK MTG BELUX",
+    "LIGHT NL": "LICHT NL",
+    "STOCK MTG": "STOCK MTG GMBH",
+    "SK-H-DELUX": "STOCK MTG BELUX",
+    "MTG GMBH": "STOCK MTG GMBH",
+    "J.C.BARTOLOMEU": "J C BARTOLOMEU"
+  },
+  "operador_aliases": {},
+  "modelo_aliases": {},
+  "confusion_overlay": {},
+  "clientes_observed": [],
+  "modelos_observed": [],
+  "fewshot_by_template": {}
+}
