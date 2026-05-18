@@ -37,7 +37,9 @@ def corrections_trend() -> list[dict]:
             "run_id": r["id"],
             "validated_count": r["validated_count_at_run"],
             "corrections_per_sheet": r["corrections_per_sheet"],
-            "finished_at": r["finished_at"],
+            # str() — the column can come back as a datetime (PARSE_DECLTYPES),
+            # which Jinja's `tojson` cannot serialize.
+            "finished_at": str(r["finished_at"]) if r["finished_at"] else None,
         }
         for r in store.list_runs()
     ]
