@@ -32,6 +32,11 @@ from typing import Any
 
 from PIL import Image
 
+# R106 — OF normalisation (always 6 digits). Add backend/ to sys.path so the
+# import works both when ocr6 is imported by the web app and run standalone.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "backend"))
+from app.cross_check.of_utils import normalize_of  # noqa: E402
+
 # ── Configuração ──────────────────────────────────────────────────────────────
 # R64 — OLLAMA_URL is overridable via env var so the laptop runtime can
 # point at a remote Ollama (e.g. the desktop PC on the same LAN).
@@ -186,6 +191,9 @@ def normalize_extraction(
         if not isinstance(row, dict):
             continue
         clean_row = {f: str(row.get(f, "")).strip() for f in rf}
+        # R106 — OF is always 6 digits (zero-pad short numeric reads).
+        if "of" in clean_row:
+            clean_row["of"] = normalize_of(clean_row["of"])
         # Filtrar rows totalmente vazios
         if any(clean_row.values()):
             clean_rows.append(clean_row)

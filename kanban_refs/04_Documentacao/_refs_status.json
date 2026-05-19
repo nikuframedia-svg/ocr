@@ -1,15 +1,15 @@
 {
-  "loaded_at": "2026-05-18T19:42:49+00:00",
+  "loaded_at": "2026-05-19T09:18:25+00:00",
   "available": true,
   "stock_sap": {
-    "mtime": "2026-05-15T12:45:16+00:00",
-    "n_lotes": 3106
+    "mtime": "2026-05-19T09:13:57+00:00",
+    "n_lotes": 2770
   },
   "plan_colunas": {
-    "mtime": "2026-05-18T19:30:37+00:00",
-    "n_ofs": 9922,
-    "n_rows": 24585,
-    "n_clientes": 718
+    "mtime": "2026-05-19T09:13:57+00:00",
+    "n_ofs": 5291,
+    "n_rows": 16617,
+    "n_clientes": 537
   },
   "diff_vs_previous": {}
 }

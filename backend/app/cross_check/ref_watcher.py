@@ -40,7 +40,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.cross_check import refs_cumulative
+from app.cross_check.of_utils import normalize_of
 
 # R64 — overridable via KANBAN_DOC_DIR env var. Lets the laptop runtime
 # point at a local refs folder (or `kanban_refs/04_Documentacao` inside
@@ -126,12 +126,37 @@ def _mine_colaboradores(colab_path: Path) -> dict[int, dict[str, str]]:
     return out
 
 
+def _phase_columns(hdrs: dict[str, int]) -> list[str]:
+    """R106 — the phase columns of plan_colunas: every column between
+    ``quanttrp`` and ``esp`` (esp exclusive), in sheet order. On the current
+    export that is ``bf, c, q, s, r, a, exp``."""
+    qi, ei = hdrs.get("quanttrp"), hdrs.get("esp")
+    if qi is None or ei is None:
+        return []
+    return sorted((name for name, idx in hdrs.items() if qi < idx < ei),
+                  key=lambda n: hdrs[n])
+
+
+def _to_num(v: object) -> float:
+    """Lenient numeric coercion — blanks / non-numbers become 0."""
+    try:
+        return float(v)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _fase_incompleta(quanttrp: object, fases: dict[str, object]) -> bool:
+    """R106 — a plan row is *concluded* when every phase equals ``quanttrp``.
+    Returns True (still in production → priority) when some phase differs."""
+    q = _to_num(quanttrp)
+    if q <= 0:
+        return False
+    return any(_to_num(v) != q for v in fases.values())
+
+
 def _derive_plan_indexes(of_to_entries: dict[str, list[dict]]) -> dict[str, Any]:
     """Build every plan-derived index + count from an ``OF → entries`` map.
-
-    Shared by the fresh Excel mine and the cumulative-merge result (R104),
-    so the two can never drift apart. Pure function — no I/O.
-    """
+    Pure function — no I/O."""
     of_to_ovs = {
         of_str: frozenset(e["ov"] for e in entries if e.get("ov"))
         for of_str, entries in of_to_entries.items()
@@ -236,11 +261,13 @@ def _mine_from_excel(
         wb = openpyxl.load_workbook(plan_path, read_only=True, data_only=True)
         ws = wb["plan_colunas_cpis"] if "plan_colunas_cpis" in wb.sheetnames else wb.active
         hdrs: dict[str, int] = {}
+        phase_cols: list[str] = []
         for i, r in enumerate(ws.iter_rows(values_only=True)):
             if i == 0:
                 for j, h in enumerate(r):
                     if h:
                         hdrs[str(h).strip().lower()] = j
+                phase_cols = _phase_columns(hdrs)
                 continue
             if r[0] is None:
                 break
@@ -256,8 +283,15 @@ def _mine_from_excel(
             fechado_raw = r[hdrs.get("fechado", -1)] if "fechado" in hdrs else None
             fechado_flag = "1" if str(fechado_raw or "").strip() in ("1", "1.0", "True") else "0"
 
+            # R106 — quanttrp (final qty) + phase columns. A row is "concluded"
+            # when every phase == quanttrp; rows that aren't get cross-check
+            # priority (still in production).
+            quanttrp = r[hdrs["quanttrp"]] if "quanttrp" in hdrs else None
+            fases = {name: r[hdrs[name]] for name in phase_cols}
+
             entry = {
-                "of": of_int,
+                # R106 — OF is always a 6-digit string.
+                "of": normalize_of(of_int),
                 "cliente": cliente,
                 "ov": ov,
                 "designacao": desig,
@@ -272,20 +306,21 @@ def _mine_from_excel(
                 "material": str(r[hdrs["material"]] or "").strip() if "material" in hdrs else None,
                 # Round 43: closed-OF flag, used for snap disambiguation
                 "fechado": fechado_flag,
+                # R106: phase tracking
+                "quanttrp": quanttrp,
+                "fases": fases,
+                "fase_incompleta": _fase_incompleta(quanttrp, fases),
             }
-            of_to_entries.setdefault(str(of_int), []).append(entry)
+            of_to_entries.setdefault(normalize_of(of_int), []).append(entry)
         wb.close()
         refs["stats"]["n_ofs_file"] = len(of_to_entries)
         refs["plan_mtime"] = plan_path.stat().st_mtime
 
-    # R104 — fold the fresh mine into the cumulative historical layer, then
-    # build every index from the *merged* superset. OFs/lotes that have
-    # dropped off the latest export are kept, so old kanbans still validate.
-    merged_of, merged_lotes = refs_cumulative.merge_and_persist(
-        of_to_entries, stock_full)
-    refs["lotes_sap_full"] = merged_lotes
-    refs["lotes_sap"] = frozenset(merged_lotes.keys())
-    _plan_idx = _derive_plan_indexes(merged_of)
+    # R106 — refs come straight from the current Excel files (the R104
+    # cumulative historical merge was removed).
+    refs["lotes_sap_full"] = stock_full
+    refs["lotes_sap"] = frozenset(stock_full.keys())
+    _plan_idx = _derive_plan_indexes(of_to_entries)
     for _k in ("ofs_plan_str", "of_to_entries", "of_to_ovs",
                "of_to_designacoes", "clientes_plan", "ovs_plan",
                "modelos_plan", "plan_by_cliente", "plan_by_modelo_ft"):

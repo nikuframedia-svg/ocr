@@ -23,18 +23,17 @@
     <div class="card-h">
       <div class="card-h-title">Estado das refs</div>
       <div class="card-h-sub">
-        a base de dados acumula todo o histórico — uma OF/lote nunca se perde,
-        mesmo que saia do export mais recente
+        as refs vêm direto dos ficheiros carregados — o plano e o StockSAP
+        mais recentes
       </div>
     </div>
     <div class="card-b">
       <div class="refs-status">
         <div class="refs-stat">
           <div class="refs-stat-name">plan_colunas_cpis.xlsx</div>
-          <div class="refs-stat-big">{{ cumulative.n_ofs }}</div>
-          <div class="refs-stat-lbl">OFs acumuladas (histórico)</div>
+          <div class="refs-stat-big">{{ stats.get('n_ofs', 0) }}</div>
+          <div class="refs-stat-lbl">OFs no plano</div>
           <div class="refs-stat-sub">
-            ficheiro atual: <b>{{ stats.get('n_ofs_file', 0) }}</b> OFs ·
             {{ stats.get('n_clientes', 0) }} clientes ·
             {{ stats.get('n_plan_rows', 0) }} linhas
           </div>
@@ -42,11 +41,8 @@
         </div>
         <div class="refs-stat">
           <div class="refs-stat-name">StockSAP.xlsx</div>
-          <div class="refs-stat-big">{{ cumulative.n_lotes }}</div>
-          <div class="refs-stat-lbl">lotes acumulados (histórico)</div>
-          <div class="refs-stat-sub">
-            ficheiro atual: <b>{{ stats.get('n_lotes_file', 0) }}</b> lotes
-          </div>
+          <div class="refs-stat-big">{{ stats.get('n_lotes', 0) }}</div>
+          <div class="refs-stat-lbl">lotes no StockSAP</div>
           <div class="refs-stat-sub muted">atualizado: {{ sap_file_date }}</div>
         </div>
       </div>
@@ -61,7 +57,7 @@
     <div class="card">
       <div class="card-h">
         <div class="card-h-title">Carregar plano</div>
-        <div class="card-h-sub">plan_colunas_cpis.xlsx — OFs, OVs, clientes</div>
+        <div class="card-h-sub">plan_colunas_cpis.xlsx — OFs, OVs, clientes, fases</div>
       </div>
       <div class="card-b">
         <form method="post" action="/refs/upload" enctype="multipart/form-data"
@@ -88,29 +84,45 @@
     </div>
   </div>
 
+  {# ---- Re-validar ---- #}
+  <div class="card" style="margin-top:14px;">
+    <div class="card-h">
+      <div class="card-h-title">Re-validar folhas</div>
+      <div class="card-h-sub">
+        carregar refs novas NÃO mexe nas folhas já existentes — nem nas
+        validadas. Carrega aqui para re-correr o cross-check de todas as
+        folhas (incluindo as validadas) contra as refs atuais.
+      </div>
+    </div>
+    <div class="card-b">
+      <form method="post" action="/refs/revalidate">
+        <button class="btn primary" type="submit">Re-validar folhas</button>
+      </form>
+    </div>
+  </div>
+
   {# ---- Histórico de uploads ---- #}
   <div class="card" style="margin-top:14px;">
     <div class="card-h">
       <div class="card-h-title">Últimas atualizações</div>
-      <div class="card-h-sub">cada upload soma os registos novos ao histórico</div>
+      <div class="card-h-sub">registo dos ficheiros carregados</div>
     </div>
     <div class="card-b">
-      {% if not cumulative.uploads %}
+      {% if not uploads %}
       <div class="muted">Ainda não há uploads registados.</div>
       {% else %}
       <table class="refs-log">
         <thead>
           <tr><th>Data</th><th>Ficheiro</th><th>Tipo</th>
-              <th class="num">Adicionados</th><th class="num">Total</th></tr>
+              <th class="num">Linhas</th></tr>
         </thead>
         <tbody>
-          {% for u in cumulative.uploads %}
+          {% for u in uploads %}
           <tr>
             <td>{{ u.at[:16].replace('T', ' ') }}</td>
             <td>{{ u.filename }}</td>
             <td>{{ 'Plano' if u.kind == 'plan' else 'StockSAP' }}</td>
-            <td class="num">+{{ u.added }}</td>
-            <td class="num">{{ u.total }}</td>
+            <td class="num">{{ u.n_rows }}</td>
           </tr>
           {% endfor %}
         </tbody>

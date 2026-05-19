@@ -50,6 +50,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from app.cross_check.of_utils import normalize_of
+
 # Status enum (3 values, JSON-friendly)
 CROSS_CHECK_STATUSES = ("MATCH", "NO_MATCH", "NA")
 
@@ -381,10 +383,13 @@ def _best_plan_entry(entries: list[dict], modelo_ocr: str, comp_ocr: float | Non
             s = score_entry(e, row, refs)
             hs = score_high_signal(e, row)
             is_active = str(e.get("fechado", "0")) == "0"
-            scored.append((s, int(is_active), hs, e))
-        # Sort: max score, then active, then max high-signal
-        scored.sort(key=lambda x: (-x[0], -x[1], -x[2]))
-        return scored[0][3]
+            # R106 — phases not all done → still in production → priority.
+            in_prod = bool(e.get("fase_incompleta"))
+            scored.append((s, int(in_prod), int(is_active), hs, e))
+        # Sort: max score, then in-production (R106), then active, then
+        # max high-signal.
+        scored.sort(key=lambda x: (-x[0], -x[1], -x[2], -x[3]))
+        return scored[0][4]
 
     # Legacy path — substring + comp fallback
     active = [e for e in entries if str(e.get("fechado", "0")) == "0"]
@@ -426,7 +431,7 @@ def _find_best_plan_row_holistic(
     mod_ocr_raw = (row.get("modelo") or "").strip().upper()
     mod_ocr = "".join(mod_ocr_raw.split())  # collapsed
     ov_ocr = (row.get("ov") or "").strip()
-    of_ocr = (row.get("of") or "").strip()
+    of_ocr = normalize_of(row.get("of"))  # R106 — OF always 6 digits
 
     cli_idx = refs.get("plan_by_cliente", {}) or {}
     mod_idx = refs.get("plan_by_modelo_ft", {}) or {}
@@ -492,7 +497,13 @@ def _find_best_plan_row_holistic(
                         break
         return s
 
-    scored = sorted(((_score(e), e) for e in candidates.values()), reverse=True, key=lambda x: x[0])
+    # R106 — tie-break by phase priority: among entries with the same score,
+    # prefer the ones still in production (phases not all done).
+    scored = sorted(
+        ((_score(e), e) for e in candidates.values()),
+        reverse=True,
+        key=lambda x: (x[0], int(bool(x[1].get("fase_incompleta")))),
+    )
     if not scored:
         return None, 0
     best_score, best_entry = scored[0]
@@ -523,7 +534,7 @@ def _check_row(
     refs: dict[str, Any],
 ) -> dict[str, Any]:
     """Run pure verification against refs. Returns per-field status."""
-    of_raw = str(row.get("of") or "").strip()
+    of_raw = normalize_of(row.get("of"))  # R106 — OF always 6 digits
     plan_entries = refs.get("of_to_entries", {}).get(of_raw, [])
     # R93 — when OF lookup fails, try 0/O swap variants (OCR misreads
     # 0 as O or vice-versa in otherwise-numeric OFs).

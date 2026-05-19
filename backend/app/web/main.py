@@ -1224,16 +1224,30 @@ def _fmt_mtime(ts: float | None) -> str:
     return dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
 
 
+def _start_revalidation() -> bool:
+    """Arranca a re-validação cross-check em background (1 corrida de cada
+    vez). Devolve True se arrancou, False se já estava a correr."""
+    with _revalidation_lock:
+        if _revalidation_state["running"]:
+            return False
+        _revalidation_state.update(
+            running=True, done=0, total=0, finished_at=None,
+            started_at=dt.datetime.now().isoformat(timespec="seconds"),
+        )
+    threading.Thread(target=_revalidate_all_sheets_bg, daemon=True).start()
+    return True
+
+
 @app.get("/refs", response_class=HTMLResponse)
 def refs_page(request: Request) -> Response:
     """Página para carregar StockSAP/plan e ver o estado das refs."""
-    from app.cross_check import refs_cumulative
+    from app.cross_check import refs_uploads
     refs = get_watcher().get_refs()
     status = get_watcher().status()
     return templates.TemplateResponse(request, "refs.html", {
         "refs_status": status,
         "stats": refs.get("stats", {}),
-        "cumulative": refs_cumulative.stats(),
+        "uploads": refs_uploads.recent(),
         "revalidation": dict(_revalidation_state),
         "sap_file_date": _fmt_mtime(status.get("sap", {}).get("mtime")),
         "plan_file_date": _fmt_mtime(status.get("plan", {}).get("mtime")),
@@ -1248,9 +1262,10 @@ async def refs_upload(
     kind: str = Form(...),
     file: UploadFile = File(...),
 ) -> Response:
-    """Recebe um StockSAP.xlsx / plan_colunas_cpis.xlsx, valida-o, substitui
-    o ficheiro vivo, funde no histórico cumulativo e dispara a re-validação."""
-    from app.cross_check import refs_cumulative
+    """Recebe um StockSAP.xlsx / plan_colunas_cpis.xlsx, valida-o e substitui
+    o ficheiro vivo. Recarrega as refs DIRETO do ficheiro (sem acumulação
+    histórica). NÃO re-cross-checka folhas — isso é o botão 'Re-validar'."""
+    from app.cross_check import refs_uploads
     if kind not in _REFS_FILENAMES:
         raise HTTPException(400, "kind inválido")
     if not file.filename:
@@ -1282,8 +1297,6 @@ async def refs_upload(
         return RedirectResponse(
             f"/refs?err=ficheiro+rejeitado:+{err}", status_code=303)
 
-    counter = "n_ofs" if kind == "plan" else "n_lotes"
-    n_before = refs_cumulative.stats()[counter]
     # os.replace falha se o ficheiro vivo estiver aberto (ex.: Excel) — tenta
     # algumas vezes antes de desistir com um erro claro.
     replaced = False
@@ -1299,27 +1312,22 @@ async def refs_upload(
         return RedirectResponse(
             "/refs?err=ficheiro+em+uso+-+fecha+o+Excel+e+tenta+outra+vez",
             status_code=303)
-    get_watcher().force_reload()  # re-mina + funde no histórico cumulativo
-    n_after = refs_cumulative.stats()[counter]
-    refs_cumulative.record_upload(kind, target.name, n_before, n_after)
+    refs = get_watcher().force_reload()  # recarrega direto do ficheiro
+    stats = refs.get("stats", {})
+    n_rows = stats.get("n_plan_rows" if kind == "plan" else "n_lotes", 0)
+    refs_uploads.record(kind, target.name, n_rows)
+    return RedirectResponse(f"/refs?ok={kind}+atualizado", status_code=303)
 
-    # Re-validação cross-check de todas as folhas, em background. Marca já
-    # running=True (sob lock) para a página, ao redirecionar, mostrar logo
-    # a faixa de progresso sem corrida com o arranque da thread.
-    spawn = False
-    with _revalidation_lock:
-        if not _revalidation_state["running"]:
-            _revalidation_state.update(
-                running=True, done=0, total=0, finished_at=None,
-                started_at=dt.datetime.now().isoformat(timespec="seconds"),
-            )
-            spawn = True
-    if spawn:
-        threading.Thread(target=_revalidate_all_sheets_bg, daemon=True).start()
 
-    added = max(0, n_after - n_before)
+@app.post("/refs/revalidate")
+def refs_revalidate() -> Response:
+    """Botão 'Re-validar folhas' — re-corre o cross-check de TODAS as folhas
+    (extracted + validated) contra as refs atuais, em background."""
+    if _start_revalidation():
+        return RedirectResponse(
+            "/refs?ok=re-validacao+iniciada", status_code=303)
     return RedirectResponse(
-        f"/refs?ok={kind}+atualizado+(%2B{added})", status_code=303)
+        "/refs?err=re-validacao+ja+esta+a+correr", status_code=303)
 
 
 @app.get("/refs/revalidation-status", response_class=HTMLResponse)
