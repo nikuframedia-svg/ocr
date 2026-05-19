@@ -47,6 +47,10 @@ _correcoes.xlsx
 _shot_*.png
 _screenshot_*.png
 
+# R105 — fine-tuning artefacts (regenerable from app.db on the 5090 PC)
+data/_finetune/
+.venv-train/
+
 # Python
 __pycache__/
 *.py[cod]
