@@ -141,13 +141,13 @@ Variantes W usam tuples 5-element `(target, gates, min_gates, max_delta, conditi
 |---|---|
 | [`backend/app/cross_check/engine.py`](../backend/app/cross_check/engine.py) | + 15 W-variants em `_STUB_VARIANTS` + `_apply_stub_accept` 5-tuple support + `_condition_passes` helper + `_DIM_FIELDS` constant |
 | [`scripts/test_stub_variants.py`](../scripts/test_stub_variants.py) | VARIANTS expandido para 30 |
-| [`data/_logs/start.ps1`](../data/_logs/start.ps1) | `$env:CC_STUB_VARIANT = "w13"` |
+| [`scripts/ops/start.ps1`](../scripts/ops/start.ps1) | `$env:CC_STUB_VARIANT = "w13"` |
 | [`reports/round44_match_progression.md`](round44_match_progression.md) | Este ficheiro |
 | [`reports/round43_variants_results.json`](round43_variants_results.json) | 30-variant results |
 
 ## Rollback / variantes alternativas
 
-Para mudar de variante a qualquer momento, editar [`data/_logs/start.ps1`](../data/_logs/start.ps1):
+Para mudar de variante a qualquer momento, editar [`scripts/ops/start.ps1`](../scripts/ops/start.ps1):
 
 ```powershell
 $env:CC_STUB_VARIANT = "v13"   # 91.69% — voltar ao R43 baseline
@@ -158,7 +158,7 @@ $env:CC_STUB_VARIANT = "v1"    # 85.65% — Sol 6 baseline (R43 antigo)
 
 E reiniciar uvicorn:
 ```bash
-powershell -ExecutionPolicy Bypass -File data/_logs/start.ps1
+powershell -ExecutionPolicy Bypass -File scripts/ops/start.ps1
 curl -X POST http://127.0.0.1:8080/admin/reload-refs
 ```
 

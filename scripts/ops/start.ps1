@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 # R65 — derive root from script location (portable across machines).
-# Script lives in <repo>/data/_logs/start.ps1; root is 2 levels up.
+# Script lives in <repo>/scripts/ops/start.ps1; root is 2 levels up.
 $root = (Resolve-Path "$PSScriptRoot\..\..").Path
 $logs = "$root\data\_logs"
 New-Item -ItemType Directory -Force -Path $logs | Out-Null

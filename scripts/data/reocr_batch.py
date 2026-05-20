@@ -5,7 +5,7 @@ template-específicos). Substitui raw_extraction + sheet_data + dq_audit
 e re-corre cross-check.
 
 Usage:
-    OCR_NO_THINK=1 .venv/Scripts/python.exe data/_logs/reocr_batch.py [--dry-run] [--limit N]
+    OCR_NO_THINK=1 .venv/Scripts/python.exe scripts/data/reocr_batch.py [--dry-run] [--limit N]
 """
 from __future__ import annotations
 

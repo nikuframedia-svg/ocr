@@ -1,11 +1,11 @@
 # R105 — actualizacao do dia-a-dia no PC da Metalogalva.
 # Busca o codigo novo do GitHub e reinicia o servidor. Um comando, e esta.
 #
-#   powershell -ExecutionPolicy Bypass -File data\_logs\update.ps1
+#   powershell -ExecutionPolicy Bypass -File scripts\ops\update.ps1
 #
 $ErrorActionPreference = "Stop"
 
-# Raiz do repo: este script vive em <repo>\data\_logs\update.ps1.
+# Raiz do repo: este script vive em <repo>\scripts\ops\update.ps1.
 $root = (Resolve-Path "$PSScriptRoot\..\..").Path
 Write-Host "REPO_ROOT=$root"
 
@@ -43,4 +43,4 @@ if (-not $?) {
 # --- Reiniciar o servidor -------------------------------------------------
 # O start.ps1 mata os processos antigos e arranca o uvicorn + cloudflared.
 Write-Host "A reiniciar o servidor..."
-& "$root\data\_logs\start.ps1"
+& "$root\scripts\ops\start.ps1"

@@ -6,7 +6,7 @@ re-runs `_sync_production_rows` to populate the new fields from the
 sheet_data JSON blobs.
 
 Usage:
-    .venv/Scripts/python.exe data/_logs/resync_production_rows.py
+    .venv/Scripts/python.exe scripts/data/resync_production_rows.py
 """
 from __future__ import annotations
 

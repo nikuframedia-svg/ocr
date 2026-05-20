@@ -29,7 +29,7 @@ Já está. O que foi feito (Round 105):
   `git clone` do Passo 6 precisa dele para o PC da Metalogalva receber as
   ~180 folhas corrigidas (a base do fine-tuning). O `update.ps1` protege a BD
   de produção (ver Parte D).
-- **A3** — `data/_logs/update.ps1` (o comando do dia-a-dia).
+- **A3** — `scripts/ops/update.ps1` (o comando do dia-a-dia).
 - **A4** — scripts de fine-tuning: `build_dataset.py` (testado no portátil:
   150 treino + 30 exame), `finetune_setup.ps1`, `train.py`, `deploy_model.ps1`.
 - **A5** — este documento.

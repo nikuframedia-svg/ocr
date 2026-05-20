@@ -2,15 +2,16 @@
 
 OCR pipeline for Metalogalva industrial Kanban production sheets.
 
-**Status:** Phase 0 — establishing the baseline of the new pipeline
-(Ollama + `qwen2.5vl:7b`) on the Metalogalva sample sheets. The full
-8-phase roadmap is documented in the project briefing.
+**Status:** Production baseline (R107) — Ollama nativo Windows
+serving `qwen3.5:9b` com `OCR_NO_THINK=1`. Roadmap de 8 fases em
+`docs/MIGRATION.md` (R105 runbook) e `CLAUDE.md` (resumo).
 
 ## Stack
 
 - Python 3.11 + uv + Pydantic v2 + structlog
-- **Ollama** (native Windows) serving `qwen2.5vl:3b` (or `:7b`) over
-  its OpenAI-compatible endpoint at `http://localhost:11434/v1`
+- **Ollama** (native Windows) serving `qwen3.5:9b` via OpenAI-compat
+  endpoint at `http://localhost:11434/v1`. `OCR_NO_THINK=1` desliga
+  reasoning blocks (sem isto: ~42% parse fails, 4x latência).
 - Client communicates via `httpx`
 
 > `docker-compose.yml`, `infra/install_docker_wsl.sh`, and
@@ -42,11 +43,11 @@ cp .env.example .env
 
 # 3. Install Ollama and pull the model (once)
 #    Windows: install OllamaSetup.exe, then in any shell:
-ollama pull qwen2.5vl:3b   # or :7b for higher accuracy at ~2x latency
+ollama pull qwen3.5:9b   # production model (R20+); ~5 GB
 
 # 4. Sanity-check the endpoint
 uv run python scripts/check_vllm.py
-# Expected: {"status": "ok", "model": "qwen2.5vl:3b", ...}
+# Expected: {"status": "ok", "model": "qwen3.5:9b", ...}
 
 # 5. Extract one (or many) Kanbans → CSV + side-by-side HTML
 uv run python scripts/extract.py inputs/originais/AugustoMonteiro_2026.04.16.JPG --html
@@ -127,10 +128,7 @@ tests/                       — pytest suite (unit + integration)
 
 ## Project briefing
 
-The canonical 8-phase roadmap and code-quality principles are in the
-plan file at
-`C:\Users\User\.claude\plans\briefing-para-claude-code-reactive-plum.md`.
-Phase 0 (this document) covers scaffolding and the new-pipeline
-baseline. Subsequent phases (preprocessing, PWA capture, dossier
-ingestion, validation, lexicon-constrained decoding, HITL, fine-tune)
-are described there.
+- `CLAUDE.md` — context essencial para futuros agentes (8-phase summary,
+  hot path, anti-patterns)
+- `docs/MIGRATION.md` — runbook PC→Portátil + fine-tuning na 5090 (R105)
+- `scripts/ops/start.ps1`, `scripts/ops/update.ps1` — ops do dia-a-dia

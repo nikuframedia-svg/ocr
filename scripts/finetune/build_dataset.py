@@ -29,7 +29,7 @@ from pathlib import Path
 
 from PIL import Image
 
-# data/_logs/build_dataset.py  ->  <repo root>
+# scripts/finetune/build_dataset.py  ->  <repo root>
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
 sys.path.insert(0, str(_REPO / "backend"))
