@@ -1565,7 +1565,7 @@ def snap_lote(value: str, *, row_context: dict | None = None) -> SnapResult:
         def _to_n(v):
             if v is None or v == "": return None
             try: return float(str(v).replace(",", ".").strip())
-            except: return None
+            except (ValueError, TypeError): return None
         ocr_esp = _to_n(row_context.get("esp"))
         ocr_larg = _to_n(row_context.get("larg_mm"))
         # Cross-field disambig requires at least one of esp/larg known
