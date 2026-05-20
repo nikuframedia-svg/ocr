@@ -1546,8 +1546,12 @@ def sheet_of_lookup(
     if not entries:
         return JSONResponse({"found": False, "of": of_norm, "entries": []})
 
-    # R113 — anotar _of para o cálculo de remaining usar a chave certa
-    entries_with_of = [{**e, "_of": of_norm} for e in entries]
+    # R113 — anotar _of para o cálculo de remaining usar a chave certa.
+    # R116 — anotar _orig_idx: o apply-of-entry indexa na lista NÃO ordenada
+    # (entries), enquanto a UI vê a sorted_entries. orig_idx faz a ponte.
+    entries_with_of = [
+        {**e, "_of": of_norm, "_orig_idx": i} for i, e in enumerate(entries)
+    ]
     from app.pipeline.of_consumption import sort_entries_by_remaining
     sorted_entries = sort_entries_by_remaining(
         entries_with_of, include_done=bool(include_done),
@@ -1557,6 +1561,7 @@ def sheet_of_lookup(
     for i, e in enumerate(sorted_entries):
         out_entries.append({
             "idx": i,
+            "orig_idx": e.get("_orig_idx"),  # R116 — usar este no apply
             "cliente": e.get("cliente", ""),
             "ov": str(e.get("ov", "")),
             "modelo": e.get("designacao", ""),

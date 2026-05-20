@@ -184,11 +184,14 @@ def chat(
     try:
         with httpx.Client(timeout=_CHAT_TIMEOUT_S) as client:
             for round_idx in range(_MAX_TOOL_ROUNDS):
+                # R116 — "think": False evita reasoning blocks que rebentam o
+                # timeout em qwen3.x (mesmo racional de llm_assistant.py:405-408).
                 payload = {
                     "model": model_name,
                     "messages": msgs,
                     "tools": tools_spec,
                     "stream": False,
+                    "think": False,
                     "options": {
                         "temperature": 0.2,
                     },
@@ -254,6 +257,7 @@ def chat(
                 "model": model_name,
                 "messages": msgs,
                 "stream": False,
+                "think": False,  # R116
                 "options": {"temperature": 0.1},
                 "format": "json",
             }
