@@ -145,7 +145,29 @@
 <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px;" class="sheet-grid">
   <!-- Image -->
   <div class="card" style="padding:8px; position:relative;"
-       x-data="{ showOriginal: false }">
+       x-data="{ showOriginal: false, recropping: false, recropMsg: '',
+                 hasCropped: {{ 'true' if has_cropped else 'false' }} }">
+    {# R111 — badge quando o auto-crop falhou: avisa o supervisor que está
+       a ver a foto com surroundings, não só o kanban. #}
+    <template x-if="!hasCropped">
+      <div class="crop-banner">
+        <div>
+          <b>Kanban não recortado automaticamente</b>
+          <div class="muted tiny">Foto raw a ser mostrada (com surroundings).</div>
+        </div>
+        <button type="button" class="btn primary"
+                style="padding:4px 12px; font-size:12px;"
+                :disabled="recropping"
+                @click="window.recropImageFor({{ sheet.id }}, $data)">
+          <span x-show="!recropping">↻ Tentar recortar agora</span>
+          <span x-show="recropping">A recortar...</span>
+        </button>
+      </div>
+    </template>
+    <template x-if="recropMsg">
+      <div class="crop-banner crop-banner-msg" x-text="recropMsg"
+           @click="recropMsg = ''"></div>
+    </template>
     <img id="kanban-img-{{ sheet.id }}"
          :src="showOriginal ? '/image/{{ sheet.id }}/original' : '/image/{{ sheet.id }}'"
          alt="folha {{ sheet.id }}"
@@ -153,8 +175,11 @@
     <div style="position:absolute; top:14px; right:14px; display:flex; gap:6px;">
       <button type="button" class="btn"
               style="padding:4px 10px; font-size:13px;"
-              title="Alternar entre kanban cropped e foto original"
-              @click="showOriginal = !showOriginal"
+              :title="hasCropped
+                ? 'Alternar entre kanban cropped e foto original'
+                : 'Não há cropped — só foto original disponível'"
+              :disabled="!hasCropped"
+              @click="if (hasCropped) showOriginal = !showOriginal"
               x-text="showOriginal ? '⤳ kanban' : '⤳ foto'"></button>
       <button type="button" class="btn"
               style="padding:4px 10px; font-size:13px;"
@@ -237,7 +262,20 @@
           <tbody>
             {% for row in rows %}
             <tr>
-              <td class="mono muted">{{ loop.index }}</td>
+              <td class="mono muted" style="white-space:nowrap;">
+                {# R112 — botão para abrir wizard "Corrigir via OF" da linha #}
+                {% if sheet.status != 'validated' %}
+                <button type="button" class="btn ghost row-of-wand-btn"
+                        @click="$dispatch('open-of-wizard', {
+                          row_index: {{ loop.index0 }},
+                          current_of: {{ (row.of or '') | tojson }}
+                        })"
+                        title="Corrigir via OF (escreve OF correcto e auto-fill cliente, modelo, dims)">
+                  🪄
+                </button>
+                {% endif %}
+                {{ loop.index }}
+              </td>
               {% set row_index = loop.index0 %}
               {% for f in row_fields %}
                 {% set path = 'rows[' ~ row_index ~ '].' ~ f %}
@@ -308,13 +346,292 @@
 
 </div><!-- /cellEditor wrapper -->
 
+<!-- ============== R112 — Wizard "Corrigir via OF" ============== -->
+<div x-data="ofWizard({{ sheet.id }})"
+     @open-of-wizard.window="open($event.detail)">
+  <template x-if="active">
+    <div class="sheet-bg" @click.self="cancel()">
+      <div class="sheet-modal of-wizard-modal">
+        <div class="lbl">Linha L<span x-text="row_index + 1"></span></div>
+        <div style="font-size:18px; font-weight:600; margin-bottom:4px;">
+          Corrigir linha via OF
+        </div>
+        <div class="muted tiny" style="margin-bottom:12px;">
+          Escreve o OF correcto, escolhe o modelo, e os outros campos
+          preenchem-se automaticamente do plano da fábrica.
+        </div>
+
+        <!-- Step 1 — input OF -->
+        <div style="margin-bottom:12px;">
+          <label class="lbl">OF correcto:</label>
+          <div style="display:flex; gap:8px; margin-top:4px;">
+            <input type="text" x-model="ofInput"
+                   placeholder="ex: 262107"
+                   @keydown.enter.prevent="lookup()"
+                   x-ref="ofInputRef"
+                   x-init="$nextTick(() => $refs.ofInputRef.focus())"
+                   inputmode="numeric"
+                   style="flex:1; padding:8px; font-size:16px; font-family:var(--font-mono);">
+            <button class="btn primary" type="button" @click="lookup()"
+                    :disabled="loading || !ofInput.trim()">
+              <span x-show="!loading">Procurar</span>
+              <span x-show="loading">…</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Step 2 — lookup result -->
+        <template x-if="lookupResult && !lookupResult.found">
+          <div class="alert warn" style="padding:10px; margin-bottom:12px;">
+            OF "<b x-text="lookupResult.of"></b>" não existe no plano da
+            fábrica. Verifica que escreveste bem.
+          </div>
+        </template>
+
+        <template x-if="lookupResult && lookupResult.found">
+          <div style="margin-bottom:12px;">
+            <div class="muted tiny"
+                 style="margin-bottom:6px; display:flex; align-items:center;
+                        justify-content:space-between; gap:8px; flex-wrap:wrap;">
+              <span>
+                <b x-text="lookupResult.entries.length"></b>
+                <span x-show="lookupResult.n_total &&
+                              lookupResult.n_total > lookupResult.entries.length"
+                      x-text="' de ' + lookupResult.n_total"></span>
+                linha(s) no plan para OF <b x-text="lookupResult.of"></b>.
+                Ordenadas por <b>faltam menos primeiro</b>.
+              </span>
+              <label style="display:inline-flex; gap:4px; align-items:center;">
+                <input type="checkbox" x-model="includeDone" @change="lookup()">
+                <span class="tiny muted">incluir peças já fechadas</span>
+              </label>
+            </div>
+            <div class="of-entries-list">
+              <template x-for="(e, i) in lookupResult.entries" :key="i">
+                <label class="of-entry-card"
+                       :class="{ selected: selectedEntry === i, done: e.done }"
+                       @click="selectedEntry = i">
+                  <input type="radio" :value="i" x-model="selectedEntry"
+                         style="margin-top:4px;">
+                  <div style="flex:1;">
+                    <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                      <b x-text="e.modelo || '(sem modelo)'"></b>
+                      <template x-if="e.remaining != null && e.quanttrp != null">
+                        <span class="of-remaining-badge"
+                              :class="e.done ? 'done' : (e.remaining < 5 ? 'urgent' : '')"
+                              x-text="e.done
+                                ? 'fechada ('+e.quanttrp+'/'+e.quanttrp+')'
+                                : 'faltam '+e.remaining+' de '+e.quanttrp"></span>
+                      </template>
+                      <span x-show="e.fechado && !e.done" class="pill warn"
+                            style="font-size:9px;">fechado</span>
+                    </div>
+                    <div class="tiny muted" style="margin-top:2px;">
+                      <span x-text="e.cliente"></span>
+                      <span x-show="e.ov"> · OV <b x-text="e.ov"></b></span>
+                      <span x-show="e.comp_mm"> · comp <b x-text="e.comp_mm"></b>mm</span>
+                      <span x-show="e.lbase"> · lbase <b x-text="e.lbase"></b></span>
+                      <span x-show="e.ltopo"> · ltopo <b x-text="e.ltopo"></b></span>
+                      <span x-show="e.esp"> · esp <b x-text="e.esp"></b></span>
+                      <span x-show="e.material"> · <b x-text="e.material"></b></span>
+                    </div>
+                  </div>
+                </label>
+              </template>
+            </div>
+          </div>
+        </template>
+
+        <!-- Actions -->
+        <div style="display:flex; gap:8px;">
+          <button type="button" class="btn lg" style="flex:1;" @click="cancel()">
+            Cancelar
+          </button>
+          <button type="button" class="btn lg primary" style="flex:2;"
+                  :disabled="!canApply || applying"
+                  @click="apply()">
+            <span x-show="!applying">Aplicar à linha</span>
+            <span x-show="applying">A aplicar…</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </template>
+</div>
+
+<script>
+function ofWizard(sheetId) {
+  return {
+    sheetId: sheetId,
+    active: false, row_index: 0, ofInput: '', current_of: '',
+    loading: false, lookupResult: null, selectedEntry: -1,
+    applying: false,
+    includeDone: false,  // R113 — toggle "mostrar peças já fechadas"
+    open(detail) {
+      this.active = true;
+      this.row_index = detail.row_index;
+      this.current_of = detail.current_of || '';
+      this.ofInput = detail.current_of || '';
+      this.lookupResult = null;
+      this.selectedEntry = -1;
+      this.includeDone = false;
+      // Auto-lookup se já existe OF na linha
+      if (this.ofInput.trim()) {
+        this.$nextTick(() => this.lookup());
+      }
+    },
+    cancel() { this.active = false; },
+    get canApply() {
+      return this.lookupResult && this.lookupResult.found
+             && this.selectedEntry >= 0;
+    },
+    async lookup() {
+      const of = (this.ofInput || '').trim();
+      if (!of) return;
+      this.loading = true;
+      this.lookupResult = null;
+      this.selectedEntry = -1;
+      try {
+        const url = '/sheet/' + this.sheetId
+                    + '/of-lookup?of=' + encodeURIComponent(of)
+                    + (this.includeDone ? '&include_done=1' : '');
+        const r = await fetch(url);
+        this.lookupResult = await r.json();
+        if (this.lookupResult.found && this.lookupResult.entries.length === 1) {
+          this.selectedEntry = 0;
+        }
+      } catch (e) {
+        this.lookupResult = { found: false, of: of, error: 'rede' };
+      } finally {
+        this.loading = false;
+      }
+    },
+    async apply() {
+      if (!this.canApply || this.applying) return;
+      this.applying = true;
+      try {
+        const r = await fetch('/sheet/' + this.sheetId + '/apply-of-entry', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            row_index: this.row_index,
+            of: this.lookupResult.of,
+            entry_idx: this.selectedEntry,
+          }),
+        });
+        const j = await r.json();
+        if (j.ok) {
+          this.active = false;
+          window.location.reload();
+        } else {
+          alert('Falhou: ' + (j.error || j.detail || 'erro desconhecido'));
+        }
+      } catch (e) {
+        alert('Erro de rede: ' + e.message);
+      } finally {
+        this.applying = false;
+      }
+    },
+  };
+}
+</script>
+
+<style>
+/* R112 — Wizard styles */
+.row-of-wand-btn {
+  padding: 2px 6px !important;
+  font-size: 13px !important;
+  line-height: 1 !important;
+  margin-right: 4px;
+  border-color: rgba(22,20,15,0.1);
+  background: transparent;
+}
+.row-of-wand-btn:hover { background: #faf6ed; }
+
+.of-wizard-modal {
+  max-width: 720px !important;
+}
+
+.of-entries-list {
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 2px;
+}
+.of-entry-card {
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 10px 12px; margin-bottom: 6px;
+  background: #fff; border: 1px solid rgba(22,20,15,0.1);
+  border-radius: 6px; cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+.of-entry-card:hover { background: #faf6ed; }
+.of-entry-card.selected {
+  border-color: #2F7D43; background: #f0f7e8;
+}
+.of-entry-card.done { opacity: 0.65; }
+
+/* R113 — badge "faltam X de Y" */
+.of-remaining-badge {
+  background: #e8f1d8; color: #2F5B33;
+  padding: 1px 6px; border-radius: 3px;
+  font-size: 10px; font-weight: 600;
+}
+.of-remaining-badge.urgent {
+  background: #fdedc8; color: #8A5F2D;
+}
+.of-remaining-badge.done {
+  background: #f0e6e5; color: #756F61;
+  text-decoration: line-through;
+}
+</style>
+
 <style>
   @media (max-width: 900px) {
     .sheet-grid { grid-template-columns: 1fr !important; }
   }
+  /* R111 — banner indicador de auto-crop falhado */
+  .crop-banner {
+    background: #fdedc8; color: #8A5F2D;
+    border: 1px solid #B8841C; border-radius: 4px;
+    padding: 8px 12px; margin-bottom: 8px;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px;
+    font-size: 13px;
+  }
+  .crop-banner.crop-banner-msg {
+    background: #e8f1d8; color: #2F7D43; border-color: #2F7D43;
+    cursor: pointer;
+  }
 </style>
 
 <script>
+// R111 — recrop helper exposto globalmente para o x-data inline do card
+// da imagem (Alpine resolve `recropImage()` no scope mais próximo, mas
+// queremos lógica reutilizável que actualize a imagem + state local).
+window.recropImageFor = function(sheetId, alpineScope) {
+  alpineScope.recropping = true;
+  alpineScope.recropMsg = '';
+  fetch('/sheet/' + sheetId + '/recrop', { method: 'POST' })
+    .then(r => r.json())
+    .then(j => {
+      alpineScope.recropping = false;
+      if (j.ok) {
+        alpineScope.hasCropped = true;
+        alpineScope.recropMsg = '✓ Kanban recortado. Imagem actualizada.';
+        const im = document.getElementById('kanban-img-' + sheetId);
+        if (im) im.src = '/image/' + sheetId + '?t=' + Date.now();
+        setTimeout(() => { alpineScope.recropMsg = ''; }, 4000);
+      } else {
+        alpineScope.recropMsg = j.message ||
+          'Não consegui detectar o kanban — foto não recortada.';
+      }
+    })
+    .catch(() => {
+      alpineScope.recropping = false;
+      alpineScope.recropMsg = 'Erro de rede a tentar recortar.';
+    });
+};
+
 function cellEditor() {
   return {
     active: false,

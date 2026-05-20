@@ -1,0 +1,3 @@
+{"version": 1, "type": "proposal_decided", "at": "2026-05-20T22:20:46.418119+00:00", "payload": {"proposal_id": 146, "decision": "accepted"}}
+{"version": 2, "type": "policy_promoted", "at": "2026-05-20T22:20:46.425051+00:00", "payload": {"version": 64}}
+{"version": 3, "type": "proposal_decided", "at": "2026-05-20T22:20:46.454990+00:00", "payload": {"proposal_id": 147, "decision": "rejected"}}

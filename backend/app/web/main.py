@@ -198,7 +198,12 @@ def home(request: Request) -> RedirectResponse:
 
 @app.get("/capture", response_class=HTMLResponse)
 def capture_page(request: Request) -> Response:
-    return templates.TemplateResponse(request, "capture.html", {})
+    # R114 — operadores para dropdown de "Quem está a validar?" em
+    # folhas com cesta (Expedição).
+    return templates.TemplateResponse(
+        request, "capture.html",
+        {"operadores": OPERADORES},
+    )
 
 
 _MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB — phone photos are typically 3-10 MB
@@ -288,45 +293,24 @@ _SNAPPED_OVERWRITE_FIELDS = (
 
 
 def _apply_auto_overwrites(sheet_id: int, result: dict) -> int:
-    """R61 — for modelo + cliente cells with MATCH status, overwrite
-    sheet_data when the operator's value differs from the plan canonical.
+    """R109 — Para qualquer célula que o motor unificado marcou como
+    `snapped` (motor escolheu valor diferente do OCR mas com confiança),
+    aplica apply_edit para escrever o valor canónico na sheet_data.
 
-    For modelo: canonical = first-token of matched designacao.
-    For cliente: canonical = plan.cliente verbatim.
-
-    R66 — additionally, for ANY field tagged cell["snapped"] = True
-    (by engine._apply_lev1_snap), overwrite to canonical. This keeps the
-    UI value consistent with the MATCH status the snap assigned.
-
-    Returns count of edits applied.
+    Células `very_different` (vermelho) NÃO são aplicadas — ficam para
+    revisão humana. Status do output legacy é sempre MATCH para snapped
+    e NO_MATCH para very_different.
     """
     n_applied = 0
     for row_r in result.get("rows", []):
         i = row_r.get("row_index")
         if i is None:
             continue
-        fields = row_r.get("fields", {})
-        for fn, cell in fields.items():
-            if cell.get("status") != "MATCH":
+        for fn, cell in row_r.get("fields", {}).items():
+            if not cell.get("snapped"):
                 continue
-            is_snapped = bool(cell.get("snapped"))
-            # R61 always applies to modelo/cliente; R66 extends to other
-            # fields only when snap-recovered.
-            if fn not in _AUTO_OVERWRITE_FIELDS:
-                if not (is_snapped and fn in _SNAPPED_OVERWRITE_FIELDS):
-                    continue
-            value = (cell.get("value") or "").strip()
-            ref = (cell.get("ref") or "").strip()
-            if not value or not ref:
-                continue
-            # R63 — modelo usa designacao completa (não só FT) por
-            # pedido explícito do user: operador e supervisor vêem
-            # exactamente o que está no plan (e.g.,
-            # "CFH2F12RI_V1 - FL PL + BASE INOX + FURACAO - TOPO").
-            canonical = ref.strip()
+            canonical = (cell.get("value") or "").strip()
             if not canonical:
-                continue
-            if value.upper() == canonical.upper():
                 continue
             field_path = f"rows[{i}].{fn}"
             try:
@@ -490,7 +474,46 @@ def _run_and_store_cross_check(sheet_id: int) -> dict | None:
         sheet_status=sheet["status"],
         cross_check_result=result,
     )
+    # R108 — shadow scoring engine corre em background, escreve em coluna
+    # própria. Não bloqueia, não interfere com `result`. Try/except wrap
+    # garante que qualquer falha no shadow não toca em produção.
+    _spawn_shadow_scoring(sheet_id, sheet["sheet_data"], sheet.get("dq_audit"), refs)
     return result
+
+
+def _spawn_shadow_scoring(
+    sheet_id: int,
+    sheet_data: dict,
+    dq_audit: dict | None,
+    refs: dict,
+) -> None:
+    """R108 — dispara `scoring_engine.shadow_score` em thread daemon.
+
+    Devolve imediatamente. Erros silenciados (logged) — shadow nunca
+    deve afectar o output de produção.
+    """
+    def _run() -> None:
+        try:
+            from app.pipeline.scoring_engine import shadow_score
+            run_id = db.start_shadow_run(sheet_id)
+            try:
+                scoring, total, snapped, confirmed, na, dur_ms = shadow_score(
+                    sheet_data, dq_audit, refs
+                )
+                db.finish_shadow_run(
+                    run_id, sheet_id, scoring,
+                    total, snapped, confirmed, na, dur_ms,
+                )
+            except Exception as exc:
+                db.fail_shadow_run(run_id, f"{type(exc).__name__}: {exc}")
+                traceback.print_exc()
+        except Exception:
+            # Falha a abrir o run sequer — não devia acontecer, mas guarda
+            traceback.print_exc()
+
+    threading.Thread(
+        target=_run, daemon=True, name=f"shadow-score-{sheet_id}"
+    ).start()
 
 
 @app.get("/sheet/{sheet_id}", response_class=HTMLResponse)
@@ -551,6 +574,12 @@ def sheet_page(
     from app.web.db import _normalize_data_pt_to_iso  # local import to avoid cycle
     data_iso_for_validate = _normalize_data_pt_to_iso(header.get("data"))
 
+    # R111 — flag para a UI saber se a imagem servida em /image/<id> é cropped
+    # (paper detectado) ou raw (fallback silencioso). Quando False, sheet.html
+    # mostra badge + botão "Tentar recortar agora".
+    from .image_crop import has_cropped as _has_cropped
+    sheet_has_cropped = _has_cropped(_DATA_DIR / sheet["image_path"])
+
     return templates.TemplateResponse(
         request,
         "sheet.html",
@@ -569,6 +598,7 @@ def sheet_page(
             "view_mode": view_mode,
             "back_url": back_url,
             "data_iso_for_validate": data_iso_for_validate,
+            "has_cropped": sheet_has_cropped,
             **tpl_ctx,  # template, template_name, row/footer/header_fields
         },
     )
@@ -883,6 +913,16 @@ async def sheet_validate(
                 pass
 
     db.validate_sheet(sheet_id, operador)
+    # R113 — folha acabada de validar entra no cálculo de consumption.
+    # Invalida cache para o /of-lookup seguinte ver os números actualizados.
+    # R115 — também invalida o agregado /obras (qtd produzida muda).
+    try:
+        from app.pipeline.of_consumption import invalidate_cache
+        invalidate_cache()
+        from app.pipeline.obras_status import invalidate_cache as obras_inv
+        obras_inv()
+    except Exception:  # noqa: BLE001
+        pass
     # Closed loop: drop CSV in the factory CSV dir so the next run of
     # ``kanban_csv2excel_novo_layout.py`` picks it up. Failure is silent —
     # the user can still pull the CSV via the /sheet/{id}/csv endpoint.
@@ -920,16 +960,17 @@ async def sheet_validate(
 
 @app.get("/mobile/qtds")
 def mobile_qtds(ids: str) -> JSONResponse:
-    """Return minimal data needed for the mobile QTD-confirm screen:
-    per-sheet rows (just modelo + qty) + footer.colunas_produzidas.
+    """Return minimal data needed for the mobile QTD-confirm screen.
 
-    `ids` is comma-separated list of sheet ids that the operator just
-    uploaded (passed by the capture.html JS state machine).
+    R114 — Para folhas com `cesta_n` no template (Expedição), inclui
+    também o número da cesta e `row_fields_extra=['cesta_n']` para a UI
+    mostrar a coluna apropriada.
     """
     try:
         sheet_ids = [int(s) for s in ids.split(",") if s.strip()]
     except ValueError:
         raise HTTPException(400, "ids must be comma-separated integers")
+    from app.templates_registry import get_template
     out = []
     for sid in sheet_ids:
         sheet = db.get_sheet(sid)
@@ -939,11 +980,22 @@ def mobile_qtds(ids: str) -> JSONResponse:
         h = sd.get("header", {}) or {}
         f = sd.get("footer", {}) or {}
         rows = sd.get("rows", []) or []
+        # R114 — descobrir o template + campos extra editáveis em mobile
+        template_name = db.get_sheet_template_name(sheet)
+        try:
+            tpl = get_template(template_name)
+            extra_fields = [
+                fname for fname in ("cesta_n",) if fname in tpl.row_fields
+            ]
+        except Exception:  # noqa: BLE001
+            extra_fields = []
         out.append({
             "sheet_id": sid,
             "status": sheet["status"],
             "operador": h.get("operador") or "",
             "data": h.get("data") or "",
+            "template_name": template_name,
+            "row_fields_extra": extra_fields,
             "rows": [
                 {
                     "row_index": i,
@@ -951,6 +1003,8 @@ def mobile_qtds(ids: str) -> JSONResponse:
                     "cliente": r.get("cliente", ""),
                     "of": r.get("of", ""),
                     "qtd": r.get("qtd", ""),
+                    # R114 — campo extra (vazio se template não usa cesta)
+                    "cesta_n": r.get("cesta_n", ""),
                 }
                 for i, r in enumerate(rows)
             ],
@@ -963,21 +1017,33 @@ def mobile_qtds(ids: str) -> JSONResponse:
 @app.post("/mobile/qtds-batch")
 async def mobile_qtds_batch(request: Request) -> JSONResponse:
     """Apply a batch of qty edits at once. Body is JSON:
-    { "edits": [ {sheet_id, field_path, value}, ... ] }
+        {
+          "edits": [ {sheet_id, field_path, value}, ... ],
+          "validate": [ {sheet_id, operador}, ... ]   # R114, optional
+        }
 
-    Restricts field_path to qty/colunas_produzidas only — anything else
-    is rejected. Re-cross-checks each affected sheet. Mobile is
-    write-only-restricted to qty fields.
+    Restricts field_path to qty/cesta_n/colunas_produzidas only —
+    anything else is rejected. Re-cross-checks each affected sheet.
+    R114 — opcionalmente valida folhas mobile (Expedição) sem precisar
+    de desktop.
     """
     body = await request.json()
     edits = body.get("edits", [])
     if not isinstance(edits, list):
         raise HTTPException(400, "edits must be a list")
+    validate_requests = body.get("validate", []) or []
+    if not isinstance(validate_requests, list):
+        validate_requests = []
 
-    # Whitelist: only qty-related paths
-    allowed_suffixes = (".qtd", "footer.colunas_produzidas", "footer.horas_trabalhadas")
+    # Whitelist: qty + cesta_n (R114) + footer counters
+    allowed_suffixes = (
+        ".qtd",
+        ".cesta_n",  # R114 — Expedição
+        "footer.colunas_produzidas",
+        "footer.horas_trabalhadas",
+    )
     applied = 0
-    affected_sheets = set()
+    affected_sheets: set[int] = set()
     errors: list[dict] = []
 
     for e in edits:
@@ -1005,11 +1071,48 @@ async def mobile_qtds_batch(request: Request) -> JSONResponse:
         except Exception:  # noqa: BLE001
             traceback.print_exc()
 
+    # R114 — validate sheets after edits
+    validated: list[int] = []
+    validate_errors: list[dict] = []
+    for v in validate_requests:
+        try:
+            sid = int(v.get("sheet_id"))
+            operador = str(v.get("operador") or "").strip()
+        except (TypeError, ValueError):
+            validate_errors.append({"req": v, "error": "bad shape"})
+            continue
+        if not operador:
+            validate_errors.append({"req": v, "error": "operador obrigatório"})
+            continue
+        sheet = db.get_sheet(sid)
+        if sheet is None:
+            validate_errors.append({"req": v, "error": "sheet not found"})
+            continue
+        if sheet.get("status") == "validated":
+            validate_errors.append({"req": v, "error": "já validada"})
+            continue
+        try:
+            db.validate_sheet(sid, operador)
+            validated.append(sid)
+            # Invalidate of_consumption (R113) + obras_status (R115) —
+            # peças consumidas nesta folha contam agora
+            try:
+                from app.pipeline.of_consumption import invalidate_cache
+                invalidate_cache()
+                from app.pipeline.obras_status import invalidate_cache as obras_inv
+                obras_inv()
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception as ex:  # noqa: BLE001
+            validate_errors.append({"req": v, "error": str(ex)})
+
     return JSONResponse({
         "ok": True,
         "applied": applied,
         "errors": errors,
         "sheets_updated": list(affected_sheets),
+        "validated": validated,
+        "validate_errors": validate_errors,
     })
 
 
@@ -1127,6 +1230,12 @@ def admin_reload_refs() -> JSONResponse:
     """Force-reload SAP + plan_colunas Excel files (skip mtime check).
     Optionally re-cross-check ALL sheets in DB so updated refs propagate."""
     refs = get_watcher().force_reload()
+    # R115 — refs novas invalidam o agregado /obras
+    try:
+        from app.pipeline.obras_status import invalidate_cache as obras_inv
+        obras_inv()
+    except Exception:  # noqa: BLE001
+        pass
     revalidated = 0
     for s in db.list_sheets(limit=10000):
         if s["status"] in ("error", "pending"):
@@ -1313,6 +1422,12 @@ async def refs_upload(
             "/refs?err=ficheiro+em+uso+-+fecha+o+Excel+e+tenta+outra+vez",
             status_code=303)
     refs = get_watcher().force_reload()  # recarrega direto do ficheiro
+    # R115 — refs novas invalidam o agregado /obras
+    try:
+        from app.pipeline.obras_status import invalidate_cache as obras_inv
+        obras_inv()
+    except Exception:  # noqa: BLE001
+        pass
     stats = refs.get("stats", {})
     n_rows = stats.get("n_plan_rows" if kind == "plan" else "n_lotes", 0)
     refs_uploads.record(kind, target.name, n_rows)
@@ -1402,6 +1517,176 @@ def sheet_rotate(sheet_id: int, request: Request) -> JSONResponse:
     current = int(sheet.get("image_rotation") or 0)
     new = db.set_image_rotation(sheet_id, current + 90)
     return JSONResponse({"ok": True, "rotation": new})
+
+
+# R112 — Wizard "Corrigir via OF" -----------------------------------------
+
+@app.get("/sheet/{sheet_id}/of-lookup")
+def sheet_of_lookup(
+    sheet_id: int,
+    of: str = "",
+    include_done: int = 0,
+) -> JSONResponse:
+    """R112 — devolve entries do plan_colunas para um OF.
+
+    R113 — entries são ordenadas por "faltam menos primeiro" e entries
+    já fechadas (remaining ≤ 0) são filtradas por defeito.
+    `include_done=1` para mostrar todas (recuperação de folhas antigas).
+    """
+    sheet = db.get_sheet(sheet_id)
+    if sheet is None:
+        raise HTTPException(404, f"sheet {sheet_id} not found")
+    of_raw = (of or "").strip()
+    if not of_raw:
+        return JSONResponse({"found": False, "of": "", "entries": []})
+    from app.pipeline.scoring_engine import normalize_of
+    of_norm = normalize_of(of_raw)
+    refs = get_watcher().get_refs() or {}
+    entries = (refs.get("of_to_entries") or {}).get(of_norm) or []
+    if not entries:
+        return JSONResponse({"found": False, "of": of_norm, "entries": []})
+
+    # R113 — anotar _of para o cálculo de remaining usar a chave certa
+    entries_with_of = [{**e, "_of": of_norm} for e in entries]
+    from app.pipeline.of_consumption import sort_entries_by_remaining
+    sorted_entries = sort_entries_by_remaining(
+        entries_with_of, include_done=bool(include_done),
+    )
+
+    out_entries = []
+    for i, e in enumerate(sorted_entries):
+        out_entries.append({
+            "idx": i,
+            "cliente": e.get("cliente", ""),
+            "ov": str(e.get("ov", "")),
+            "modelo": e.get("designacao", ""),
+            "comp_mm": e.get("comp"),
+            "lbase": e.get("lbase"),
+            "ltopo": e.get("ltopo"),
+            "esp": e.get("esp"),
+            "material": e.get("material", ""),
+            "fechado": bool(e.get("fechado")),
+            "remaining": e.get("_remaining"),
+            "quanttrp": e.get("_quanttrp"),
+            "done": e.get("_done", False),
+        })
+    return JSONResponse({
+        "found": True, "of": of_norm,
+        "entries": out_entries,
+        "n_entries": len(out_entries),
+        "n_total": len(entries),  # quantas existem no plan antes do filtro
+    })
+
+
+@app.post("/sheet/{sheet_id}/apply-of-entry")
+async def sheet_apply_of_entry(sheet_id: int, request: Request) -> JSONResponse:
+    """R112 — aplica os campos de uma entry do plan a uma linha do kanban.
+
+    Body: {row_index, of, entry_idx}. Escreve cliente, modelo, OV,
+    comp_mm, lbase, ltopo, esp via apply_edit(source='system'). Não
+    toca em qtd, lote, pri, coni, larg_mm (não estão no plan ou são
+    por bobine). Re-corre cross-check para refrescar cores.
+    """
+    sheet = db.get_sheet(sheet_id)
+    if sheet is None:
+        raise HTTPException(404, f"sheet {sheet_id} not found")
+    if sheet.get("status") == "validated":
+        raise HTTPException(409, "Folha já validada — edits bloqueados")
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        raise HTTPException(400, "Body JSON inválido")
+    try:
+        row_index = int(body.get("row_index", -1))
+        entry_idx = int(body.get("entry_idx", -1))
+    except (ValueError, TypeError):
+        raise HTTPException(400, "row_index e entry_idx têm de ser inteiros")
+    of_raw = str(body.get("of", "")).strip()
+    if row_index < 0 or entry_idx < 0 or not of_raw:
+        raise HTTPException(400, "row_index, of, entry_idx obrigatórios")
+
+    from app.pipeline.scoring_engine import normalize_of
+    of_norm = normalize_of(of_raw)
+    refs = get_watcher().get_refs() or {}
+    entries = (refs.get("of_to_entries") or {}).get(of_norm) or []
+    if not entries or entry_idx >= len(entries):
+        raise HTTPException(404, "OF ou entry não encontrados no plan")
+
+    e = entries[entry_idx]
+    fields_to_set = {
+        "of": of_norm,
+        "cliente": e.get("cliente", ""),
+        "ov": str(e.get("ov", "")),
+        "modelo": e.get("designacao", ""),
+        "comp_mm": e.get("comp"),
+        "lbase": e.get("lbase"),
+        "ltopo": e.get("ltopo"),
+        "esp": e.get("esp"),
+    }
+    applied = []
+    skipped = []
+    for field, value in fields_to_set.items():
+        if value is None or value == "":
+            skipped.append(field)
+            continue
+        path = f"rows[{row_index}].{field}"
+        try:
+            db.apply_edit(sheet_id, path, str(value), source="system")
+            applied.append({"field": field, "value": str(value)})
+        except ValueError:
+            skipped.append(field)
+        except Exception:  # noqa: BLE001
+            skipped.append(field)
+    try:
+        _run_and_store_cross_check(sheet_id)
+    except Exception:  # noqa: BLE001
+        pass
+    # R113 — após aplicar, refresca a cache de consumption (a próxima
+    # chamada a /of-lookup vai recomputar baseado neste novo estado).
+    try:
+        from app.pipeline.of_consumption import invalidate_cache
+        invalidate_cache()
+    except Exception:  # noqa: BLE001
+        pass
+    return JSONResponse({
+        "ok": True,
+        "n_applied": len(applied),
+        "applied": applied,
+        "skipped": skipped,
+        "of_used": of_norm,
+    })
+
+
+@app.post("/sheet/{sheet_id}/recrop")
+def sheet_recrop(sheet_id: int) -> JSONResponse:
+    """R111 — tenta correr auto-crop outra vez nesta folha.
+
+    Útil quando a primeira tentativa falhou (paper não detectado) e o
+    supervisor quer pedir nova tentativa via UI. Idempotente: se já
+    existe cropped, sobrepõe; se a detecção falhar agora, devolve
+    {ok: False, has_cropped: False} para a UI mostrar mensagem.
+    """
+    sheet = db.get_sheet(sheet_id)
+    if sheet is None:
+        raise HTTPException(404, f"sheet {sheet_id} not found")
+    img_path = _DATA_DIR / sheet["image_path"]
+    if not img_path.exists():
+        return JSONResponse(
+            {"ok": False, "has_cropped": False,
+             "error": "Imagem original não encontrada."},
+            status_code=404,
+        )
+    from .image_crop import auto_crop, has_cropped
+    result = auto_crop(img_path)
+    success = result is not None
+    return JSONResponse({
+        "ok": success,
+        "has_cropped": has_cropped(img_path),
+        "message": ("Kanban recortado com sucesso." if success
+                    else "Não consegui detectar o kanban na foto. "
+                         "Talvez a folha esteja com pouco contraste, "
+                         "muito inclinada ou cortada."),
+    })
 
 
 @app.get("/sheet/{sheet_id}/csv")
@@ -1612,6 +1897,12 @@ def kanban_viewer(
     # R94 — ISO date pre-fill for validation form (same as sheet_page)
     data_iso_for_validate = db._normalize_data_pt_to_iso(header.get("data")) if header else None
 
+    # R111 — has_cropped flag (mesma lógica do sheet_page)
+    from .image_crop import has_cropped as _has_cropped
+    sheet_has_cropped = False
+    if sheet and sheet.get("image_path"):
+        sheet_has_cropped = _has_cropped(_DATA_DIR / sheet["image_path"])
+
     return templates.TemplateResponse(
         request, "kanban_viewer.html",
         {
@@ -1635,6 +1926,7 @@ def kanban_viewer(
             "cc_snapped_by_path": cc_snapped_by_path,
             "valid_operadores": OPERADORES,
             "data_iso_for_validate": data_iso_for_validate,
+            "has_cropped": sheet_has_cropped,
             **_template_ctx_for_sheet(sheet),  # per-current-sheet template
         },
     )
@@ -2227,6 +2519,190 @@ async def learnings_llm_chat(request: Request) -> JSONResponse:
     # worker thread so it never freezes the async event loop.
     envelope = await asyncio.to_thread(llm_assistant.chat, message, history)
     return JSONResponse(envelope)
+
+
+# ----- R110.C — Agent proposals + policies (endpoints REST) -----
+from fastapi.encoders import jsonable_encoder  # noqa: E402
+
+from app import kernel  # noqa: E402  — R110.E event log
+
+
+def _json_ok(data: dict) -> JSONResponse:
+    """JSONResponse com datetime → ISO automático."""
+    return JSONResponse(jsonable_encoder(data))
+
+
+# ----- R110.E — Kernel state visibility -----
+
+@app.get("/agent/kernel/state")
+def kernel_state_endpoint() -> JSONResponse:
+    return _json_ok({"state": kernel.get_state(),
+                     "total_events": kernel.count_events()})
+
+
+@app.get("/agent/kernel/events")
+def kernel_events_endpoint(limit: int = 50) -> JSONResponse:
+    return _json_ok({"events": kernel.list_recent_events(limit=limit)})
+
+
+@app.get("/agent/proposals")
+def agent_proposals_list(
+    status: str = "",
+    kind: str = "",
+    limit: int = 50,
+) -> JSONResponse:
+    """Lista propostas do agente Qwen. Filtros opcionais status/kind."""
+    rows = db.list_proposals(status=status, kind=kind, limit=limit)
+    return _json_ok({"proposals": rows, "count": len(rows)})
+
+
+@app.post("/agent/proposals/{proposal_id}/approve")
+def agent_proposal_approve(proposal_id: int) -> JSONResponse:
+    """Aceita uma proposta: corre eval gate, promove nova policy_version,
+    aplica template_overlay se for o caso."""
+    from app.pipeline import policy_engine
+    version_id = policy_engine.promote_policy_from_proposal(
+        proposal_id, created_by="human-approval"
+    )
+    if version_id is None:
+        return JSONResponse(
+            {"status": "error", "error": "Proposta não encontrada."},
+            status_code=404,
+        )
+    proposal = db.get_proposal(proposal_id)
+    kernel.emit_event("proposal_decided",
+                      {"proposal_id": proposal_id, "decision": "accepted"})
+    kernel.emit_event("policy_promoted", {"version": version_id})
+    return _json_ok({
+        "status": "ok",
+        "proposal_id": proposal_id,
+        "policy_version": version_id,
+        "proposal": proposal,
+    })
+
+
+@app.post("/agent/proposals/{proposal_id}/reject")
+def agent_proposal_reject(proposal_id: int) -> JSONResponse:
+    from app.pipeline import policy_engine
+    ok = policy_engine.reject_proposal(proposal_id, decided_by="human")
+    if not ok:
+        return JSONResponse(
+            {"status": "error", "error": "Proposta não encontrada."},
+            status_code=404,
+        )
+    kernel.emit_event("proposal_decided",
+                      {"proposal_id": proposal_id, "decision": "rejected"})
+    return JSONResponse({"status": "ok", "proposal_id": proposal_id})
+
+
+@app.get("/agent/policies")
+def agent_policies_list(limit: int = 30) -> JSONResponse:
+    return _json_ok({"versions": db.list_policy_versions(limit=limit)})
+
+
+@app.get("/agent/policies/active")
+def agent_policies_active() -> JSONResponse:
+    return _json_ok({"policy": db.get_active_policy_version()})
+
+
+@app.post("/agent/policies/rollback")
+def agent_policies_rollback() -> JSONResponse:
+    """Reverte para a parent_version da activa actual."""
+    from app.pipeline import policy_engine
+    new_version = policy_engine.rollback_to_parent(reason="manual-rollback")
+    if new_version is None:
+        return JSONResponse(
+            {"status": "error",
+             "error": "Sem versão anterior para reverter."},
+            status_code=400,
+        )
+    kernel.emit_event("policy_rolled_back", {"version": new_version})
+    return JSONResponse({"status": "ok", "active_version": new_version})
+
+
+@app.get("/agent/circuit-breaker")
+def agent_circuit_breaker() -> JSONResponse:
+    """Verifica estado do circuit breaker (recommended action). Não age sozinho."""
+    from app.pipeline import policy_engine
+    return JSONResponse(policy_engine.check_circuit_breaker())
+
+
+@app.get("/agent/sessions")
+def agent_sessions_list(limit: int = 50) -> JSONResponse:
+    return _json_ok({"sessions": db.list_qwen_sessions(limit=limit)})
+
+
+@app.get("/agent/charts")
+def agent_charts_list(pinned_only: bool = False, limit: int = 30) -> JSONResponse:
+    return _json_ok({
+        "charts": db.list_qwen_charts(limit=limit, pinned_only=pinned_only)
+    })
+
+
+@app.post("/agent/charts/{chart_id}/pin")
+def agent_chart_pin(chart_id: int) -> JSONResponse:
+    ok = db.set_chart_pinned(chart_id, True)
+    if not ok:
+        return JSONResponse({"status": "error",
+                             "error": "Chart não encontrado."},
+                            status_code=404)
+    return JSONResponse({"status": "ok"})
+
+
+@app.post("/agent/charts/{chart_id}/unpin")
+def agent_chart_unpin(chart_id: int) -> JSONResponse:
+    ok = db.set_chart_pinned(chart_id, False)
+    if not ok:
+        return JSONResponse({"status": "error",
+                             "error": "Chart não encontrado."},
+                            status_code=404)
+    return JSONResponse({"status": "ok"})
+
+
+# ----- R115 — /obras (ponto de situação por cliente e OV) -----
+
+@app.get("/obras", response_class=HTMLResponse)
+def obras_page(
+    request: Request,
+    closed: int = 0,
+    q: str = "",
+    tab: str = "cliente",
+    ov: str = "",
+) -> Response:
+    """Página de ponto-de-situação. Junta o plan (refs) com production_rows."""
+    from app.pipeline import obras_status
+    data = obras_status.compute_obras_status(include_closed=bool(closed))
+    return templates.TemplateResponse(request, "obras.html", {
+        "data": data,
+        "include_closed": bool(closed),
+        "initial_search": q,
+        "initial_tab": "ov" if tab == "ov" else "cliente",
+        "initial_ov": ov,
+    })
+
+
+@app.get("/api/obras/summary")
+def api_obras_summary(closed: int = 0) -> JSONResponse:
+    from app.pipeline import obras_status
+    return _json_ok(obras_status.compute_obras_status(include_closed=bool(closed)))
+
+
+@app.get("/api/obras/ov/{ov_str}")
+def api_obras_ov(ov_str: str) -> JSONResponse:
+    from app.pipeline import obras_status
+    det = obras_status.get_ov_detail(ov_str)
+    if det is None:
+        return JSONResponse({"status": "error",
+                             "error": f"OV {ov_str} não encontrada no plan"},
+                            status_code=404)
+    return _json_ok(det)
+
+
+@app.post("/api/obras/refresh")
+def api_obras_refresh() -> JSONResponse:
+    from app.pipeline import obras_status
+    obras_status.invalidate_cache()
+    return JSONResponse({"status": "ok"})
 
 
 # ----- CSV builder (mirrors ocr6.write_csv but to string) -----

@@ -285,12 +285,42 @@
   </div>
 
   {# ============== PHOTO (collapsible, default closed) ============== #}
-  <details class="card" style="margin-top:12px;">
-    <summary class="card-h" style="cursor:pointer; user-select:none;">
+  <details class="card" style="margin-top:12px;"
+           x-data="{ hasCropped: {{ 'true' if has_cropped else 'false' }},
+                     recropping: false, recropMsg: '' }">
+    <summary class="card-h" style="cursor:pointer; user-select:none;
+              display:flex; align-items:center; gap:8px;">
       <div class="card-h-title">Foto Original</div>
       <div class="card-h-sub muted tiny">Click para expandir</div>
+      {# R111 — badge inline no summary quando auto-crop falhou #}
+      <template x-if="!hasCropped">
+        <span class="pill warn" style="margin-left:auto; font-size:11px;"
+              title="A foto mostrada é a raw (com surroundings) porque o auto-crop falhou.">
+          ⚠ Não recortada
+        </span>
+      </template>
     </summary>
     <div class="card-b" style="position:relative;">
+      {# R111 — banner com botão de retry quando não há cropped #}
+      <template x-if="!hasCropped">
+        <div class="crop-banner-kv">
+          <div>
+            <b>Kanban não recortado automaticamente</b>
+            <div class="muted tiny">A foto raw inclui surroundings.</div>
+          </div>
+          <button type="button" class="btn primary"
+                  style="padding:4px 12px; font-size:12px;"
+                  :disabled="recropping"
+                  @click="kvRecropImage({{ sheet.id }}, $data)">
+            <span x-show="!recropping">↻ Tentar recortar agora</span>
+            <span x-show="recropping">A recortar...</span>
+          </button>
+        </div>
+      </template>
+      <template x-if="recropMsg">
+        <div class="crop-banner-kv crop-banner-msg" x-text="recropMsg"
+             @click="recropMsg = ''"></div>
+      </template>
       <img id="kv-img-{{ sheet.id }}" src="/image/{{ sheet.id }}"
            alt="folha {{ sheet.id }}"
            style="width:100%; max-height:60vh; object-fit:contain; display:block;">
@@ -305,6 +335,48 @@
                          });">↻ rodar</button>
     </div>
   </details>
+
+  <script>
+    // R111 — recrop helper para o kanban_viewer (idêntico ao do sheet.html
+    // mas o ID do <img> é "kv-img-X").
+    window.kvRecropImage = function(sheetId, scope) {
+      scope.recropping = true;
+      scope.recropMsg = '';
+      fetch('/sheet/' + sheetId + '/recrop', { method: 'POST' })
+        .then(r => r.json())
+        .then(j => {
+          scope.recropping = false;
+          if (j.ok) {
+            scope.hasCropped = true;
+            scope.recropMsg = '✓ Kanban recortado. Imagem actualizada.';
+            const im = document.getElementById('kv-img-' + sheetId);
+            if (im) im.src = '/image/' + sheetId + '?t=' + Date.now();
+            setTimeout(() => { scope.recropMsg = ''; }, 4000);
+          } else {
+            scope.recropMsg = j.message ||
+              'Não consegui detectar o kanban — foto não recortada.';
+          }
+        })
+        .catch(() => {
+          scope.recropping = false;
+          scope.recropMsg = 'Erro de rede a tentar recortar.';
+        });
+    };
+  </script>
+
+  <style>
+    .crop-banner-kv {
+      background: #fdedc8; color: #8A5F2D;
+      border: 1px solid #B8841C; border-radius: 4px;
+      padding: 8px 12px; margin-bottom: 8px;
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px; font-size: 13px;
+    }
+    .crop-banner-kv.crop-banner-msg {
+      background: #e8f1d8; color: #2F7D43;
+      border-color: #2F7D43; cursor: pointer;
+    }
+  </style>
 
 {% endif %}
 

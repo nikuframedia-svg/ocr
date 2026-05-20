@@ -146,3 +146,13 @@ def auto_crop(src_path: Path, out_path: Path | None = None) -> Path | None:
 def cropped_path_for(src_path: Path) -> Path:
     """Convention for cropped sibling — used by /image/{id} route."""
     return src_path.with_name(src_path.stem + "_cropped.jpg")
+
+
+def has_cropped(src_path: Path) -> bool:
+    """R111 — True quando existe sibling _cropped.jpg para a foto original.
+
+    Usado pelos handlers /sheet/<id> e /kanbans para mostrar badge na UI
+    quando o auto-crop falhou (utilizador vê surroundings em vez do
+    kanban) e dar opção de retry manual via POST /sheet/<id>/recrop.
+    """
+    return cropped_path_for(src_path).exists()

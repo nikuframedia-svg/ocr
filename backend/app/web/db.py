@@ -129,6 +129,105 @@ CREATE TABLE IF NOT EXISTS learning_runs (
     error_message TEXT
 );
 
+-- R108 — shadow scoring engine audit. One row per shadow_score() run.
+-- Counts come from the scoring_engine.shadow_score result; agreement_rate
+-- is left NULL here (computed later by the /shadow dashboard against the
+-- production cross-check JSON).
+CREATE TABLE IF NOT EXISTS shadow_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sheet_id INTEGER NOT NULL REFERENCES sheets(id) ON DELETE CASCADE,
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    finished_at TIMESTAMP,
+    cells_total INTEGER,
+    cells_snapped INTEGER,        -- motor escolheu candidato != OCR raw
+    cells_confirmed INTEGER,      -- motor escolheu candidato == OCR raw
+    cells_na INTEGER,             -- campo sem pool de referência
+    duration_ms INTEGER,
+    status TEXT NOT NULL DEFAULT 'running',  -- running|done|error
+    error_message TEXT
+);
+
+-- R110 — Qwen agent sessions (audit completo das invocações).
+CREATE TABLE IF NOT EXISTS qwen_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trigger TEXT NOT NULL DEFAULT 'manual',  -- manual|cron|after_validation
+    user_message TEXT NOT NULL,
+    reply TEXT,
+    tools_used TEXT,                          -- JSON list de tool names
+    tool_calls_count INTEGER DEFAULT 0,
+    rounds INTEGER DEFAULT 0,
+    charts_count INTEGER DEFAULT 0,
+    proposed_rules_count INTEGER DEFAULT 0,
+    duration_ms INTEGER,
+    status TEXT NOT NULL DEFAULT 'ok',        -- ok|error|max_rounds_reached
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- R110.B — Gráficos gerados pelo agente Qwen.
+CREATE TABLE IF NOT EXISTS qwen_charts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT,
+    chart_type TEXT,                     -- bar|line|scatter|heatmap|histogram|pie
+    spec TEXT NOT NULL,                  -- JSON ChartSpec
+    narrative TEXT,                      -- explanação PT-PT
+    session_id INTEGER REFERENCES qwen_sessions(id) ON DELETE SET NULL,
+    pinned BOOLEAN NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- R110.C — Propostas do agente que mudam o sistema.
+CREATE TABLE IF NOT EXISTS proposals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,                  -- rule|template|cpis
+    payload TEXT NOT NULL,               -- JSON
+    justification TEXT,                  -- texto PT-PT do Qwen
+    evidence TEXT,                       -- JSON: sheet_ids etc.
+    risk_class TEXT NOT NULL,            -- auto|review|approval
+    qwen_confidence REAL,                -- 0..1
+    estimated_impact TEXT,               -- JSON
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending|accepted|rejected|auto_applied
+    shadow_eval_results TEXT,            -- JSON
+    session_id INTEGER REFERENCES qwen_sessions(id) ON DELETE SET NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    decided_at TIMESTAMP,
+    decided_by TEXT
+);
+
+-- R110.C — Versões de policy (rules + template_overlay aggregadas).
+CREATE TABLE IF NOT EXISTS policy_versions (
+    version INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_version INTEGER,
+    yaml_blob TEXT NOT NULL,
+    diff_summary TEXT,
+    created_by TEXT,                     -- qwen-agent|manual|circuit_breaker_rollback
+    promoted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    active BOOLEAN NOT NULL DEFAULT 0,
+    eval_results TEXT
+);
+
+-- R110.C — Overlay de templates aceites (alterações em runtime).
+CREATE TABLE IF NOT EXISTS template_overlay (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_name TEXT NOT NULL,
+    change_type TEXT NOT NULL,           -- add_field|remove_field|reorder
+    payload TEXT NOT NULL,               -- JSON
+    proposal_id INTEGER REFERENCES proposals(id) ON DELETE SET NULL,
+    active BOOLEAN NOT NULL DEFAULT 1,
+    promoted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- R110.C — Log do circuit breaker (apenas eventos).
+CREATE TABLE IF NOT EXISTS circuit_breaker_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event TEXT NOT NULL,                 -- triggered|rollback|reset
+    metric_name TEXT,
+    metric_value REAL,
+    baseline_value REAL,
+    action_taken TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_sheets_status ON sheets(status);
 CREATE INDEX IF NOT EXISTS idx_sheets_captured ON sheets(captured_at);
 CREATE INDEX IF NOT EXISTS idx_edits_sheet ON edits(sheet_id);
@@ -139,6 +238,17 @@ CREATE INDEX IF NOT EXISTS idx_rows_iso_date ON production_rows(sheet_iso_date);
 CREATE INDEX IF NOT EXISTS idx_rows_modelo ON production_rows(modelo);
 CREATE INDEX IF NOT EXISTS idx_learnings_status ON learnings(status);
 CREATE INDEX IF NOT EXISTS idx_learnings_kind ON learnings(kind);
+CREATE INDEX IF NOT EXISTS idx_shadow_runs_sheet ON shadow_runs(sheet_id);
+CREATE INDEX IF NOT EXISTS idx_shadow_runs_started ON shadow_runs(started_at);
+CREATE INDEX IF NOT EXISTS idx_qwen_sessions_created ON qwen_sessions(created_at);
+CREATE INDEX IF NOT EXISTS idx_qwen_sessions_trigger ON qwen_sessions(trigger);
+CREATE INDEX IF NOT EXISTS idx_qwen_charts_created ON qwen_charts(created_at);
+CREATE INDEX IF NOT EXISTS idx_qwen_charts_pinned ON qwen_charts(pinned);
+CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status);
+CREATE INDEX IF NOT EXISTS idx_proposals_kind ON proposals(kind);
+CREATE INDEX IF NOT EXISTS idx_proposals_risk ON proposals(risk_class);
+CREATE INDEX IF NOT EXISTS idx_policy_versions_active ON policy_versions(active);
+CREATE INDEX IF NOT EXISTS idx_template_overlay_active ON template_overlay(active, template_name);
 """
 
 
@@ -208,6 +318,13 @@ def init_db() -> None:
             "WHERE source = 'human' "
             "AND field_path IN ('header.pernr', 'header.cod_maquina')"
         )
+        # R108 — shadow scoring engine output on the sheets row itself,
+        # so /sheet/<id>/shadow-view can render side-by-side without an
+        # extra join. Idempotent.
+        if "shadow_scoring_json" not in cols:
+            c.execute("ALTER TABLE sheets ADD COLUMN shadow_scoring_json TEXT")
+        if "shadow_scored_at" not in cols:
+            c.execute("ALTER TABLE sheets ADD COLUMN shadow_scored_at TIMESTAMP")
 
 
 def insert_sheet(image_path: str) -> int:
@@ -242,6 +359,416 @@ def update_extraction(
             ),
         )
         _sync_production_rows(c, sheet_id, sheet_data)
+
+
+# R108 — shadow scoring engine persistence ---------------------------------
+
+def start_shadow_run(sheet_id: int) -> int:
+    """Open a shadow_runs row in 'running' state. Returns the run id."""
+    with conn() as c:
+        cur = c.execute(
+            "INSERT INTO shadow_runs (sheet_id, status) VALUES (?, 'running')",
+            (sheet_id,),
+        )
+        return cur.lastrowid
+
+
+def finish_shadow_run(
+    run_id: int,
+    sheet_id: int,
+    scoring: dict,
+    cells_total: int,
+    cells_snapped: int,
+    cells_confirmed: int,
+    cells_na: int,
+    duration_ms: int,
+) -> None:
+    """Mark a shadow_runs row as done and persist the scoring on the sheet."""
+    payload = json.dumps(scoring, ensure_ascii=False)
+    with conn() as c:
+        c.execute(
+            """UPDATE shadow_runs
+               SET finished_at = CURRENT_TIMESTAMP,
+                   cells_total = ?,
+                   cells_snapped = ?,
+                   cells_confirmed = ?,
+                   cells_na = ?,
+                   duration_ms = ?,
+                   status = 'done'
+               WHERE id = ?""",
+            (cells_total, cells_snapped, cells_confirmed, cells_na,
+             duration_ms, run_id),
+        )
+        c.execute(
+            """UPDATE sheets
+               SET shadow_scoring_json = ?,
+                   shadow_scored_at = CURRENT_TIMESTAMP
+               WHERE id = ?""",
+            (payload, sheet_id),
+        )
+
+
+def fail_shadow_run(run_id: int, error_message: str) -> None:
+    """Mark a shadow_runs row as error; sheet shadow_scoring_json stays null."""
+    with conn() as c:
+        c.execute(
+            """UPDATE shadow_runs
+               SET finished_at = CURRENT_TIMESTAMP,
+                   status = 'error',
+                   error_message = ?
+               WHERE id = ?""",
+            (error_message[:2000], run_id),
+        )
+
+
+# R110 — Qwen agent session persistence ------------------------------------
+
+def save_qwen_session(
+    user_message: str,
+    envelope: dict,
+    trigger: str = "manual",
+) -> int:
+    """Persiste uma sessão do agente Qwen. Devolve session_id.
+
+    envelope é o output de qwen_agent.chat() — inclui reply, charts,
+    proposed_rules e _meta com tools_used/duration_ms/status.
+    """
+    meta = envelope.get("_meta") or {}
+    with conn() as c:
+        cur = c.execute(
+            """INSERT INTO qwen_sessions
+               (trigger, user_message, reply, tools_used, tool_calls_count,
+                rounds, charts_count, proposed_rules_count, duration_ms,
+                status, error_message)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                trigger,
+                user_message[:8000],
+                (envelope.get("reply") or "")[:16000],
+                json.dumps(meta.get("tools_used") or [], ensure_ascii=False),
+                int(meta.get("tool_calls_count") or 0),
+                int(meta.get("rounds") or 0),
+                len(envelope.get("charts") or []),
+                len(envelope.get("proposed_rules") or []),
+                int(meta.get("duration_ms") or 0),
+                meta.get("status") or "ok",
+                (meta.get("error") or "")[:2000] or None,
+            ),
+        )
+        return cur.lastrowid
+
+
+def list_qwen_sessions(limit: int = 50) -> list[dict]:
+    """Lista as últimas N sessões do agente para o painel de audit."""
+    limit = max(1, min(limit, 200))
+    with conn() as c:
+        rows = c.execute(
+            """SELECT id, trigger, user_message, tool_calls_count, rounds,
+                      charts_count, proposed_rules_count, duration_ms,
+                      status, created_at
+               FROM qwen_sessions
+               ORDER BY created_at DESC
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+# R110.B — Charts -------------------------------------------------
+
+def save_qwen_chart(
+    spec: dict,
+    title: str = "",
+    narrative: str = "",
+    session_id: int | None = None,
+) -> int:
+    with conn() as c:
+        cur = c.execute(
+            """INSERT INTO qwen_charts
+               (title, chart_type, spec, narrative, session_id)
+               VALUES (?, ?, ?, ?, ?)""",
+            (
+                title[:500] if title else "",
+                spec.get("type") if isinstance(spec, dict) else None,
+                json.dumps(spec, ensure_ascii=False),
+                (narrative or "")[:4000],
+                session_id,
+            ),
+        )
+        return cur.lastrowid
+
+
+def list_qwen_charts(limit: int = 30, pinned_only: bool = False) -> list[dict]:
+    limit = max(1, min(limit, 200))
+    where = "WHERE pinned = 1" if pinned_only else ""
+    with conn() as c:
+        rows = c.execute(
+            f"""SELECT id, title, chart_type, spec, narrative, pinned, created_at
+                FROM qwen_charts {where}
+                ORDER BY pinned DESC, created_at DESC
+                LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["spec"] = json.loads(d["spec"]) if d["spec"] else None
+            except (json.JSONDecodeError, TypeError):
+                pass
+            out.append(d)
+        return out
+
+
+def set_chart_pinned(chart_id: int, pinned: bool) -> bool:
+    with conn() as c:
+        c.execute(
+            "UPDATE qwen_charts SET pinned = ? WHERE id = ?",
+            (1 if pinned else 0, chart_id),
+        )
+        return c.total_changes > 0
+
+
+# R110.C — Proposals + policies -----------------------------------
+
+def save_proposal(
+    kind: str,
+    payload: dict,
+    justification: str,
+    evidence: dict,
+    risk_class: str,
+    qwen_confidence: float = 0.0,
+    estimated_impact: dict | None = None,
+    session_id: int | None = None,
+) -> int:
+    with conn() as c:
+        cur = c.execute(
+            """INSERT INTO proposals
+               (kind, payload, justification, evidence, risk_class,
+                qwen_confidence, estimated_impact, session_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                kind,
+                json.dumps(payload, ensure_ascii=False),
+                (justification or "")[:8000],
+                json.dumps(evidence or {}, ensure_ascii=False),
+                risk_class,
+                float(qwen_confidence),
+                json.dumps(estimated_impact or {}, ensure_ascii=False),
+                session_id,
+            ),
+        )
+        return cur.lastrowid
+
+
+def list_proposals(
+    status: str = "",
+    kind: str = "",
+    limit: int = 50,
+) -> list[dict]:
+    limit = max(1, min(limit, 200))
+    where: list[str] = []
+    params: list = []
+    if status:
+        where.append("status = ?")
+        params.append(status)
+    if kind:
+        where.append("kind = ?")
+        params.append(kind)
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    params.append(limit)
+    with conn() as c:
+        rows = c.execute(
+            f"""SELECT id, kind, payload, justification, evidence, risk_class,
+                       qwen_confidence, estimated_impact, status,
+                       shadow_eval_results, created_at, decided_at, decided_by
+                FROM proposals
+                {where_sql}
+                ORDER BY created_at DESC
+                LIMIT ?""",
+            params,
+        ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            for k in ("payload", "evidence", "estimated_impact", "shadow_eval_results"):
+                v = d.get(k)
+                if isinstance(v, str) and v:
+                    try:
+                        d[k] = json.loads(v)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            out.append(d)
+        return out
+
+
+def get_proposal(proposal_id: int) -> dict | None:
+    rows = list_proposals(limit=200)
+    for p in rows:
+        if p["id"] == proposal_id:
+            return p
+    return None
+
+
+def decide_proposal(
+    proposal_id: int,
+    status: str,
+    decided_by: str = "human",
+    eval_results: dict | None = None,
+) -> bool:
+    """status ∈ {accepted, rejected, auto_applied}."""
+    with conn() as c:
+        c.execute(
+            """UPDATE proposals
+               SET status = ?, decided_at = CURRENT_TIMESTAMP,
+                   decided_by = ?,
+                   shadow_eval_results = COALESCE(?, shadow_eval_results)
+               WHERE id = ?""",
+            (
+                status, decided_by,
+                json.dumps(eval_results, ensure_ascii=False) if eval_results else None,
+                proposal_id,
+            ),
+        )
+        return c.total_changes > 0
+
+
+def save_policy_version(
+    parent_version: int | None,
+    yaml_blob: str,
+    diff_summary: str = "",
+    created_by: str = "manual",
+    eval_results: dict | None = None,
+) -> int:
+    with conn() as c:
+        cur = c.execute(
+            """INSERT INTO policy_versions
+               (parent_version, yaml_blob, diff_summary, created_by, eval_results)
+               VALUES (?, ?, ?, ?, ?)""",
+            (
+                parent_version,
+                yaml_blob,
+                diff_summary[:4000] if diff_summary else "",
+                created_by,
+                json.dumps(eval_results, ensure_ascii=False) if eval_results else None,
+            ),
+        )
+        return cur.lastrowid
+
+
+def activate_policy_version(version: int) -> bool:
+    with conn() as c:
+        c.execute("UPDATE policy_versions SET active = 0")
+        c.execute(
+            "UPDATE policy_versions SET active = 1 WHERE version = ?",
+            (version,),
+        )
+        return c.total_changes > 0
+
+
+def get_active_policy_version() -> dict | None:
+    with conn() as c:
+        row = c.execute(
+            "SELECT * FROM policy_versions WHERE active = 1 LIMIT 1"
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_policy_versions(limit: int = 30) -> list[dict]:
+    limit = max(1, min(limit, 200))
+    with conn() as c:
+        rows = c.execute(
+            """SELECT version, parent_version, diff_summary, created_by,
+                      promoted_at, active
+               FROM policy_versions
+               ORDER BY version DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def save_template_overlay(
+    template_name: str,
+    change_type: str,
+    payload: dict,
+    proposal_id: int | None = None,
+) -> int:
+    with conn() as c:
+        cur = c.execute(
+            """INSERT INTO template_overlay
+               (template_name, change_type, payload, proposal_id)
+               VALUES (?, ?, ?, ?)""",
+            (
+                template_name,
+                change_type,
+                json.dumps(payload, ensure_ascii=False),
+                proposal_id,
+            ),
+        )
+        return cur.lastrowid
+
+
+def get_active_template_overlays(template_name: str | None = None) -> list[dict]:
+    where = ["active = 1"]
+    params: list = []
+    if template_name:
+        where.append("template_name = ?")
+        params.append(template_name)
+    where_sql = "WHERE " + " AND ".join(where)
+    with conn() as c:
+        rows = c.execute(
+            f"""SELECT id, template_name, change_type, payload, proposal_id,
+                       promoted_at
+                FROM template_overlay {where_sql}
+                ORDER BY promoted_at""",
+            params,
+        ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            if isinstance(d.get("payload"), str):
+                try:
+                    d["payload"] = json.loads(d["payload"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            out.append(d)
+        return out
+
+
+def deactivate_template_overlay(overlay_id: int) -> bool:
+    with conn() as c:
+        c.execute(
+            "UPDATE template_overlay SET active = 0 WHERE id = ?",
+            (overlay_id,),
+        )
+        return c.total_changes > 0
+
+
+def log_circuit_breaker(
+    event: str,
+    metric_name: str = "",
+    metric_value: float | None = None,
+    baseline_value: float | None = None,
+    action_taken: str = "",
+) -> int:
+    with conn() as c:
+        cur = c.execute(
+            """INSERT INTO circuit_breaker_log
+               (event, metric_name, metric_value, baseline_value, action_taken)
+               VALUES (?, ?, ?, ?, ?)""",
+            (event, metric_name, metric_value, baseline_value, action_taken),
+        )
+        return cur.lastrowid
+
+
+def list_circuit_breaker_events(limit: int = 50) -> list[dict]:
+    limit = max(1, min(limit, 200))
+    with conn() as c:
+        rows = c.execute(
+            "SELECT * FROM circuit_breaker_log ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def get_sheet_template_name(sheet: dict | int) -> str:

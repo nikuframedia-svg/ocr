@@ -159,6 +159,29 @@
     </div>
   </template>
 
+  <!-- R114 — styles para botão confirmar + row destacada -->
+  <style>
+    .qtd-ok-btn {
+      width: 32px; height: 32px;
+      border: 1.5px solid var(--rule-2);
+      background: #fff;
+      border-radius: 50%;
+      font-size: 16px; line-height: 1;
+      cursor: pointer;
+      color: #aaa;
+      transition: all 0.1s;
+    }
+    .qtd-ok-btn:active { transform: scale(0.92); }
+    .qtd-ok-btn.active {
+      background: #2F7D43;
+      color: #fff;
+      border-color: #2F7D43;
+    }
+    .qtd-row-confirmed {
+      background: #f0f7e8 !important;
+    }
+  </style>
+
   <!-- ============== STAGE: QTD-CONFIRM (mobile-only edit) ============== -->
   <template x-if="stage === 'qtd_confirm'">
     <div style="flex:1; padding:18px; display:flex; flex-direction:column; gap:14px; overflow-y:auto;">
@@ -179,11 +202,19 @@
             <div>
               <div class="card-h-title" style="font-size:13px;">
                 <span x-text="sheet.operador || '—'"></span> · <span x-text="sheet.data || '—'"></span>
+                <template x-if="sheet.template_name && sheet.template_name !== 'bobine_formato'">
+                  <span class="pill neutral" style="font-size:9px; margin-left:6px;"
+                        x-text="sheet.template_name.replace(/_/g, ' ')"></span>
+                </template>
               </div>
               <div class="muted tiny">
                 Folha #<span x-text="sheet.sheet_id"></span> ·
                 <span x-text="sheet.rows.length"></span>
                 <span x-text="sheet.rows.length === 1 ? ' linha' : ' linhas'"></span>
+                <template x-if="hasCesta(sheet)">
+                  <span> · <b x-text="confirmedCount(sheet)"></b> de
+                    <b x-text="sheet.rows.length"></b> confirmadas</span>
+                </template>
               </div>
             </div>
           </div>
@@ -194,12 +225,19 @@
                   <th style="text-align:left; padding:6px 8px; width:32px;">#</th>
                   <th style="text-align:left; padding:6px 8px; width:80px;">OF</th>
                   <th style="text-align:left; padding:6px 8px;">Modelo</th>
-                  <th style="text-align:right; padding:6px 8px; width:80px;">QTD</th>
+                  <th style="text-align:right; padding:6px 8px; width:60px;">QTD</th>
+                  <template x-if="hasCesta(sheet)">
+                    <th style="text-align:right; padding:6px 8px; width:70px;">CESTA</th>
+                  </template>
+                  <template x-if="hasCesta(sheet)">
+                    <th style="text-align:center; padding:6px 8px; width:40px;">OK</th>
+                  </template>
                 </tr>
               </thead>
               <tbody>
                 <template x-for="row in sheet.rows" :key="row.row_index">
-                  <tr style="border-top:1px solid var(--rule);">
+                  <tr style="border-top:1px solid var(--rule);"
+                      :class="{ 'qtd-row-confirmed': isRowConfirmed(sheet, row.row_index) }">
                     <td class="mono tiny" style="padding:8px;" x-text="row.row_index + 1"></td>
                     <td class="mono tiny" style="padding:8px; font-weight:600;"
                         x-text="row.of || '—'"></td>
@@ -215,6 +253,30 @@
                                     font-family:var(--font-mono); font-size:14px;
                                     border:1px solid var(--rule-2); border-radius:4px;">
                     </td>
+                    <template x-if="hasCesta(sheet)">
+                      <td style="padding:6px 8px;">
+                        <input type="text" inputmode="numeric"
+                               pattern="\d{1,4}"
+                               placeholder="cesta"
+                               :value="row.cesta_n"
+                               @input="row.cesta_n = $event.target.value"
+                               style="width:100%; padding:6px; text-align:right;
+                                      font-family:var(--font-mono); font-size:14px;
+                                      border:1px solid var(--rule-2); border-radius:4px;">
+                      </td>
+                    </template>
+                    <template x-if="hasCesta(sheet)">
+                      <td style="padding:6px 4px; text-align:center;">
+                        <button type="button" class="qtd-ok-btn"
+                                :class="{ active: isRowConfirmed(sheet, row.row_index) }"
+                                @click="toggleConfirm(sheet, row.row_index)"
+                                :title="isRowConfirmed(sheet, row.row_index)
+                                  ? 'Confirmada — clica para tirar'
+                                  : 'Confirmar valores OCR desta linha'">
+                          ✓
+                        </button>
+                      </td>
+                    </template>
                   </tr>
                 </template>
               </tbody>
@@ -223,7 +285,7 @@
                   <td colspan="3" style="padding:8px; font-weight:600;">
                     Total colunas produzidas
                   </td>
-                  <td style="padding:6px 8px;">
+                  <td :colspan="hasCesta(sheet) ? 3 : 1" style="padding:6px 8px;">
                     <input type="number" inputmode="numeric"
                            :value="sheet.colunas_produzidas"
                            @input="sheet.colunas_produzidas = $event.target.value"
@@ -238,13 +300,34 @@
         </div>
       </template>
 
+      {# R114 — quando há cestas para validar mobile, mostrar selector de operador #}
+      <template x-if="anyCesta">
+        <div class="card">
+          <div class="card-b">
+            <label class="muted tiny" style="display:block; margin-bottom:6px;">
+              Quem está a validar?
+            </label>
+            <select x-model="validateOperador"
+                    style="width:100%; padding:8px; font-size:14px;
+                           border:1px solid var(--rule-2); border-radius:4px;">
+              <option value="">— Escolher operador —</option>
+              {% for op in operadores %}
+                <option value="{{ op }}">{{ op }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+      </template>
+
       <div style="display:flex; gap:10px;">
         <button class="btn lg" style="flex:1;" @click="skipConfirm()">Saltar</button>
-        <button class="btn lg primary" style="flex:2;" @click="submitQtds()" :disabled="savingQtds">
-          <span x-show="!savingQtds">Confirmar e gravar</span>
+        <button class="btn lg primary" style="flex:2;"
+                @click="submitQtds()" :disabled="savingQtds">
+          <span x-show="!savingQtds && !anyCesta">Confirmar e gravar</span>
+          <span x-show="!savingQtds && anyCesta">Validar e enviar</span>
           <span x-show="savingQtds" style="display:flex; align-items:center; gap:8px;">
             <span class="spinner" style="width:16px; height:16px; border-width:2px;"></span>
-            A gravar…
+            <span x-text="anyCesta ? 'A validar…' : 'A gravar…'"></span>
           </span>
         </button>
       </div>
@@ -316,6 +399,9 @@ function captureApp() {
     _pollTimer: null,         // R71 — setInterval handle
     qtdSheets: [],            // payload from GET /mobile/qtds for editing QTDs
     savingQtds: false,
+    // R114 — mobile cesta + confirmar
+    confirmedByKey: {},       // { "<sheet_id>:<row_index>": true }
+    validateOperador: '',     // operador escolhido para validar (Expedição)
     _stream: null,
     _photoCounter: 0,
     _backLockArmed: false,
@@ -647,11 +733,76 @@ function captureApp() {
       }
     },
 
+    // R114 — helpers para cesta + confirmação
+    hasCesta(sheet) {
+      return Array.isArray(sheet.row_fields_extra)
+        && sheet.row_fields_extra.includes('cesta_n');
+    },
+    get anyCesta() {
+      return this.qtdSheets.some(s => this.hasCesta(s));
+    },
+    _confirmKey(sheet, ri) { return sheet.sheet_id + ':' + ri; },
+    isRowConfirmed(sheet, ri) {
+      return !!this.confirmedByKey[this._confirmKey(sheet, ri)];
+    },
+    toggleConfirm(sheet, ri) {
+      const key = this._confirmKey(sheet, ri);
+      if (this.confirmedByKey[key]) {
+        delete this.confirmedByKey[key];
+      } else {
+        this.confirmedByKey[key] = true;
+      }
+    },
+    confirmedCount(sheet) {
+      return sheet.rows.filter(r => this.isRowConfirmed(sheet, r.row_index)).length;
+    },
+
     async submitQtds() {
       if (this.savingQtds) return;
+
+      // R114 — Validações para Expedição (folhas com cesta)
+      if (this.anyCesta) {
+        if (!this.validateOperador) {
+          alert('Escolhe quem está a validar antes de enviar.');
+          return;
+        }
+        // Cestas vazias?
+        const emptyCestas = [];
+        for (const s of this.qtdSheets) {
+          if (!this.hasCesta(s)) continue;
+          for (const r of s.rows) {
+            if (!String(r.cesta_n || '').trim()) {
+              emptyCestas.push(`Folha ${s.sheet_id}, linha ${r.row_index + 1}`);
+            }
+          }
+        }
+        if (emptyCestas.length > 0) {
+          alert('Preenche o número da cesta em todas as linhas:\n'
+                + emptyCestas.slice(0, 5).join('\n')
+                + (emptyCestas.length > 5 ? `\n+${emptyCestas.length - 5} mais` : ''));
+          return;
+        }
+        // Confirmações parciais? aviso mas não bloqueia
+        const unconfirmed = [];
+        for (const s of this.qtdSheets) {
+          if (!this.hasCesta(s)) continue;
+          const n = this.confirmedCount(s);
+          if (n < s.rows.length) {
+            unconfirmed.push(`Folha ${s.sheet_id}: ${n} de ${s.rows.length} linhas confirmadas`);
+          }
+        }
+        if (unconfirmed.length > 0) {
+          const proceed = confirm(
+            'Há linhas não confirmadas:\n' + unconfirmed.join('\n')
+            + '\n\nQueres validar mesmo assim?');
+          if (!proceed) return;
+        }
+      }
+
       this.savingQtds = true;
-      // Build edits: only QTD per row + colunas_produzidas
+      // Build edits: QTD + cesta_n (R114) + colunas_produzidas
       const edits = [];
+      const validate = [];
       for (const s of this.qtdSheets) {
         for (const r of s.rows) {
           edits.push({
@@ -659,20 +810,35 @@ function captureApp() {
             field_path: `rows[${r.row_index}].qtd`,
             value: String(r.qtd ?? ''),
           });
+          if (this.hasCesta(s)) {
+            edits.push({
+              sheet_id: s.sheet_id,
+              field_path: `rows[${r.row_index}].cesta_n`,
+              value: String(r.cesta_n ?? ''),
+            });
+          }
         }
         edits.push({
           sheet_id: s.sheet_id,
           field_path: 'footer.colunas_produzidas',
           value: String(s.colunas_produzidas ?? ''),
         });
+        if (this.hasCesta(s) && this.validateOperador) {
+          validate.push({sheet_id: s.sheet_id, operador: this.validateOperador});
+        }
       }
       try {
         const res = await fetch('/mobile/qtds-batch', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({edits}),
+          body: JSON.stringify({edits, validate}),
         });
         if (!res.ok) throw new Error('save failed');
+        const body = await res.json();
+        if (body.validate_errors && body.validate_errors.length > 0) {
+          alert('Algumas folhas não validaram:\n'
+                + body.validate_errors.map(e => e.error).join('\n'));
+        }
       } catch (e) {
         alert('Erro a gravar quantidades: ' + e.message);
       }
@@ -682,6 +848,8 @@ function captureApp() {
 
     skipConfirm() {
       // Operator chose not to edit QTDs — proceed to done with existing values
+      this.confirmedByKey = {};
+      this.validateOperador = '';
       this.stage = 'done';
     },
 

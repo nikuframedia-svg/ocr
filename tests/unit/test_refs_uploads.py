@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from app.cross_check import ref_watcher, refs_uploads
-from app.cross_check.of_utils import normalize_of
+from app.pipeline.scoring_engine import normalize_of
 
 
 @pytest.fixture

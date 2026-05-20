@@ -17,6 +17,8 @@
   <div class="lr-tabs">
     <button class="lr-tab" :class="{ active: tab === 'regras' }"
             @click="tab = 'regras'">Regras &amp; Aprendizagens</button>
+    <button class="lr-tab" :class="{ active: tab === 'agente' }"
+            @click="tab = 'agente'; ensureAgenteSec()">Agente</button>
     <button class="lr-tab" :class="{ active: tab === 'llm' }"
             @click="tab = 'llm'">LLM</button>
   </div>
@@ -100,7 +102,319 @@
     </div>
   </div>
 
-  {# ===================== TAB 2 — LLM ===================== #}
+  {# ===================== TAB 2 — Agente ===================== #}
+  <div x-show="tab === 'agente'" x-cloak>
+    <div class="lr-tabs lr-sub-nav" style="margin-bottom:14px;">
+      <button class="lr-tab" :class="{ active: agenteSec === 'propostas' }"
+              @click="selectAgenteSec('propostas')">Propostas
+              <span class="lr-mini-count" x-show="proposals.length"
+                    x-text="proposals.filter(p => p.status === 'pending').length"></span></button>
+      <button class="lr-tab" :class="{ active: agenteSec === 'policies' }"
+              @click="selectAgenteSec('policies')">Policies</button>
+      <button class="lr-tab" :class="{ active: agenteSec === 'graficos' }"
+              @click="selectAgenteSec('graficos')">Gráficos</button>
+      <button class="lr-tab" :class="{ active: agenteSec === 'sessoes' }"
+              @click="selectAgenteSec('sessoes')">Sessões</button>
+      <button class="lr-tab" :class="{ active: agenteSec === 'kernel' }"
+              @click="selectAgenteSec('kernel')">Kernel</button>
+    </div>
+
+    {# ----- Sub: Propostas ----- #}
+    <div x-show="agenteSec === 'propostas'">
+      <form class="lr-toolbar" @submit.prevent="loadProposals()">
+        <select x-model="proposalsFilter.status" @change="loadProposals()">
+          <option value="">Todos os estados</option>
+          <option value="pending">Pendentes</option>
+          <option value="accepted">Aceites</option>
+          <option value="rejected">Rejeitadas</option>
+          <option value="auto_applied">Aplicadas automaticamente</option>
+        </select>
+        <select x-model="proposalsFilter.kind" @change="loadProposals()">
+          <option value="">Todos os tipos</option>
+          <option value="rule">Regras</option>
+          <option value="template">Templates</option>
+          <option value="cpis">CPIS</option>
+        </select>
+        <button class="btn" type="button" @click="loadProposals()">Refrescar</button>
+        <div class="lr-metric">
+          <b x-text="proposals.length"></b> propostas
+        </div>
+      </form>
+
+      <template x-if="!proposalsLoaded">
+        <div class="muted tiny" style="padding:14px;">A carregar...</div>
+      </template>
+      <template x-if="proposalsLoaded && proposals.length === 0">
+        <div class="muted" style="padding:18px;">
+          Sem propostas. O agente cria quando lhe pedires algo na aba LLM
+          (ex.: <i>"propõe uma regra para o atrator X"</i>).
+        </div>
+      </template>
+
+      <template x-for="p in proposals" :key="p.id">
+        <div class="lr-proposal-card">
+          <div class="lr-proposal-head">
+            <span class="lr-badge" x-text="p.kind"></span>
+            <span class="lr-risk-badge" :class="p.risk_class"
+                  x-text="p.risk_class"></span>
+            <span class="lr-status-pill" :class="p.status"
+                  x-text="p.status"></span>
+            <span class="muted tiny" x-show="p.qwen_confidence"
+                  x-text="'conf ' + Math.round((p.qwen_confidence || 0) * 100) + '%'"></span>
+            <span class="muted tiny" style="margin-left:auto;"
+                  x-text="p.created_at"></span>
+          </div>
+          <div class="lr-proposal-body">
+            <div x-text="describeProposal(p)"></div>
+            <div class="muted tiny" x-show="p.justification"
+                 x-text="p.justification" style="margin-top:4px;"></div>
+            <div class="tiny" x-show="p.evidence && p.evidence.sheet_ids
+                 && p.evidence.sheet_ids.length" style="margin-top:4px;">
+              Evidência:
+              <template x-for="sid in (p.evidence.sheet_ids || []).slice(0, 8)" :key="sid">
+                <a class="lr-sheet-link" :href="'/sheet/' + sid"
+                   target="_blank" x-text="sid"></a>
+              </template>
+              <span x-show="(p.evidence.n || 0) > 8" class="muted"
+                    x-text="'+' + ((p.evidence.n || 0) - 8) + ' mais'"></span>
+            </div>
+            <div x-show="p.shadow_eval_results" class="lr-eval-results"
+                 style="margin-top:6px;">
+              <details>
+                <summary class="muted tiny">Eval gate</summary>
+                <pre x-text="JSON.stringify(p.shadow_eval_results, null, 2)"></pre>
+              </details>
+            </div>
+          </div>
+          <div class="lr-proposal-actions" x-show="p.status === 'pending'">
+            <button class="btn primary" type="button"
+                    @click="approveProposal(p.id)"
+                    :disabled="p._loading">Aceitar</button>
+            <button class="btn" type="button"
+                    @click="rejectProposal(p.id)"
+                    :disabled="p._loading">Rejeitar</button>
+          </div>
+          <div class="lr-proposal-actions" x-show="p.status !== 'pending'">
+            <span class="muted tiny" x-show="p.decided_by"
+                  x-text="'Decidido por ' + (p.decided_by || '?') +
+                          (p.decided_at ? ' em ' + p.decided_at : '')"></span>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    {# ----- Sub: Policies ----- #}
+    <div x-show="agenteSec === 'policies'">
+      <div class="lr-toolbar">
+        <button class="btn" type="button" @click="loadPolicies()">Refrescar</button>
+        <button class="btn" type="button" @click="loadCircuitBreaker()">
+          Verificar circuit breaker</button>
+      </div>
+
+      <template x-if="circuitBreaker">
+        <div class="lr-card" style="margin-bottom:14px;">
+          <div class="lr-card-h">Circuit breaker</div>
+          <div class="lr-card-b">
+            <span class="lr-cb-badge" :class="circuitBreaker.status"
+                  x-text="circuitBreaker.status"></span>
+            <div class="muted tiny" style="margin-top:6px;"
+                 x-text="circuitBreaker.recommendation || ''"></div>
+            <div class="tiny" x-show="circuitBreaker.recent_avg != null">
+              Recente: <b x-text="circuitBreaker.recent_avg"></b> ·
+              Baseline: <b x-text="circuitBreaker.baseline_avg"></b> ·
+              Delta: <b x-text="((circuitBreaker.delta_rel || 0) * 100).toFixed(1) + '%'"></b>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <template x-if="activePolicy">
+        <div class="lr-card" style="margin-bottom:14px;">
+          <div class="lr-card-h">Versão activa</div>
+          <div class="lr-card-b">
+            <div>
+              <b>v<span x-text="activePolicy.version"></span></b>
+              <span class="muted tiny" style="margin-left:8px;"
+                    x-text="'criada por ' + activePolicy.created_by +
+                            ' · ' + activePolicy.promoted_at"></span>
+            </div>
+            <div class="tiny" x-show="activePolicy.parent_version"
+                 x-text="'parent: v' + activePolicy.parent_version"></div>
+            <details x-show="activePolicy.diff_summary" style="margin-top:4px;">
+              <summary class="muted tiny">Diff</summary>
+              <pre x-text="activePolicy.diff_summary"></pre>
+            </details>
+            <button class="btn warn" type="button"
+                    @click="rollbackPolicy()" style="margin-top:8px;"
+                    x-show="activePolicy.parent_version">Rollback para parent</button>
+          </div>
+        </div>
+      </template>
+
+      <template x-if="!policiesLoaded">
+        <div class="muted tiny" style="padding:14px;">A carregar...</div>
+      </template>
+      <template x-if="policiesLoaded && policies.length === 0">
+        <div class="muted" style="padding:18px;">
+          Sem policy_versions registadas. Aceita uma proposta para criar a primeira.
+        </div>
+      </template>
+
+      <template x-for="v in policies" :key="v.version">
+        <div class="lr-policy-row" :class="{ 'lr-active': v.active }">
+          <div>
+            <b>v<span x-text="v.version"></span></b>
+            <span x-show="v.active" class="lr-badge approved"
+                  style="margin-left:6px;">ACTIVA</span>
+            <span class="muted tiny" style="margin-left:8px;"
+                  x-text="v.created_by + ' · ' + v.promoted_at"></span>
+          </div>
+          <div class="tiny" x-show="v.parent_version"
+               x-text="'parent: v' + v.parent_version"></div>
+          <details x-show="v.diff_summary" style="margin-top:4px;">
+            <summary class="muted tiny">Diff</summary>
+            <pre x-text="v.diff_summary"></pre>
+          </details>
+        </div>
+      </template>
+    </div>
+
+    {# ----- Sub: Gráficos ----- #}
+    <div x-show="agenteSec === 'graficos'">
+      <div class="lr-toolbar">
+        <label class="muted tiny">
+          <input type="checkbox" x-model="showPinnedOnly" @change="loadCharts()">
+          Mostrar só pinned
+        </label>
+        <button class="btn" type="button" @click="loadCharts()">Refrescar</button>
+        <div class="lr-metric">
+          <b x-text="charts.length"></b> gráficos
+        </div>
+      </div>
+
+      <template x-if="!chartsLoaded">
+        <div class="muted tiny" style="padding:14px;">A carregar...</div>
+      </template>
+      <template x-if="chartsLoaded && charts.length === 0">
+        <div class="muted" style="padding:18px;">
+          Sem gráficos guardados. Pede ao agente para gerar um na aba LLM.
+        </div>
+      </template>
+
+      <div class="lr-charts-grid">
+        <template x-for="c in charts" :key="c.id">
+          <div class="lr-chart-card">
+            <div class="lr-chart-card-h">
+              <b x-text="c.title || '(sem título)'"></b>
+              <button class="btn small" type="button"
+                      @click="togglePin(c)"
+                      x-text="c.pinned ? '★ Pinned' : 'Pin'"></button>
+            </div>
+            <div class="lr-chart-box" style="height:220px;">
+              <canvas :id="'agent-chart-' + c.id"
+                      :data-agent-chart="JSON.stringify(c.spec || {})"></canvas>
+            </div>
+            <div class="tiny muted" x-show="c.narrative"
+                 x-text="c.narrative" style="padding:6px;"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    {# ----- Sub: Sessões ----- #}
+    <div x-show="agenteSec === 'sessoes'">
+      <div class="lr-toolbar">
+        <button class="btn" type="button" @click="loadSessions()">Refrescar</button>
+        <div class="lr-metric"><b x-text="sessions.length"></b> sessões</div>
+      </div>
+
+      <template x-if="!sessionsLoaded">
+        <div class="muted tiny" style="padding:14px;">A carregar...</div>
+      </template>
+      <template x-if="sessionsLoaded && sessions.length === 0">
+        <div class="muted" style="padding:18px;">Sem sessões do agente ainda.</div>
+      </template>
+
+      <table x-show="sessions.length" class="lr-sessions-table">
+        <thead>
+          <tr>
+            <th>Quando</th><th>Trigger</th><th>Tools</th><th>Rounds</th>
+            <th>Charts</th><th>Regras</th><th>Duração</th><th>Estado</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="s in sessions" :key="s.id">
+            <tr @click="s._expanded = !s._expanded" style="cursor:pointer;">
+              <td x-text="s.created_at" class="tiny"></td>
+              <td><span class="lr-badge" x-text="s.trigger"></span></td>
+              <td x-text="s.tool_calls_count"></td>
+              <td x-text="s.rounds"></td>
+              <td x-text="s.charts_count"></td>
+              <td x-text="s.proposed_rules_count"></td>
+              <td x-text="s.duration_ms + ' ms'" class="tiny"></td>
+              <td><span class="lr-status-pill" :class="s.status"
+                        x-text="s.status"></span></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+
+    {# ----- Sub: Kernel ----- #}
+    <div x-show="agenteSec === 'kernel'">
+      <div class="lr-toolbar">
+        <button class="btn" type="button" @click="loadKernelState()">Refrescar</button>
+      </div>
+
+      <template x-if="!kernelLoaded">
+        <div class="muted tiny" style="padding:14px;">A carregar...</div>
+      </template>
+
+      <template x-if="kernelState">
+        <div>
+          <div class="lr-card" style="margin-bottom:14px;">
+            <div class="lr-card-h">Estado do kernel</div>
+            <div class="lr-card-b">
+              <div class="tiny muted">
+                Versão: <b x-text="kernelState.version"></b> ·
+                Eventos totais: <b x-text="kernelTotalEvents"></b>
+                <template x-if="kernelState.active_policy_version">
+                  <span> · Policy activa: <b>v<span x-text="kernelState.active_policy_version"></span></b></span>
+                </template>
+              </div>
+              <div class="lr-kernel-grid">
+                <template x-for="[k, v] in Object.entries(kernelState.counts || {})" :key="k">
+                  <div class="lr-kernel-counter">
+                    <div class="muted tiny" x-text="k.replace(/_/g, ' ')"></div>
+                    <div class="lr-kernel-num" x-text="v"></div>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+
+          <div class="lr-card">
+            <div class="lr-card-h">Últimos eventos</div>
+            <div class="lr-card-b">
+              <template x-if="kernelEvents.length === 0">
+                <div class="muted tiny">Sem eventos.</div>
+              </template>
+              <template x-for="(ev, i) in kernelEvents.slice().reverse()" :key="i">
+                <div class="lr-event-row">
+                  <span class="muted tiny" x-text="ev.at"></span>
+                  <span class="lr-badge" x-text="ev.type"></span>
+                  <span class="tiny muted"
+                        x-text="JSON.stringify(ev.payload || {})"></span>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  {# ===================== TAB 3 — LLM ===================== #}
   <div x-show="tab === 'llm'" x-cloak>
     <div class="lr-chat">
       <div class="lr-chat-log" id="lr-chat-log">
@@ -185,6 +499,18 @@ function learningsPage() {
     attractorsData: JSON.parse(
       document.getElementById('attractors-data').textContent || '[]'),
     attractorsChartDone: false,
+
+    // R110.D — Agente tab state
+    agenteSec: 'propostas',
+    proposals: [], proposalsLoaded: false,
+    proposalsFilter: { status: '', kind: '' },
+    policies: [], policiesLoaded: false,
+    activePolicy: null,
+    circuitBreaker: null,
+    charts: [], chartsLoaded: false, showPinnedOnly: false,
+    sessions: [], sessionsLoaded: false,
+    kernelState: null, kernelEvents: [], kernelLoaded: false,
+    kernelTotalEvents: 0,
 
     init() {
       // Both charts now live in the default-visible "Regras" tab, so
@@ -412,7 +738,346 @@ function learningsPage() {
         rule._added = !!j.ok;
       } catch (e) { /* ignore — button stays */ }
     },
+
+    // ===== R110.D — Agente tab =====
+
+    ensureAgenteSec() {
+      // Garante carregamento inicial quando a tab é aberta pela primeira vez.
+      this.selectAgenteSec(this.agenteSec);
+    },
+
+    selectAgenteSec(sec) {
+      this.agenteSec = sec;
+      if (sec === 'propostas' && !this.proposalsLoaded) this.loadProposals();
+      else if (sec === 'policies' && !this.policiesLoaded) {
+        this.loadPolicies();
+        this.loadCircuitBreaker();
+      } else if (sec === 'graficos' && !this.chartsLoaded) this.loadCharts();
+      else if (sec === 'sessoes' && !this.sessionsLoaded) this.loadSessions();
+      else if (sec === 'kernel' && !this.kernelLoaded) this.loadKernelState();
+    },
+
+    // ----- Propostas -----
+
+    async loadProposals() {
+      const qs = new URLSearchParams();
+      if (this.proposalsFilter.status) qs.set('status', this.proposalsFilter.status);
+      if (this.proposalsFilter.kind) qs.set('kind', this.proposalsFilter.kind);
+      qs.set('limit', '50');
+      try {
+        const r = await fetch('/agent/proposals?' + qs.toString());
+        const j = await r.json();
+        this.proposals = (j.proposals || []).map(p => ({ ...p, _loading: false }));
+      } catch (e) {
+        this.proposals = [];
+      } finally {
+        this.proposalsLoaded = true;
+      }
+    },
+
+    describeProposal(p) {
+      const payload = p.payload || {};
+      if (p.kind === 'rule') {
+        const k = payload.kind || '';
+        if (k.endsWith && k.endsWith('_alias')) {
+          return (k.replace('_alias', '') + ': "' +
+                  (payload.from || '?') + '"  →  "' + (payload.to || '?') + '"');
+        }
+        if (k === 'confusion_pair') {
+          return 'OCR confunde "' + (payload.ocr_char || '?')
+            + '" com "' + (payload.gold_char || '?') + '"';
+        }
+        return 'Regra: ' + JSON.stringify(payload).slice(0, 120);
+      }
+      if (p.kind === 'template') {
+        return ((payload.change_type || 'change') + ' "'
+                + (payload.field_name || '') + '" em '
+                + (payload.template_name || ''));
+      }
+      if (p.kind === 'cpis') {
+        return ((payload.change_type || 'change') + ' coluna "'
+                + (payload.column_name || '') + '" — scope: '
+                + (payload.scope || 'all'));
+      }
+      return JSON.stringify(payload).slice(0, 160);
+    },
+
+    async approveProposal(id) {
+      const p = this.proposals.find(x => x.id === id);
+      if (!p || p._loading) return;
+      p._loading = true;
+      try {
+        const r = await fetch('/agent/proposals/' + id + '/approve',
+                              { method: 'POST' });
+        const j = await r.json();
+        if (j.status === 'ok') {
+          p.status = 'accepted';
+          p.decided_by = 'human-approval';
+          p.shadow_eval_results = (j.proposal || {}).shadow_eval_results || p.shadow_eval_results;
+        }
+      } catch (e) { /* swallow */ } finally {
+        p._loading = false;
+      }
+    },
+
+    async rejectProposal(id) {
+      const p = this.proposals.find(x => x.id === id);
+      if (!p || p._loading) return;
+      p._loading = true;
+      try {
+        const r = await fetch('/agent/proposals/' + id + '/reject',
+                              { method: 'POST' });
+        const j = await r.json();
+        if (j.status === 'ok') { p.status = 'rejected'; p.decided_by = 'human'; }
+      } catch (e) { /* swallow */ } finally {
+        p._loading = false;
+      }
+    },
+
+    // ----- Policies -----
+
+    async loadPolicies() {
+      try {
+        const [list, active] = await Promise.all([
+          fetch('/agent/policies?limit=30').then(r => r.json()),
+          fetch('/agent/policies/active').then(r => r.json()),
+        ]);
+        this.policies = list.versions || [];
+        this.activePolicy = active.policy || null;
+      } catch (e) {
+        this.policies = []; this.activePolicy = null;
+      } finally {
+        this.policiesLoaded = true;
+      }
+    },
+
+    async loadCircuitBreaker() {
+      try {
+        const r = await fetch('/agent/circuit-breaker');
+        this.circuitBreaker = await r.json();
+      } catch (e) {
+        this.circuitBreaker = { status: 'error' };
+      }
+    },
+
+    async rollbackPolicy() {
+      if (!confirm('Reverter para a versão anterior?')) return;
+      try {
+        const r = await fetch('/agent/policies/rollback', { method: 'POST' });
+        const j = await r.json();
+        if (j.status === 'ok') await this.loadPolicies();
+        else alert('Falhou: ' + (j.error || 'desconhecido'));
+      } catch (e) {
+        alert('Erro de rede.');
+      }
+    },
+
+    // ----- Gráficos -----
+
+    async loadCharts() {
+      const qs = new URLSearchParams();
+      if (this.showPinnedOnly) qs.set('pinned_only', 'true');
+      qs.set('limit', '30');
+      try {
+        const r = await fetch('/agent/charts?' + qs.toString());
+        const j = await r.json();
+        this.charts = j.charts || [];
+      } catch (e) {
+        this.charts = [];
+      } finally {
+        this.chartsLoaded = true;
+        this.$nextTick(() => this.renderAgentCharts());
+      }
+    },
+
+    renderAgentCharts() {
+      document.querySelectorAll('canvas[data-agent-chart]:not([data-agent-rendered])')
+        .forEach(el => {
+          el.setAttribute('data-agent-rendered', '1');
+          if (typeof Chart === 'undefined') return;
+          let spec;
+          try {
+            spec = JSON.parse(el.getAttribute('data-agent-chart'));
+          } catch (e) { return; }
+          if (!spec || !Array.isArray(spec.labels) || spec.labels.length < 2) return;
+          const multi = (spec.datasets || []).length > 1;
+          try {
+            new Chart(el, {
+              type: spec.type || 'bar',
+              data: {
+                labels: spec.labels,
+                datasets: (spec.datasets || []).map((d, i) => ({
+                  label: d.label || '',
+                  data: d.data || [],
+                  backgroundColor: LR_PALETTE[i % LR_PALETTE.length],
+                  borderColor: LR_PALETTE[i % LR_PALETTE.length],
+                  borderRadius: 4, borderWidth: 0, tension: 0.3,
+                })),
+              },
+              options: lrChartOpts(multi),
+            });
+          } catch (e) { /* drop silently */ }
+        });
+    },
+
+    async togglePin(c) {
+      const action = c.pinned ? 'unpin' : 'pin';
+      try {
+        const r = await fetch('/agent/charts/' + c.id + '/' + action,
+                              { method: 'POST' });
+        const j = await r.json();
+        if (j.status === 'ok') c.pinned = !c.pinned;
+      } catch (e) { /* swallow */ }
+    },
+
+    // ----- Sessões -----
+
+    async loadSessions() {
+      try {
+        const r = await fetch('/agent/sessions?limit=50');
+        const j = await r.json();
+        this.sessions = (j.sessions || []).map(s => ({ ...s, _expanded: false }));
+      } catch (e) {
+        this.sessions = [];
+      } finally {
+        this.sessionsLoaded = true;
+      }
+    },
+
+    // ----- Kernel -----
+
+    async loadKernelState() {
+      try {
+        const [stateR, evR] = await Promise.all([
+          fetch('/agent/kernel/state').then(r => r.json()),
+          fetch('/agent/kernel/events?limit=20').then(r => r.json()),
+        ]);
+        this.kernelState = stateR.state || null;
+        this.kernelTotalEvents = stateR.total_events || 0;
+        this.kernelEvents = evR.events || [];
+      } catch (e) {
+        this.kernelState = null;
+        this.kernelEvents = [];
+      } finally {
+        this.kernelLoaded = true;
+      }
+    },
   };
 }
 </script>
+
+<style>
+/* R110.D — estilos do tab Agente */
+.lr-sub-nav { margin: 4px 0 14px 0; font-size: 12px; }
+.lr-sub-nav .lr-tab { padding: 6px 12px; font-size: 12px; }
+
+.lr-proposal-card {
+  background: #fff; border: 1px solid rgba(22,20,15,0.08);
+  border-radius: 6px; padding: 12px; margin-bottom: 10px;
+}
+.lr-proposal-head {
+  display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.lr-proposal-body { font-size: 13px; margin-bottom: 8px; }
+.lr-proposal-actions { display: flex; gap: 6px; align-items: center; }
+
+.lr-risk-badge {
+  display: inline-block; padding: 1px 6px; font-size: 10px;
+  border-radius: 3px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.lr-risk-badge.auto     { background: #d4eed5; color: #2F5B33; }
+.lr-risk-badge.review   { background: #fdedc8; color: #8A5F2D; }
+.lr-risk-badge.approval { background: #fcd7d4; color: #B53024; }
+
+.lr-status-pill {
+  display: inline-block; padding: 1px 6px; font-size: 10px;
+  border-radius: 3px; background: #eee; color: #555;
+}
+.lr-status-pill.pending      { background: #fff3d6; color: #8A5F2D; }
+.lr-status-pill.accepted     { background: #d4eed5; color: #2F5B33; }
+.lr-status-pill.auto_applied { background: #c8e2d4; color: #1E5036; }
+.lr-status-pill.rejected     { background: #f0e6e5; color: #756F61; }
+.lr-status-pill.ok           { background: #d4eed5; color: #2F5B33; }
+.lr-status-pill.error        { background: #fcd7d4; color: #B53024; }
+
+.lr-mini-count {
+  display: inline-block; min-width: 16px; padding: 0 4px;
+  background: #B53024; color: white; border-radius: 8px;
+  font-size: 10px; line-height: 14px; text-align: center; margin-left: 4px;
+}
+
+.lr-sheet-link {
+  display: inline-block; padding: 1px 6px; margin: 0 2px;
+  background: #f4ede1; color: #2D5B8A; border-radius: 3px;
+  text-decoration: none; font-size: 11px;
+}
+.lr-sheet-link:hover { background: #ede0c8; }
+
+.lr-cb-badge {
+  display: inline-block; padding: 4px 10px; border-radius: 4px;
+  font-weight: 600; font-size: 12px;
+}
+.lr-cb-badge.ok { background: #d4eed5; color: #2F5B33; }
+.lr-cb-badge.no_baseline { background: #fdedc8; color: #8A5F2D; }
+.lr-cb-badge.triggered { background: #fcd7d4; color: #B53024; }
+.lr-cb-badge.error { background: #f0e6e5; color: #756F61; }
+
+.lr-card { background: #fff; border: 1px solid rgba(22,20,15,0.08);
+  border-radius: 6px; }
+.lr-card-h { padding: 10px 14px; border-bottom: 1px solid rgba(22,20,15,0.05);
+  font-weight: 600; font-size: 13px; }
+.lr-card-b { padding: 12px 14px; }
+
+.lr-policy-row {
+  background: #fff; border: 1px solid rgba(22,20,15,0.08);
+  border-radius: 6px; padding: 10px 14px; margin-bottom: 6px;
+}
+.lr-policy-row.lr-active { border-left: 4px solid #2F7D43; }
+
+.btn.small { padding: 2px 8px; font-size: 11px; }
+.btn.warn { background: #fdedc8; color: #8A5F2D; border-color: #B8841C; }
+
+.lr-charts-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+}
+.lr-chart-card {
+  background: #fff; border: 1px solid rgba(22,20,15,0.08);
+  border-radius: 6px; overflow: hidden;
+}
+.lr-chart-card-h {
+  padding: 8px 12px; display: flex; justify-content: space-between;
+  align-items: center; border-bottom: 1px solid rgba(22,20,15,0.05);
+}
+
+.lr-sessions-table {
+  width: 100%; border-collapse: collapse; font-size: 12px; background: #fff;
+}
+.lr-sessions-table th, .lr-sessions-table td {
+  padding: 6px 10px; border-bottom: 1px solid rgba(22,20,15,0.05);
+  text-align: left;
+}
+.lr-sessions-table th { background: #f4ede1; font-weight: 600; }
+.lr-sessions-table tbody tr:hover { background: #fafaf6; }
+
+.lr-kernel-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px; margin-top: 10px;
+}
+.lr-kernel-counter {
+  background: #fafaf6; padding: 8px 10px; border-radius: 4px;
+  border: 1px solid rgba(22,20,15,0.05);
+}
+.lr-kernel-num {
+  font-size: 22px; font-weight: 700; color: #2D5B8A;
+}
+
+.lr-event-row {
+  padding: 4px 0; border-bottom: 1px solid rgba(22,20,15,0.04);
+  display: flex; gap: 8px; align-items: center; font-size: 12px;
+}
+.lr-event-row .lr-badge { font-size: 10px; }
+</style>
 {% endblock %}

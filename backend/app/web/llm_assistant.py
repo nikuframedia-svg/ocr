@@ -313,7 +313,64 @@ def _sanitize_rules(rules: list) -> list:
 
 def chat(user_message: str, history: list[dict] | None = None) -> dict:
     """Run one chat turn. Always returns an envelope dict with keys
-    ``reply``, ``charts`` and ``proposed_rules``."""
+    ``reply``, ``charts`` and ``proposed_rules``.
+
+    R110 — entry point oficial: tenta o agente com function calling
+    (qwen_agent.chat) e, se falhar (Ollama sem tool support, erro de
+    schema persistente), faz fallback para o caminho legacy com data
+    dossier pré-agregado.
+
+    Persiste sempre a sessão em qwen_sessions para audit.
+    """
+    use_tools = True  # Pode passar a env var no futuro
+    envelope: dict | None = None
+    used_path = "tools"
+
+    if use_tools:
+        try:
+            from app.pipeline.qwen_agent import chat as qwen_chat
+            envelope = qwen_chat(user_message, history=history)
+            # Considera falha se o envelope vem com status error e reply vazia
+            meta = envelope.get("_meta") or {}
+            if meta.get("status") == "error" and not (envelope.get("reply") or "").strip():
+                envelope = None
+                used_path = "fallback_after_tool_error"
+        except Exception:  # noqa: BLE001
+            logger.exception("qwen_agent.chat failed; falling back to legacy")
+            envelope = None
+            used_path = "fallback_after_exception"
+
+    if envelope is None:
+        # Legacy path — data dossier pré-agregado, sem tools
+        envelope = _chat_legacy(user_message, history)
+        envelope["_meta"] = {
+            **(envelope.get("_meta") or {}),
+            "status": "ok",
+            "path": used_path,
+        }
+    else:
+        envelope.setdefault("_meta", {})
+        envelope["_meta"]["path"] = used_path
+        # Sanitizar proposed_rules com a mesma lógica do path legacy
+        envelope["proposed_rules"] = _sanitize_rules(
+            envelope.get("proposed_rules") or []
+        )
+
+    # Persistir sessão (best effort)
+    try:
+        db.save_qwen_session(user_message, envelope, trigger="manual")
+    except Exception:  # noqa: BLE001
+        logger.exception("save_qwen_session failed")
+
+    return envelope
+
+
+def _chat_legacy(user_message: str, history: list[dict] | None) -> dict:
+    """Caminho legacy R98 — data dossier pré-agregado, sem tools.
+
+    Usado como fallback quando o agente com tools falha ou quando a versão
+    do Ollama não suporta tool calling.
+    """
     settings = get_settings()
     dossier = json.dumps(
         build_data_dossier(user_message), ensure_ascii=False, default=str)

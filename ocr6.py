@@ -35,7 +35,7 @@ from PIL import Image
 # R106 — OF normalisation (always 6 digits). Add backend/ to sys.path so the
 # import works both when ocr6 is imported by the web app and run standalone.
 sys.path.insert(0, str(Path(__file__).resolve().parent / "backend"))
-from app.cross_check.of_utils import normalize_of  # noqa: E402
+from app.pipeline.scoring_engine import normalize_of  # noqa: E402
 
 # ── Configuração ──────────────────────────────────────────────────────────────
 # R64 — OLLAMA_URL is overridable via env var so the laptop runtime can

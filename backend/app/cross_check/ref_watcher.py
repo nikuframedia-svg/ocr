@@ -40,7 +40,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.cross_check.of_utils import normalize_of
+from app.pipeline.scoring_engine import normalize_of
 
 # R64 — overridable via KANBAN_DOC_DIR env var. Lets the laptop runtime
 # point at a local refs folder (or `kanban_refs/04_Documentacao` inside

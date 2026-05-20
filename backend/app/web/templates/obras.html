@@ -1,0 +1,394 @@
+{% extends "base.html" %}
+{% block title %}Obras — Metalogalva OCR{% endblock %}
+{% block content %}
+<style>
+  .ob-toolbar { display:flex; gap:14px; align-items:center; flex-wrap:wrap;
+                margin: 0 0 18px; }
+  .ob-toolbar .lbl { margin:0; }
+  .ob-tabs { display:flex; gap:6px; }
+  .ob-tabs .btn.active { background: var(--ink); color: var(--paper);
+                          border-color: var(--ink); }
+
+  .ob-grid { display:grid; gap:14px;
+             grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+
+  .ob-card-cli { padding:18px; border:1px solid var(--rule-2);
+                  border-radius:10px; background:var(--bg-1, #fff);
+                  cursor:pointer; transition: transform .06s, box-shadow .12s; }
+  .ob-card-cli:hover { transform: translateY(-1px);
+                        box-shadow: 0 4px 14px rgba(0,0,0,0.06); }
+  .ob-card-cli h3 { margin:0 0 6px; font-size:16px; font-weight:600; }
+  .ob-card-cli .ob-meta { color: var(--ink-3); font-size:12px; }
+
+  .ob-bar { height:8px; background: var(--paper-2); border-radius:6px;
+            overflow:hidden; margin:10px 0 6px; }
+  .ob-bar > div { height:100%; background: var(--ink); transition: width .25s; }
+  .ob-bar.warn > div { background: var(--warn); }
+  .ob-bar.ok   > div { background: var(--ok); }
+
+  .ob-list-ov { display:flex; flex-direction:column; gap:10px; }
+  .ob-card-ov { border:1px solid var(--rule-2); border-radius:8px;
+                background: var(--bg-1, #fff); }
+  .ob-card-ov > header { display:flex; justify-content:space-between;
+                          align-items:center; padding:14px 16px; cursor:pointer;
+                          gap:10px; }
+  .ob-card-ov > header h4 { margin:0; font-size:15px; font-weight:600; }
+  .ob-card-ov > header .sub { color:var(--ink-3); font-size:12px;
+                                margin-top:2px; }
+  .ob-card-ov[open] > header { border-bottom:1px solid var(--rule-2); }
+  .ob-card-ov .body { padding:16px; display:flex; flex-direction:column;
+                       gap:18px; }
+
+  .ob-fase-tracker { display:flex; gap:6px; flex-wrap:wrap; }
+  .ob-fase-pill { flex:1 1 80px; min-width:80px; padding:8px 10px;
+                   border-radius:6px; background:var(--paper-2);
+                   text-align:center; font-size:12px; }
+  .ob-fase-pill .qty { font-weight:600; font-size:14px; }
+  .ob-fase-pill .lbl { color:var(--ink-3); font-size:11px;
+                        text-transform:uppercase; letter-spacing:.04em; }
+  .ob-fase-pill.partial { background: var(--warn-soft); color: var(--warn); }
+  .ob-fase-pill.full    { background: var(--ok-soft);   color: var(--ok); }
+  .ob-fase-pill.empty   { opacity: .55; }
+
+  .ob-pieces { width:100%; border-collapse:collapse; font-size:13px; }
+  .ob-pieces th { text-align:left; padding:6px 8px; font-weight:500;
+                   color:var(--ink-3); border-bottom:1px solid var(--rule-2);
+                   font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+  .ob-pieces td { padding:8px; border-bottom:1px solid var(--rule-2);
+                   vertical-align:middle; }
+  .ob-pieces tr.done td { opacity:.5; }
+  .ob-pieces .num { text-align:right; font-variant-numeric: tabular-nums; }
+
+  .ob-last-kb { padding:12px 14px; border:1px solid var(--rule-2);
+                 border-radius:8px; background:var(--paper-2); }
+  .ob-last-kb a { color: var(--ink); font-weight:600; text-decoration:underline; }
+  .ob-last-kb .when { color: var(--ink-3); font-size:12px; }
+
+  .ob-empty { color:var(--ink-3); padding: 36px; text-align:center;
+              border:1px dashed var(--rule-2); border-radius:8px; }
+
+  /* Tooltip simples */
+  .ob-help { color: var(--ink-3); font-size:11px; }
+</style>
+
+<div class="page-h">
+  <div>
+    <div class="page-eyebrow">Inteligência · Ponto de Situação</div>
+    <h1 class="page-title">Obras</h1>
+  </div>
+  <form method="post" action="/api/obras/refresh"
+        onsubmit="event.preventDefault(); fetch('/api/obras/refresh',{method:'POST'}).then(()=>location.reload());">
+    <button class="btn" type="submit" title="Forçar refresh do cache (60s TTL)">
+      ↻ Refrescar
+    </button>
+  </form>
+</div>
+
+<div class="page-content" x-data="obrasPage({{ data|tojson }})">
+  {# Toolbar — tabs + search + toggle de fechadas #}
+  <div class="ob-toolbar">
+    <div class="ob-tabs">
+      <button class="btn" :class="{active: tab==='cliente'}" @click="tab='cliente'">Por Cliente</button>
+      <button class="btn" :class="{active: tab==='ov'}" @click="tab='ov'">Por OV</button>
+    </div>
+    <label style="display:inline-flex; align-items:center; gap:6px;">
+      <span class="lbl">PROCURAR</span>
+      <input type="search" x-model="search"
+             placeholder="cliente, OV, OF, modelo…"
+             style="padding:7px 10px; border:1px solid var(--rule-2);
+                    border-radius:6px; width:240px;">
+    </label>
+    <label style="display:inline-flex; align-items:center; gap:6px;">
+      <input type="checkbox" x-model="includeClosed" @change="reloadWithClosed()">
+      <span class="lbl">Incluir OVs já fechadas</span>
+    </label>
+    <span class="ob-help" style="margin-left:auto;"
+          x-text="`${data.n_clientes} clientes · ${data.n_open_ovs} OVs abertas`"></span>
+  </div>
+
+  {# ----- Tab: Por Cliente ----- #}
+  <div x-show="tab==='cliente'" x-cloak>
+    <template x-if="filteredClientes.length === 0">
+      <div class="ob-empty">Sem obras a apresentar.</div>
+    </template>
+    <div class="ob-grid">
+      <template x-for="c in filteredClientes" :key="c.cliente">
+        <div class="ob-card-cli" @click="goToCliente(c.cliente)">
+          <h3 x-text="c.cliente"></h3>
+          <div class="ob-meta">
+            <span x-text="`${c.n_ovs} OVs`"></span>
+            <span x-show="c.n_open>0"> · <span x-text="`${c.n_open} abertas`"></span></span>
+            <span x-show="c.n_closed>0"> · <span x-text="`${c.n_closed} fechadas`"></span></span>
+          </div>
+          <div class="ob-bar" :class="barClass(c.pct_complete)">
+            <div :style="`width:${Math.min(c.pct_complete,100)}%`"></div>
+          </div>
+          <div class="ob-meta" style="display:flex; justify-content:space-between;">
+            <span x-text="`${c.pct_complete}%  (${fmtNum(c.produced)}/${fmtNum(c.planned)})`"></span>
+            <span x-show="c.remaining>0"
+                  x-text="`faltam ${fmtNum(c.remaining)}`"></span>
+          </div>
+          <div class="ob-meta" style="margin-top:8px;" x-show="c.last_kanban">
+            Último kanban: <span x-text="fmtWhen(c.last_kanban?.captured_at)"></span>
+            <template x-if="c.last_kanban?.setor_maquina">
+              <span> · <span x-text="c.last_kanban.setor_maquina"></span></span>
+            </template>
+          </div>
+          <div class="ob-meta" style="margin-top:8px;" x-show="!c.last_kanban">
+            <em>Sem kanbans registados ainda</em>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  {# ----- Tab: Por OV ----- #}
+  <div x-show="tab==='ov'" x-cloak>
+    <template x-if="filteredOvs.length === 0">
+      <div class="ob-empty">Sem OVs a apresentar.</div>
+    </template>
+    <div class="ob-list-ov">
+      <template x-for="o in filteredOvs" :key="o.ov">
+        <details class="ob-card-ov" :open="openOv === o.ov"
+                 @toggle="onToggleOv(o.ov, $event.target.open)">
+          <header>
+            <div>
+              <h4>
+                <span x-text="o.ov"></span>
+                <span class="ob-help" style="margin-left:6px;"
+                      x-text="'· ' + o.cliente"></span>
+              </h4>
+              <div class="sub">
+                <span x-text="o.modelos.slice(0,2).join(' / ')"></span>
+                <span x-show="o.modelos.length>2"
+                      x-text="' (+' + (o.modelos.length-2) + ')'"></span>
+                <span> · OFs <span x-text="o.ofs.join(', ')"></span></span>
+              </div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-weight:600; font-size:14px;"
+                   x-text="`${o.pct_complete}%`"></div>
+              <div class="ob-help"
+                   x-text="`${fmtNum(o.produced)}/${fmtNum(o.planned)}`"></div>
+              <div class="ob-help" x-show="o.remaining>0"
+                   x-text="`faltam ${fmtNum(o.remaining)}`"
+                   style="color: var(--warn);"></div>
+              <span class="pill ok" x-show="o.all_closed">Fechada</span>
+            </div>
+          </header>
+
+          <div class="body">
+            {# Loading state while detail fetches #}
+            <div x-show="!ovDetails[o.ov] && !ovErrors[o.ov]"
+                 class="ob-help" style="padding:12px 0;">
+              A carregar detalhe…
+            </div>
+            <div x-show="ovErrors[o.ov]" class="ob-help" style="color:var(--crit);"
+                 x-text="ovErrors[o.ov]"></div>
+
+            <template x-if="ovDetails[o.ov]">
+              <div style="display:flex; flex-direction:column; gap:18px;">
+                {# Fase tracker #}
+                <div>
+                  <div class="lbl" style="margin-bottom:6px;">
+                    ONDE ESTÁ CADA PEÇA <span class="ob-help">(somatório por fase)</span>
+                  </div>
+                  <div class="ob-fase-tracker">
+                    <template x-for="k in ovDetails[o.ov].phase_keys" :key="k">
+                      <div class="ob-fase-pill"
+                           :class="faseClass(ovDetails[o.ov].fase_totals[k], ovDetails[o.ov].planned)"
+                           :title="faseDescription(k)">
+                        <div class="lbl" x-text="faseLabel(k)"></div>
+                        <div class="qty"
+                             x-text="`${fmtNum(ovDetails[o.ov].fase_totals[k])} / ${fmtNum(ovDetails[o.ov].planned)}`"></div>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+
+                {# Último kanban #}
+                <div x-show="ovDetails[o.ov].last_kanban">
+                  <div class="lbl" style="margin-bottom:6px;">ÚLTIMO KANBAN REGISTADO</div>
+                  <div class="ob-last-kb">
+                    <a :href="`/sheet/${ovDetails[o.ov].last_kanban?.sheet_id}`"
+                       x-text="`#${ovDetails[o.ov].last_kanban?.sheet_id} · ${ovDetails[o.ov].last_kanban?.operador || 'sem operador'}`"></a>
+                    <span class="when" style="margin-left:8px;"
+                          x-text="fmtWhen(ovDetails[o.ov].last_kanban?.captured_at)"></span>
+                    <template x-if="ovDetails[o.ov].last_kanban?.setor_maquina">
+                      <div class="when" style="margin-top:2px;"
+                           x-text="`Setor: ${ovDetails[o.ov].last_kanban.setor_maquina} · qtd ${ovDetails[o.ov].last_kanban.qtd || '?'}`"></div>
+                    </template>
+                  </div>
+                </div>
+
+                <div x-show="!ovDetails[o.ov].last_kanban">
+                  <div class="ob-help"><em>Esta OV ainda não foi tocada por nenhum kanban validado.</em></div>
+                </div>
+
+                {# Histórico recente #}
+                <details x-show="ovDetails[o.ov].n_kanbans > 1">
+                  <summary class="ob-help" style="cursor:pointer;">
+                    Histórico recente (<span x-text="ovDetails[o.ov].n_kanbans"></span> kanbans)
+                  </summary>
+                  <table class="ob-pieces" style="margin-top:8px;">
+                    <thead>
+                      <tr><th>Data</th><th>Sheet</th><th>Operador</th><th>Setor</th><th class="num">Qtd</th></tr>
+                    </thead>
+                    <tbody>
+                      <template x-for="kb in ovDetails[o.ov].recent_kanbans" :key="kb.sheet_id">
+                        <tr>
+                          <td x-text="kb.sheet_iso_date || ''"></td>
+                          <td><a :href="`/sheet/${kb.sheet_id}`" x-text="`#${kb.sheet_id}`"></a></td>
+                          <td x-text="kb.operador || ''"></td>
+                          <td x-text="kb.setor_maquina || ''"></td>
+                          <td class="num" x-text="kb.qtd || ''"></td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </details>
+
+                {# Peças (tabela detalhada) #}
+                <div>
+                  <div class="lbl" style="margin-bottom:6px;">PEÇAS (faltam menos primeiro)</div>
+                  <table class="ob-pieces">
+                    <thead>
+                      <tr>
+                        <th>Modelo</th><th>OF</th>
+                        <th class="num">comp</th><th class="num">lbase</th>
+                        <th class="num">ltopo</th><th class="num">esp</th>
+                        <th class="num">Planeado</th><th class="num">Produzido</th>
+                        <th class="num">Faltam</th><th>Estado</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <template x-for="(p,i) in ovDetails[o.ov].entries" :key="i">
+                        <tr :class="{done: p.done}">
+                          <td x-text="p.designacao || ''"></td>
+                          <td x-text="p.of || ''"></td>
+                          <td class="num" x-text="p.comp || ''"></td>
+                          <td class="num" x-text="p.lbase || ''"></td>
+                          <td class="num" x-text="p.ltopo || ''"></td>
+                          <td class="num" x-text="p.esp || ''"></td>
+                          <td class="num" x-text="fmtNum(p.quanttrp)"></td>
+                          <td class="num" x-text="fmtNum(p.produced)"></td>
+                          <td class="num" x-text="p.remaining===null ? '?' : fmtNum(p.remaining)"></td>
+                          <td>
+                            <template x-if="p.fechado"><span class="pill ok">fechada</span></template>
+                            <template x-if="!p.fechado && p.done"><span class="pill neutral">cumprida</span></template>
+                            <template x-if="!p.fechado && !p.done && (p.remaining||0) <= 2"><span class="pill warn">quase</span></template>
+                            <template x-if="!p.fechado && !p.done && (p.remaining||0) > 2"><span class="pill info">em curso</span></template>
+                          </td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </template>
+          </div>
+        </details>
+      </template>
+    </div>
+  </div>
+</div>
+
+<script>
+function obrasPage(initialData) {
+  return {
+    data: initialData,
+    tab: '{{ initial_tab|default("cliente") }}',
+    search: '{{ initial_search|default("") }}',
+    includeClosed: {{ "true" if include_closed else "false" }},
+    openOv: '{{ initial_ov|default("") }}',
+    ovDetails: {},  // ov -> detalhe completo (fetched on expand)
+    ovErrors: {},
+
+    init() {
+      if (this.openOv) this.fetchOvDetail(this.openOv);
+    },
+    onToggleOv(ov, isOpen) {
+      if (!isOpen) return;
+      this.openOv = ov;
+      if (!this.ovDetails[ov] && !this.ovErrors[ov]) {
+        this.fetchOvDetail(ov);
+      }
+    },
+    fetchOvDetail(ov) {
+      fetch(`/api/obras/ov/${encodeURIComponent(ov)}`)
+        .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
+        .then(detail => { this.ovDetails[ov] = detail; })
+        .catch(err => { this.ovErrors[ov] = 'Falha a carregar detalhe: ' + err; });
+    },
+
+    fmtNum(n) {
+      if (n === null || n === undefined || n === '') return '—';
+      const v = Number(n);
+      if (Number.isNaN(v)) return n;
+      return Number.isInteger(v) ? v.toString() : v.toFixed(1);
+    },
+    fmtWhen(s) {
+      if (!s) return '';
+      // captured_at vem ISO ou "YYYY-MM-DD HH:MM:SS"
+      const m = String(s).match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+      if (!m) return s;
+      return `${m[3]}/${m[2]} ${m[4]}:${m[5]}`;
+    },
+    barClass(pct) {
+      if (pct >= 99) return 'ok';
+      if (pct >= 60) return '';
+      return 'warn';
+    },
+    faseClass(qty, planned) {
+      const q = Number(qty || 0);
+      const p = Number(planned || 0);
+      if (q <= 0) return 'empty';
+      if (p > 0 && q >= p) return 'full';
+      return 'partial';
+    },
+    faseLabel(k) {
+      const map = {bf: 'BF', c: 'CORTE', q: 'QUIN', s: 'SOLD',
+                   r: 'REB', a: 'ACAB', exp: 'EXP'};
+      return map[k] || k.toUpperCase();
+    },
+    faseDescription(k) {
+      const map = {bf: 'Bobine-formato', c: 'Corte', q: 'Quinadora',
+                   s: 'Soldadura', r: 'Rebites / reforço',
+                   a: 'Acabamento', exp: 'Expedição'};
+      return map[k] || k;
+    },
+    goToCliente(cli) {
+      this.tab = 'ov';
+      this.search = cli;
+    },
+    reloadWithClosed() {
+      const url = new URL(window.location);
+      url.searchParams.set('closed', this.includeClosed ? '1' : '0');
+      window.location.href = url.toString();
+    },
+    get filteredClientes() {
+      const q = this.search.trim().toLowerCase();
+      if (!q) return this.data.clientes;
+      return this.data.clientes.filter(c =>
+        (c.cliente || '').toLowerCase().includes(q));
+    },
+    get filteredOvs() {
+      const q = this.search.trim().toLowerCase();
+      const all = [];
+      for (const c of this.data.clientes) {
+        for (const o of c.ovs) {
+          if (!q ||
+              (o.ov || '').toLowerCase().includes(q) ||
+              (o.cliente || '').toLowerCase().includes(q) ||
+              o.ofs.some(of => of.toLowerCase().includes(q)) ||
+              o.modelos.some(m => m.toLowerCase().includes(q))) {
+            all.push(o);
+          }
+        }
+      }
+      return all;
+    },
+  };
+}
+</script>
+{% endblock %}
