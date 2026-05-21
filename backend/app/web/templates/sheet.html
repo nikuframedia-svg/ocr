@@ -266,10 +266,10 @@
                 {# R112 — botão para abrir wizard "Corrigir via OF" da linha #}
                 {% if sheet.status != 'validated' %}
                 <button type="button" class="btn ghost row-of-wand-btn"
-                        @click="$dispatch('open-of-wizard', {
+                        @click='$dispatch("open-of-wizard", {
                           row_index: {{ loop.index0 }},
-                          current_of: {{ (row.of or '') | tojson }}
-                        })"
+                          current_of: {{ (row.of or "") | tojson }}
+                        })'
                         title="Corrigir via OF (escreve OF correcto e auto-fill cliente, modelo, dims)">
                   🪄
                 </button>
