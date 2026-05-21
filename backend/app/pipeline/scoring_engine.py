@@ -511,6 +511,13 @@ def _apply_winner_to_field(
         return _make_cell(ocr_value, "NA", "ocr_raw")
 
     if winner is None and not candidates:
+        # R120 — se o operador escreveu algo num campo validável (não em
+        # _NO_REF_FIELDS) e o motor não achou candidato nem winner no plan,
+        # sinaliza vermelho (very_different) em vez de cinza (NA). Antes
+        # ficava NA e escondia a divergência. Cells com OCR vazio continuam
+        # NA (sem dado para validar).
+        if ocr_value:
+            return _make_cell(ocr_value, "very_different", "ocr_raw")
         return _make_cell(ocr_value, "NA", "ocr_raw")
 
     # Extrair valor proposto pela entry vencedora

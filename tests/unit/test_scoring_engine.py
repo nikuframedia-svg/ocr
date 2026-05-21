@@ -200,10 +200,14 @@ class TestShadowScore:
         # OCR raw). Aceitar pequenas snaps (e.g., esp "2,6" -> "2.6").
         assert confirmed >= 5
 
-    def test_empty_refs_all_na(self):
-        """R108 v4 — sem refs, não há candidatos nem winner perfect-match;
-        todos os campos ficam NA. OCR raw é preservado no valor mas marcado
-        como não-validado."""
+    def test_empty_refs_no_match_when_ocr_present(self):
+        """R120 — sem refs, campos validáveis com OCR não-vazio passam a
+        very_different (vermelho) em vez de NA (cinza). Antes (R108 v4) iam
+        a NA, escondendo a divergência. O R120 sinaliza ao operador que
+        escreveu algo mas não há match no plan.
+
+        Header/footer/_NO_REF_FIELDS continuam NA — sem alteração.
+        """
         sheet_data = {
             "template_name": "bobine_formato",
             "header": {"operador": "X"},
@@ -216,10 +220,17 @@ class TestShadowScore:
         scoring, total, snapped, confirmed, na, _ = shadow_score(
             sheet_data, None, empty_refs
         )
-        assert snapped == 0
         assert confirmed == 0
-        # Tudo NA (sem pool de candidatos)
-        assert na == total
+        # R120: campos validáveis com OCR ≠ vazio agora marcam very_different.
+        row0 = scoring["rows"][0]["fields"]
+        assert row0["cliente"]["status"] == "very_different"
+        assert row0["of"]["status"] == "very_different"
+        assert row0["lote"]["status"] == "very_different"
+        # Campos sem OCR (ov, modelo, comp_mm, ...) ficam NA.
+        assert row0["ov"]["status"] == "NA"
+        # Header/_NO_REF/footer continuam NA — comportamento intencional.
+        for v in scoring["header"].values():
+            assert v["status"] == "NA"
 
     def test_no_ref_fields_stay_ocr_raw(self):
         """PRI/CONI/QTD ficam OCR raw + status NA mesmo com refs disponíveis."""

@@ -17,6 +17,8 @@ import threading
 import traceback
 from pathlib import Path
 
+import httpx  # R120 — endpoint /admin/qwen-tools-test
+
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -1208,6 +1210,50 @@ def admin_queue_status() -> JSONResponse:
         "queue_size": ocr_queue.queue_size(),
         "worker_alive": ocr_queue.worker_alive(),
     })
+
+
+@app.get("/admin/qwen-tools-test")
+def qwen_tools_test() -> JSONResponse:
+    """R120 — testa se o modelo Ollama actual invoca function calling.
+
+    Faz um pedido mínimo com uma tool fake ``get_now``. Se a resposta tem
+    ``tool_calls[]`` populado, o modelo suporta tools. Se não, sabemos que
+    o fallback é a solução correcta.
+    """
+    from app.config import get_settings
+    s = get_settings()
+    payload = {
+        "model": s.ollama_text_model,
+        "messages": [
+            {"role": "user", "content": "Qual a hora actual? Usa a tool get_now."}
+        ],
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "get_now",
+                "description": "Devolve a data e hora actual.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        }],
+        "stream": False,
+        "think": False,
+        "options": {"temperature": 0.1},
+    }
+    try:
+        with httpx.Client(timeout=60.0) as c:
+            r = c.post(f"{str(s.ollama_url).rstrip('/')}/api/chat", json=payload)
+            r.raise_for_status()
+            data = r.json()
+        msg = data.get("message") or {}
+        tool_calls = msg.get("tool_calls") or []
+        return JSONResponse({
+            "model": s.ollama_text_model,
+            "supports_tools": len(tool_calls) > 0,
+            "tool_calls_in_response": tool_calls,
+            "content_preview": (msg.get("content") or "")[:200],
+        })
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.get("/sheet/{sheet_id}/status")

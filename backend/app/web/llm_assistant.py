@@ -336,6 +336,12 @@ def chat(user_message: str, history: list[dict] | None = None) -> dict:
             if meta.get("status") == "error" and not (envelope.get("reply") or "").strip():
                 envelope = None
                 used_path = "fallback_after_tool_error"
+            elif int(meta.get("tool_calls_count") or 0) == 0:
+                # R120 — o modelo (qwen3.5:9b) ignorou o function-calling spec e devolveu
+                # texto/paráfrase sem invocar tools. Cair para o caminho legacy com
+                # data dossier pré-agregado — produz resposta com dados reais.
+                envelope = None
+                used_path = "fallback_no_tools_used"
         except Exception:  # noqa: BLE001
             logger.exception("qwen_agent.chat failed; falling back to legacy")
             envelope = None
