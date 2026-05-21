@@ -2,7 +2,7 @@
 
 OCR pipeline for Metalogalva industrial Kanban production sheets.
 
-**Status:** Production baseline (R107) — Ollama nativo Windows
+**Status:** Production baseline (R117) — Ollama nativo Windows
 serving `qwen3.5:9b` com `OCR_NO_THINK=1`. Roadmap de 8 fases em
 `docs/MIGRATION.md` (R105 runbook) e `CLAUDE.md` (resumo).
 
@@ -30,7 +30,8 @@ serving `qwen3.5:9b` com `OCR_NO_THINK=1`. Roadmap de 8 fases em
   RTX 5060 Ti 16GB)
 - Recent NVIDIA driver
 - Python 3.11 + [uv](https://docs.astral.sh/uv/) on the host
-- ~3 GB free disk for `qwen2.5vl:3b` (or ~6 GB for `:7b`)
+- ~5 GB free disk for `qwen3.5:9b` (default — R20+); ~3 GB for the
+  legacy `qwen2.5vl:3b` baseline or ~6 GB for `:7b`
 
 ## Quick start
 
@@ -85,22 +86,21 @@ Then on the phone (same wifi as the server box) open
 5. Selecciona o operador → "Validar" → vai para `/queue`.
 6. Em `/dashboard` vê KPIs: STP rate, top campos editados, sheets/dia.
 
-### Endpoints (8)
+### Endpoints
 
-| Rota | Função |
-|---|---|
-| `/capture` | upload page (mobile camera input) |
-| `/upload` | recebe imagem, corre OCR+DQ, redirect para `/sheet/<id>` |
-| `/sheet/<id>` | review/edit (foto + tabela editável + validate) |
-| `/sheet/<id>/edit` | HTMX endpoint (per-cell) |
-| `/sheet/<id>/validate` | marca como validated com operador |
-| `/sheet/<id>/csv` | download CSV no formato Metalogalva 3-bloco |
-| `/queue` | lista folhas (filtros: pendente review / validated / erro) |
-| `/dashboard` | KPIs + charts |
+O servidor expõe ~100 endpoints distribuídos por capture, sheets, refs,
+learnings, agent (kernel/proposals/policies/charts), obras, exports.
+Ver `backend/app/web/main.py` para detalhe. Rotas core: `/capture`,
+`/upload`, `/sheet/<id>`, `/sheet/<id>/edit`, `/sheet/<id>/validate`,
+`/sheet/<id>/csv`, `/queue`, `/dashboard`.
 
 ### Storage
 
-- `data/app.db` — SQLite single-file, 2 tables (`sheets` + `edits`)
+- `data/app.db` — SQLite single-file, 12 tables (`sheets`, `edits`,
+  `production_rows`, `learnings`, `learning_runs`, `shadow_runs`,
+  `qwen_sessions`, `qwen_charts`, `proposals`, `policy_versions`,
+  `template_overlay`, `circuit_breaker_log`). Schema em
+  `backend/app/web/db.py`.
 - `data/images/` — fotos uploaded (gitignored)
 - `data/cross_sheet.json` — DQ Module persistent index
 

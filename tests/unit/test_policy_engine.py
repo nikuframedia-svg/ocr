@@ -101,6 +101,144 @@ class TestEvalGate:
             assert "edits_per_sheet_baseline" in eval_result
 
 
+# ----- Eval gate real (R117) ------------------------------------------
+
+class TestEvalGateShadow:
+    """R117 — shadow A/B do eval gate.
+
+    Cada teste mocka:
+      * `_load_validated_sheets_for_eval`  → controla N + payloads.
+      * `get_watcher`/`shadow_score`        → controla métricas A/B sem
+        precisar de Excel refs no disco.
+    """
+
+    @staticmethod
+    def _fake_sheets(n: int) -> list[dict]:
+        # Estrutura mínima aceite por shadow_score real, mas como o motor
+        # está mockado, basta um dict sentinel.
+        return [
+            {
+                "id": i,
+                "sheet_data": {"rows": [], "header": {}, "footer": {}},
+                "dq_audit": {},
+            }
+            for i in range(n)
+        ]
+
+    def test_passed_when_proposal_does_not_worsen(self, monkeypatch):
+        """R117 — proposta cliente_alias com with_proposal ≤ baseline → passed."""
+        sheets = self._fake_sheets(10)
+        monkeypatch.setattr(
+            policy_engine, "_load_validated_sheets_for_eval",
+            lambda window: sheets,
+        )
+
+        class _FakeWatcher:
+            def get_refs(self):
+                return {"loaded_at": "2026-05-21T00:00:00", "clientes_plan": frozenset()}
+
+        # baseline: 4 atenções; with_proposal: 3 atenções (melhora)
+        call_state = {"i": 0}
+
+        def _fake_shadow_score(_sd, _da, refs):
+            # Alterna baseline/proposal pela presença do sufixo "+prop" em loaded_at
+            attn = 3 if "+prop" in str(refs.get("loaded_at", "")) else 4
+            scoring = {"summary": {"snapped": attn, "very_different": 0, "confirmed": 0, "na": 0, "total": attn}}
+            return scoring, attn, attn, 0, 0, 1
+
+        import app.pipeline.scoring_engine as _se
+        import app.cross_check.ref_watcher as _rw
+        monkeypatch.setattr(_se, "shadow_score", _fake_shadow_score)
+        monkeypatch.setattr(_rw, "get_watcher", lambda: _FakeWatcher())
+
+        proposal = {
+            "id": 1, "kind": "rule",
+            "payload": {"kind": "cliente_alias", "from": "AAA", "to": "BBB"},
+        }
+        out = policy_engine.run_eval_gate(proposal, window=10)
+        assert out["decision"] == "passed", out
+        assert out["n_sheets_evaluated"] == 10
+        assert out["edits_per_sheet_baseline"] == 4.0
+        assert out["edits_per_sheet_with_proposal"] == 3.0
+
+    def test_failed_when_proposal_worsens_above_threshold(self, monkeypatch):
+        """R117 — proposta piora cells_need_attention > 5% → failed."""
+        sheets = self._fake_sheets(10)
+        monkeypatch.setattr(
+            policy_engine, "_load_validated_sheets_for_eval",
+            lambda window: sheets,
+        )
+
+        class _FakeWatcher:
+            def get_refs(self):
+                return {"loaded_at": "x", "clientes_plan": frozenset()}
+
+        def _fake_shadow_score(_sd, _da, refs):
+            # baseline=2.0, with_proposal=5.0 → piora 150% → failed
+            attn = 5 if "+prop" in str(refs.get("loaded_at", "")) else 2
+            scoring = {"summary": {"snapped": attn, "very_different": 0, "confirmed": 0, "na": 0, "total": attn}}
+            return scoring, attn, attn, 0, 0, 1
+
+        import app.pipeline.scoring_engine as _se
+        import app.cross_check.ref_watcher as _rw
+        monkeypatch.setattr(_se, "shadow_score", _fake_shadow_score)
+        monkeypatch.setattr(_rw, "get_watcher", lambda: _FakeWatcher())
+
+        proposal = {
+            "id": 2, "kind": "rule",
+            "payload": {"kind": "cliente_alias", "from": "C", "to": "D"},
+        }
+        out = policy_engine.run_eval_gate(proposal, window=10)
+        assert out["decision"] == "failed", out
+        assert out["edits_per_sheet_baseline"] == 2.0
+        assert out["edits_per_sheet_with_proposal"] == 5.0
+
+    def test_passed_dry_run_when_not_simulable(self, monkeypatch):
+        """R117 — confusion_pair não é simulável → passed_dry_run com nota."""
+        sheets = self._fake_sheets(8)
+        monkeypatch.setattr(
+            policy_engine, "_load_validated_sheets_for_eval",
+            lambda window: sheets,
+        )
+
+        class _FakeWatcher:
+            def get_refs(self):
+                return {"loaded_at": "y", "clientes_plan": frozenset()}
+
+        def _fake_shadow_score(_sd, _da, _refs):
+            scoring = {"summary": {"snapped": 2, "very_different": 1, "confirmed": 0, "na": 0, "total": 3}}
+            return scoring, 3, 3, 0, 0, 1
+
+        import app.pipeline.scoring_engine as _se
+        import app.cross_check.ref_watcher as _rw
+        monkeypatch.setattr(_se, "shadow_score", _fake_shadow_score)
+        monkeypatch.setattr(_rw, "get_watcher", lambda: _FakeWatcher())
+
+        proposal = {
+            "id": 3, "kind": "rule",
+            "payload": {"kind": "confusion_pair", "gold_char": "O", "ocr_char": "0"},
+        }
+        out = policy_engine.run_eval_gate(proposal, window=10)
+        assert out["decision"] == "passed_dry_run", out
+        assert out["edits_per_sheet_with_proposal"] is None
+        assert "not simulable" in out["note"]
+
+    def test_passed_dry_run_when_insufficient_sheets(self, monkeypatch):
+        """R117 — < 5 sheets validadas → passed_dry_run com nota explícita."""
+        monkeypatch.setattr(
+            policy_engine, "_load_validated_sheets_for_eval",
+            lambda window: self._fake_sheets(2),
+        )
+        proposal = {
+            "id": 4, "kind": "rule",
+            "payload": {"kind": "cliente_alias", "from": "E", "to": "F"},
+        }
+        out = policy_engine.run_eval_gate(proposal, window=10)
+        assert out["decision"] == "passed_dry_run"
+        assert "insufficient validated sheets" in out["note"]
+        assert out["n_sheets_evaluated"] == 2
+
+
 # ----- Circuit breaker -------------------------------------------------
 
 class TestCircuitBreaker:

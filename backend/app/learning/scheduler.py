@@ -90,6 +90,17 @@ def run_learning_cycle() -> int | None:
             "learning cycle done: %d proposals (%d new, %d auto, %d quarantine)",
             len(proposals), new_n, auto_n, quar_n,
         )
+        # R117 — emit kernel event para a UI / cron reagirem ao fim do ciclo
+        try:
+            from app import kernel
+            kernel.emit_event("r98_cycle_completed", {
+                "run_id": run_id,
+                "proposals_new": new_n,
+                "proposals_auto_applied": auto_n,
+                "proposals_quarantined": quar_n,
+            })
+        except Exception:
+            pass
         return run_id
     except Exception as e:
         logger.exception("learning cycle failed")

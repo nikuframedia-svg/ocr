@@ -426,6 +426,16 @@
         </template>
         <template x-for="(msg, mi) in messages" :key="mi">
           <div class="lr-msg" :class="msg.role">
+            {# R117 — badge que mostra qual caminho o agente seguiu:
+               tools (verde) vs fallback_* (amarelo / muted) #}
+            <template x-if="msg.role === 'assistant' && msg._meta && msg._meta.path">
+              <span class="lr-badge"
+                    :class="msg._meta.path === 'tools' ? 'approved' : 'quarantine'"
+                    style="margin-bottom:6px;"
+                    x-text="msg._meta.path === 'tools'
+                              ? '🛠 tools'
+                              : '📋 dossier'"></span>
+            </template>
             <div class="lr-md" x-html="renderBody(msg)"></div>
             <template x-for="(chart, ci) in (msg.charts || [])" :key="ci">
               <div class="lr-msg-chart">
@@ -672,6 +682,8 @@ function learningsPage() {
           content: env.reply || '(sem resposta)',
           charts: env.charts || [],
           proposed_rules: (env.proposed_rules || []).map(r => ({ ...r, _added: false })),
+          // R117 — preservar _meta para o badge poder distinguir tools vs fallback
+          _meta: env._meta || null,
         });
       } catch (e) {
         this.messages.push({

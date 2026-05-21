@@ -83,8 +83,8 @@
               {% if match %}
                 {% set m = match[0] %}
                 <td style="text-align:center; background: var(--accent-soft);">
-                  <div class="mono"><b>{{ m.qty }}</b></div>
-                  <div class="mono tiny muted">{{ "%.1f"|format(m.rate_per_hour) }}/h</div>
+                  <div class="mono"><b>{{ m.qty or 0 }}</b></div>
+                  <div class="mono tiny muted">{{ "%.1f"|format(m.rate_per_hour or 0) }}/h</div>
                 </td>
               {% else %}
                 <td style="text-align:center;" class="muted">—</td>

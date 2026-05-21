@@ -13,10 +13,21 @@ com o PP1 (APS interno da NIKUFRA.AI). Audit trail certificável EN 1090 / ISO 9
   Código preparado em `pipeline/inference/vllm_client.py` + `config.py`
 - SQLite single-file em `data/app.db` (sem ORM)
 
-## Hot path
-`backend/app/web/ocr_runner.py` → `pipeline/inference/vllm_client.py` →
-`dq/pipeline.py` (L1/L2/L3) → `cross_check/engine.py` (L4 vs SAP refs) →
-CSV writer. ~25 s/folha em produção.
+## Hot path (R117 — confirmado pós-R109)
+```
+POST /upload → ocr_queue → _process_sheet_ocr (main.py) →
+  ocr_runner.run_pipeline → ocr6.process_image (raiz, urllib → Ollama) →
+  template detect (templates_registry) → eventual Pass-2 com swap_prompt →
+  db.update_extraction (DQ stub vazio) →
+  _run_and_store_cross_check → scoring_engine.cross_check_sheet (motor v5) →
+    _apply_auto_overwrites + _apply_operador_snap + _apply_codmaq_fill →
+    store_cross_check JSON + _spawn_shadow_scoring (thread daemon)
+  _deposit_csv_to_factory
+```
+~25 s/folha em produção. Nota R117: `pipeline/inference/vllm_client.py`
+permanece em `scripts/` (não em produção — vLLM dorme até à Fase 4).
+Audit trail do agente Qwen em `backend/app/pipeline/qwen_agent.py` +
+`backend/app/kernel.py` (sessions/proposals/policies).
 
 ## Estrutura
 - `backend/app/` — código de produção (`web/`, `pipeline/`, `dq/`, `cross_check/`, `learning/`, `evaluation/`)

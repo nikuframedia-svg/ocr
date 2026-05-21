@@ -1857,45 +1857,9 @@ def snap_of(value: str, *, row_context: dict | None = None) -> SnapResult:
     # ov exact + modelo substring). A challenger with strictly more
     # high-signal matches than OCR.of wins. These 3 fields uniquely
     # identify a plan row better than dim tolerances.
-    top_set = {c for s, c in scored if s == winner_score}
-    if raw_up in top_set:
-        # R57 tie-break — compute high-signal for OCR.of and challengers
-        from app.cross_check.holistic_score import score_high_signal
-        cur_hi = max(
-            (score_high_signal(e, row_context, _CLIENTE_ALIASES)
-             for e in _OF_TO_ENTRIES_FULL.get(raw_up, ())),
-            default=0,
-        )
-        challengers = top_set - {raw_up}
-        best_challenger = None
-        best_challenger_hi = -1
-        for c in challengers:
-            c_hi = max(
-                (score_high_signal(e, row_context, _CLIENTE_ALIASES)
-                 for e in _OF_TO_ENTRIES_FULL.get(c, ())),
-                default=0,
-            )
-            if c_hi > best_challenger_hi:
-                best_challenger_hi = c_hi
-                best_challenger = c
-        if best_challenger is not None and best_challenger_hi > cur_hi:
-            return SnapResult(
-                raw=raw, snapped=best_challenger,
-                rule=f"of.holistic_tiebreak_signal_{best_challenger_hi}vs{cur_hi}",
-                distance=99.0, applied=True,
-                candidates=tuple(c for _, c in scored[:5]),
-            )
-        return SnapResult(
-            raw=raw, snapped=pre_snapped,
-            rule=(
-                "of.terminal_A_to_1" if a_applied
-                else f"of.holistic_top_{winner_score}"
-            ),
-            distance=1.0 if a_applied else 0.0,
-            applied=(pre_snapped != raw),
-            candidates=tuple(c for _, c in scored[:5]),
-        )
-    # Otherwise, override only if winner strictly beats current
+    # R117 — branch R57 tiebreak removida (importava cross_check.holistic_score,
+    # apagado em R108-R115; v5 motor cobre via remaining tiebreak)
+    # Override only if winner strictly beats current
     if winner_score > cur_score:
         return SnapResult(
             raw=raw, snapped=winner_of,

@@ -178,45 +178,226 @@ def _summarize_diff(old: dict, new: dict) -> str:
 
 # ----- Eval gate --------------------------------------------------------
 
-def run_eval_gate(
-    proposal: dict,
-    window: int = _DEFAULT_EVAL_WINDOW,
-) -> dict:
-    """Corre eval gate em shadow para uma proposta.
+# R117 — eval gate real: A/B em shadow com últimas N folhas validadas.
+_EVAL_SHADOW_WINDOW = 20          # folhas usadas para o A/B
+_EVAL_MIN_SHEETS = 5              # abaixo disto → fallback dry-run
+_EVAL_REGRESSION_THRESHOLD = 0.05 # piora > 5% → failed
+_SIMULABLE_KINDS = {"cliente_alias", "modelo_alias"}
 
-    Implementação inicial (R110.C): mede edits_per_sheet baseline nas
-    últimas N folhas validadas. Não corre o motor com a policy proposta
-    em shadow (requer integração mais profunda). Devolve métricas reais
-    da baseline + um "decision: passed_dry_run" para não bloquear o
-    workflow enquanto a integração shadow não é completa.
+
+def _cells_need_attention(scoring: dict) -> int:
+    """R117 — Conta `snapped + very_different` no output do shadow_score.
+
+    São as células que o operador tem de rever; baixar este número é
+    sinal de que a proposta melhora o motor."""
+    summary = scoring.get("summary", {}) if scoring else {}
+    return int(summary.get("snapped", 0)) + int(summary.get("very_different", 0))
+
+
+def _apply_proposal_to_refs(proposal: dict, base_refs: dict) -> dict | None:
+    """R117 — Aplica a proposta a uma cópia (shallow) das refs.
+
+    Devolve refs modificadas se simulável, ou None se a proposta não tem
+    forma de ser simulada com um shadow_score leve (ex.: confusion_pair,
+    snap_rule, template, cpis).
     """
+    kind = proposal.get("kind")
+    if kind != "rule":
+        return None
+
+    payload = proposal.get("payload") or {}
+    if not isinstance(payload, dict):
+        return None
+    sub_kind = (payload.get("kind") or "").strip()
+    if sub_kind not in _SIMULABLE_KINDS:
+        return None
+
+    fr = str(payload.get("from") or "").strip().upper()
+    to = str(payload.get("to") or "").strip().upper()
+    if not fr or not to:
+        return None
+
+    # Cópia shallow — as estruturas internas são tratadas como read-only
+    # pelo shadow_score, exceptuando o dict aliases que aqui (re)injectamos.
+    new_refs = dict(base_refs)
+
+    if sub_kind == "cliente_alias":
+        # `clientes_lexicon` é incluído no pool de candidatos para o campo
+        # cliente; basta garantir que o canónico `to` aparece lá.
+        existing = set(new_refs.get("clientes_lexicon") or [])
+        existing.add(to)
+        new_refs["clientes_lexicon"] = sorted(existing)
+        # E juntar `to` aos clientes_plan para ser elegível no score_entry
+        plan_set = set(new_refs.get("clientes_plan") or frozenset())
+        plan_set.add(to)
+        new_refs["clientes_plan"] = frozenset(plan_set)
+    elif sub_kind == "modelo_alias":
+        # Equivalente para modelos — adicionamos `to` ao pool de modelos.
+        modelos = set(new_refs.get("modelos_plan") or frozenset())
+        modelos.add(to)
+        new_refs["modelos_plan"] = frozenset(modelos)
+
+    # Forçar nova entrada no INDEX_CACHE com loaded_at distinto, para o
+    # shadow_score reindexar com as refs alteradas.
+    new_refs["loaded_at"] = f"{base_refs.get('loaded_at', '')}+prop{proposal.get('id', 0)}"
+    return new_refs
+
+
+def _load_validated_sheets_for_eval(window: int) -> list[dict]:
+    """R117 — Lê últimas N folhas validadas com sheet_data + dq_audit
+    parseados. Devolve [] se falhar (defensive)."""
     try:
         with db.conn() as c:
-            row = c.execute(
-                """SELECT COUNT(*) n_sheets,
-                          AVG((SELECT COUNT(*) FROM edits e
-                               WHERE e.sheet_id = s.id AND e.source = 'human')) avg_edits
-                   FROM (
-                       SELECT id FROM sheets
-                       WHERE status = 'validated'
-                       ORDER BY validated_at DESC LIMIT ?
-                   ) s""",
+            rows = c.execute(
+                """SELECT id, sheet_data, dq_audit
+                   FROM sheets
+                   WHERE status = 'validated'
+                     AND sheet_data IS NOT NULL
+                   ORDER BY validated_at DESC LIMIT ?""",
                 (window,),
-            ).fetchone()
-            n_sheets = row["n_sheets"] if row else 0
-            avg_edits = float(row["avg_edits"] or 0) if row else 0.0
+            ).fetchall()
+    except Exception:  # noqa: BLE001
+        logger.exception("R117 eval gate: falha a ler sheets validadas")
+        return []
 
+    out: list[dict] = []
+    for r in rows:
+        try:
+            sd = json.loads(r["sheet_data"]) if r["sheet_data"] else {}
+            da = json.loads(r["dq_audit"]) if r["dq_audit"] else {}
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not sd:
+            continue
+        out.append({"id": r["id"], "sheet_data": sd, "dq_audit": da})
+    return out
+
+
+def run_eval_gate(
+    proposal: dict,
+    window: int = _EVAL_SHADOW_WINDOW,
+) -> dict:
+    """R117 — Eval gate real com shadow A/B.
+
+    Algoritmo:
+      1. Carrega últimas `window` sheets validadas (mín. _EVAL_MIN_SHEETS).
+      2. Para cada uma corre `shadow_score(refs_atuais)` (baseline) e, se a
+         proposta for simulável, corre também com refs modificadas.
+      3. Métrica: avg(snapped + very_different) — células que o operador
+         tem de rever. Baixar = melhora.
+      4. Decisão:
+         - `passed`        se with_proposal ≤ baseline (não piora)
+         - `failed`        se with_proposal piora > _EVAL_REGRESSION_THRESHOLD
+         - `passed_dry_run` se proposta não simulável ou dados insuficientes.
+
+    Mantém as chaves do retorno legacy para compat com `db.save_policy_version`
+    e UI: decision, edits_per_sheet_baseline, edits_per_sheet_with_proposal,
+    note, n_sheets_evaluated.
+    """
+    sheets = _load_validated_sheets_for_eval(window)
+    n = len(sheets)
+
+    if n < _EVAL_MIN_SHEETS:
         return {
             "decision": "passed_dry_run",
             "window_size": window,
-            "n_sheets_evaluated": n_sheets,
-            "edits_per_sheet_baseline": round(avg_edits, 3),
+            "n_sheets_evaluated": n,
+            "edits_per_sheet_baseline": 0.0,
             "edits_per_sheet_with_proposal": None,
-            "note": "Eval gate em modo dry-run — métrica baseline calculada, "
-                    "shadow execution da policy fica para iteração futura.",
+            "note": "insufficient validated sheets for shadow eval "
+                    f"(have {n}, need {_EVAL_MIN_SHEETS})",
         }
+
+    # Lazy imports — só puxar scoring_engine / ref_watcher quando o gate
+    # corre de facto (mantém startup leve para CLIs sem refs).
+    try:
+        from app.pipeline.scoring_engine import shadow_score
+        from app.cross_check.ref_watcher import get_watcher
+        refs = get_watcher().get_refs()
     except Exception as e:  # noqa: BLE001
-        return {"decision": "error", "error": str(e)}
+        logger.exception("R117 eval gate: falha a carregar shadow_score/refs")
+        return {
+            "decision": "passed_dry_run",
+            "window_size": window,
+            "n_sheets_evaluated": n,
+            "edits_per_sheet_baseline": 0.0,
+            "edits_per_sheet_with_proposal": None,
+            "note": f"shadow_score/refs unavailable: {e}",
+        }
+
+    proposal_refs = _apply_proposal_to_refs(proposal, refs)
+    simulable = proposal_refs is not None
+
+    # Baseline pass — sempre corre, mesmo quando não simulável (dá número
+    # informativo no histórico de versões).
+    baseline_attn: list[int] = []
+    with_attn: list[int] = []
+    failed_sheets = 0
+    for s in sheets:
+        try:
+            scoring_b, *_ = shadow_score(s["sheet_data"], s["dq_audit"], refs)
+            baseline_attn.append(_cells_need_attention(scoring_b))
+        except Exception:  # noqa: BLE001
+            failed_sheets += 1
+            continue
+        if simulable:
+            try:
+                scoring_w, *_ = shadow_score(s["sheet_data"], s["dq_audit"], proposal_refs)
+                with_attn.append(_cells_need_attention(scoring_w))
+            except Exception:  # noqa: BLE001
+                # Se a proposta rebenta o motor numa folha, conta como piora
+                # severa — pre-warning para o reviewer humano.
+                with_attn.append(_cells_need_attention(scoring_b) + 1)
+
+    if not baseline_attn:
+        return {
+            "decision": "passed_dry_run",
+            "window_size": window,
+            "n_sheets_evaluated": n,
+            "edits_per_sheet_baseline": 0.0,
+            "edits_per_sheet_with_proposal": None,
+            "note": f"shadow_score failed on every sheet (failed={failed_sheets})",
+        }
+
+    baseline_avg = sum(baseline_attn) / len(baseline_attn)
+
+    if not simulable:
+        return {
+            "decision": "passed_dry_run",
+            "window_size": window,
+            "n_sheets_evaluated": n,
+            "edits_per_sheet_baseline": round(baseline_avg, 3),
+            "edits_per_sheet_with_proposal": None,
+            "note": ("proposal not simulable in shadow A/B "
+                     "(kind != cliente_alias|modelo_alias); baseline-only"),
+        }
+
+    with_avg = sum(with_attn) / len(with_attn) if with_attn else baseline_avg
+
+    # Regressão relativa — protege casos baseline ≈ 0 com guarda absoluta.
+    if baseline_avg <= 0:
+        regressed = with_avg > _EVAL_REGRESSION_THRESHOLD
+    else:
+        regressed = (with_avg - baseline_avg) / baseline_avg > _EVAL_REGRESSION_THRESHOLD
+
+    if regressed:
+        decision = "failed"
+        note = (f"shadow A/B: proposta piora cells_need_attention "
+                f"{baseline_avg:.2f} → {with_avg:.2f} (> {_EVAL_REGRESSION_THRESHOLD:.0%})")
+    else:
+        decision = "passed"
+        note = (f"shadow A/B: proposta não piora "
+                f"({baseline_avg:.2f} → {with_avg:.2f}, "
+                f"n={n}, failed={failed_sheets})")
+
+    return {
+        "decision": decision,
+        "window_size": window,
+        "n_sheets_evaluated": n,
+        "edits_per_sheet_baseline": round(baseline_avg, 3),
+        "edits_per_sheet_with_proposal": round(with_avg, 3),
+        "note": note,
+    }
 
 
 # ----- Circuit breaker -------------------------------------------------

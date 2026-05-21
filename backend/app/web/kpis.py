@@ -476,6 +476,14 @@ def operador_cliente_matrix(months: int = 12) -> dict:
                ORDER BY pr.operador, pr.cliente""",
             (f"-{months * 31} days", f"-{months * 31} days", f"-{months * 31} days"),
         ).fetchall()]
+        # R117 — SUM() devolve NULL em grupos vazios; descarta cells sem qty
+        # e placeholders óbvios de cliente; coerce rate_per_hour NULL → 0.
+        cells = [
+            {**row, "rate_per_hour": row["rate_per_hour"] or 0}
+            for row in cells
+            if row["qty"] is not None
+            and (row["cliente"] or "").strip() not in ("", "/", "-")
+        ]
         operadores = sorted({row["operador"] for row in cells})
         clientes = sorted({row["cliente"] for row in cells})
     return {"operadores": operadores, "clientes": clientes, "cells": cells}

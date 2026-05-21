@@ -19,6 +19,7 @@ import re
 
 import httpx
 
+from app import kernel  # R117 — emit qwen_session events
 from app.config import get_settings
 from app.cross_check import storage as cc_storage
 from app.cross_check.ref_watcher import get_watcher
@@ -356,11 +357,45 @@ def chat(user_message: str, history: list[dict] | None = None) -> dict:
             envelope.get("proposed_rules") or []
         )
 
-    # Persistir sessão (best effort)
+    # Persistir sessão (best effort). R117 — capturar session_id para
+    # poder ligar os charts à sessão e emitir o evento de kernel.
+    session_id: int | None = None
     try:
-        db.save_qwen_session(user_message, envelope, trigger="manual")
+        session_id = db.save_qwen_session(user_message, envelope, trigger="manual")
     except Exception:  # noqa: BLE001
         logger.exception("save_qwen_session failed")
+
+    # R117 — persistir charts propostos pelo agente (chart_tools.propose_chart
+    # só os empurrava para _current_session_charts; agora vão para qwen_charts).
+    if session_id is not None:
+        for chart in envelope.get("charts") or []:
+            if not isinstance(chart, dict):
+                continue
+            try:
+                db.save_qwen_chart(
+                    spec=chart,
+                    title=chart.get("title", "") or "",
+                    narrative=chart.get("narrative", "") or "",
+                    session_id=session_id,
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("save_qwen_chart failed")
+
+        # R117 — emitir evento qwen_session no kernel (best-effort)
+        try:
+            meta = envelope.get("_meta") or {}
+            kernel.emit_event(
+                "qwen_session",
+                {
+                    "session_id": session_id,
+                    "tools_used": meta.get("tools_used", []),
+                    "tool_calls_count": meta.get("tool_calls_count", 0),
+                    "status": meta.get("status", "ok"),
+                    "path": meta.get("path", "unknown"),
+                },
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("kernel.emit_event(qwen_session) failed")
 
     return envelope
 

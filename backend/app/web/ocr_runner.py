@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import sys
+import threading  # R117 — protege swap global de ocr6.PROMPT
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,16 @@ from app.templates_registry import (  # noqa: E402
 _PROMPT_PATH = _REPO / "prompts" / "ocr6_v3.txt"
 _V3_PROMPT, _V3_PROMPT_HASH = ocr6.load_prompt(_PROMPT_PATH)
 ocr6.PROMPT, ocr6.PROMPT_HASH = _V3_PROMPT, _V3_PROMPT_HASH
+
+# R117 — `ocr6.PROMPT` é estado global no módulo ocr6. _swap_prompt muta-o
+# e a API actual de ocr6.process_image não aceita o prompt como
+# argumento, pelo que temos de o trocar antes da chamada e restaurar
+# depois. Para tornar isto seguro em paralelização futura, serializamos
+# o bloco swap→OCR→restore. Custo: throughput limitado a 1 OCR
+# simultâneo enquanto o lock for segurado (~25 s/folha). Aceitável; a
+# alternativa correcta é refactor ao ocr6 para aceitar o prompt
+# directamente, mas isso está fora do scope deste R117.
+_PROMPT_LOCK = threading.Lock()
 
 
 def _swap_prompt(prompt_text: str) -> tuple[str, str]:
@@ -106,11 +117,14 @@ def run_pipeline(image_path: Path) -> dict:
     if template.name == DEFAULT_TEMPLATE.name:
         raw_extraction = pass1_raw
     else:
-        prev = _swap_prompt(build_prompt(template))
-        try:
-            pass2_raw = _run_ocr(image_path, template=template)
-        finally:
-            ocr6.PROMPT, ocr6.PROMPT_HASH = prev
+        # R117 — swap→OCR→restore tem de ser atómico para evitar race em
+        # paralelização futura (Pass-1 da próxima folha veria o prompt errado).
+        with _PROMPT_LOCK:
+            prev = _swap_prompt(build_prompt(template))
+            try:
+                pass2_raw = _run_ocr(image_path, template=template)
+            finally:
+                ocr6.PROMPT, ocr6.PROMPT_HASH = prev
         raw_extraction = _merge_pass2_into_pass1(pass1_raw, pass2_raw)
 
     raw_extraction["template_name"] = template.name
@@ -129,11 +143,13 @@ def rerun_pipeline_for_template(image_path: Path, template_name: str) -> dict:
     if template.name == DEFAULT_TEMPLATE.name:
         raw_extraction = _run_ocr(image_path)
     else:
-        prev = _swap_prompt(build_prompt(template))
-        try:
-            raw_extraction = _run_ocr(image_path, template=template)
-        finally:
-            ocr6.PROMPT, ocr6.PROMPT_HASH = prev
+        # R117 — ver comentário em run_pipeline; mesmo motivo.
+        with _PROMPT_LOCK:
+            prev = _swap_prompt(build_prompt(template))
+            try:
+                raw_extraction = _run_ocr(image_path, template=template)
+            finally:
+                ocr6.PROMPT, ocr6.PROMPT_HASH = prev
 
     raw_extraction["template_name"] = template.name
 

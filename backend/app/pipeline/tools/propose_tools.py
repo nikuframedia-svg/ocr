@@ -140,6 +140,15 @@ def propose_rule(
     except Exception as e:  # noqa: BLE001
         return {"status": "error", "error": f"Falhou ao gravar: {e}"}
 
+    # R117 — emit kernel event para a UI / cron / kernel reagirem
+    try:
+        from app import kernel
+        kernel.emit_event("proposal_created", {
+            "proposal_id": pid, "kind": "rule", "risk_class": risk,
+        })
+    except Exception:
+        pass
+
     _current_session_proposals.append({
         "id": pid, "kind": kind, "field": field or payload.get("field"),
         "payload": payload, "reason": justification, "risk_class": risk,
@@ -214,6 +223,15 @@ def propose_template_change(
     except Exception as e:  # noqa: BLE001
         return {"status": "error", "error": f"Falhou ao gravar: {e}"}
 
+    # R117 — emit kernel event
+    try:
+        from app import kernel
+        kernel.emit_event("proposal_created", {
+            "proposal_id": pid, "kind": "template", "risk_class": "review",
+        })
+    except Exception:
+        pass
+
     _current_session_proposals.append({
         "id": pid, "kind": "template",
         "payload": payload, "reason": justification, "risk_class": "review",
@@ -262,6 +280,15 @@ def propose_cpis_change(
         )
     except Exception as e:  # noqa: BLE001
         return {"status": "error", "error": f"Falhou ao gravar: {e}"}
+
+    # R117 — emit kernel event
+    try:
+        from app import kernel
+        kernel.emit_event("proposal_created", {
+            "proposal_id": pid, "kind": "cpis", "risk_class": "review",
+        })
+    except Exception:
+        pass
 
     _current_session_proposals.append({
         "id": pid, "kind": "cpis",

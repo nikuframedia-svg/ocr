@@ -28,6 +28,7 @@ sys.path.insert(0, str(_REPO))
 # Ensure backend app importable
 sys.path.insert(0, str(_REPO / "backend"))
 
+from app import kernel  # noqa: E402  — R110.E event log (R117: hoisted for hot-path emits)
 from app.web import attractors, db, export, kpis, llm_assistant, ocr_queue, ocr_runner  # noqa: E402
 from app.cross_check import (  # noqa: E402
     cross_check_sheet,
@@ -242,6 +243,12 @@ async def upload(
     rel_path = str(target.relative_to(_DATA_DIR))
     sheet_id = db.insert_sheet(rel_path)
 
+    # R117 — kernel event: folha aceite pelo servidor (pré-OCR).
+    try:
+        kernel.emit_event("sheet_uploaded", {"sheet_id": sheet_id, "image_path": rel_path})
+    except Exception:  # noqa: BLE001
+        pass
+
     # Round 46 — auto-crop kanban paper from photo (background removed,
     # perspective corrected). Saved as <stem>_cropped.jpg next to original.
     # Silent no-op if detection fails (image route falls back to original).
@@ -316,7 +323,7 @@ def _apply_auto_overwrites(sheet_id: int, result: dict) -> int:
             try:
                 db.apply_edit(sheet_id, field_path, canonical, source="system")
                 n_applied += 1
-            except (ValueError, Exception):  # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 continue
     return n_applied
 
@@ -358,7 +365,7 @@ def _apply_operador_snap(sheet_id: int, sheet: dict, refs: dict) -> int:
         try:
             db.apply_edit(sheet_id, "header.pernr", sr.pernr, source="system")
             n_applied += 1
-        except (ValueError, Exception):  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             pass
 
     # Snap name when changed
@@ -366,7 +373,7 @@ def _apply_operador_snap(sheet_id: int, sheet: dict, refs: dict) -> int:
         try:
             db.apply_edit(sheet_id, "header.operador", sr.snapped_name, source="system")
             n_applied += 1
-        except (ValueError, Exception):  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             pass
 
     # Snap cod when changed (Condition C — Lev-1)
@@ -374,7 +381,7 @@ def _apply_operador_snap(sheet_id: int, sheet: dict, refs: dict) -> int:
         try:
             db.apply_edit(sheet_id, "header.n_operador", sr.snapped_cod, source="system")
             n_applied += 1
-        except (ValueError, Exception):  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             pass
 
     return n_applied
@@ -405,7 +412,7 @@ def _apply_codmaq_fill(sheet_id: int, sheet: dict, refs: dict) -> int:
     try:
         db.apply_edit(sheet_id, "header.cod_maquina", maq["codmaq"], source="system")
         return 1
-    except (ValueError, Exception):  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         return 0
 
 
@@ -504,6 +511,19 @@ def _spawn_shadow_scoring(
                     run_id, sheet_id, scoring,
                     total, snapped, confirmed, na, dur_ms,
                 )
+                # R117 — kernel event: shadow scoring concluído (thread daemon,
+                # kernel.emit_event é thread-safe via _LOCK).
+                try:
+                    kernel.emit_event("shadow_run_completed", {
+                        "sheet_id": sheet_id,
+                        "total": total,
+                        "snapped": snapped,
+                        "confirmed": confirmed,
+                        "na": na,
+                        "duration_ms": dur_ms,
+                    })
+                except Exception:  # noqa: BLE001
+                    pass
             except Exception as exc:
                 db.fail_shadow_run(run_id, f"{type(exc).__name__}: {exc}")
                 traceback.print_exc()
@@ -888,12 +908,12 @@ async def sheet_validate(
     if (cur_header.get("data") or "").strip() != data_pt:
         try:
             db.apply_edit(sheet_id, "header.data", data_pt)
-        except (ValueError, Exception):  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             pass
     if (cur_header.get("n_operador") or "").strip() != n_op_clean:
         try:
             db.apply_edit(sheet_id, "header.n_operador", n_op_clean)
-        except (ValueError, Exception):  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             pass
 
     # R95 — apply cesta_N edits before lock (expedicao template only; other
@@ -909,10 +929,15 @@ async def sheet_validate(
         if new_cesta != cur_cesta:
             try:
                 db.apply_edit(sheet_id, f"rows[{i}].cesta_n", new_cesta)
-            except (ValueError, Exception):  # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 pass
 
     db.validate_sheet(sheet_id, operador)
+    # R117 — kernel event: folha validada (lock confirmado pelo operador).
+    try:
+        kernel.emit_event("sheet_validated", {"sheet_id": sheet_id, "operador": operador})
+    except Exception:  # noqa: BLE001
+        pass
     # R113 — folha acabada de validar entra no cálculo de consumption.
     # Invalida cache para o /of-lookup seguinte ver os números actualizados.
     # R115 — também invalida o agregado /obras (qtd produzida muda).
@@ -2529,7 +2554,7 @@ async def learnings_llm_chat(request: Request) -> JSONResponse:
 # ----- R110.C — Agent proposals + policies (endpoints REST) -----
 from fastapi.encoders import jsonable_encoder  # noqa: E402
 
-from app import kernel  # noqa: E402  — R110.E event log
+# R117: `kernel` import foi promovido para o topo do ficheiro.
 
 
 def _json_ok(data: dict) -> JSONResponse:

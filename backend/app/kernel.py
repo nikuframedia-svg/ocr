@@ -26,9 +26,12 @@ chama `kernel.emit_event(...)`. Nada se rearquitecta.
 """
 from __future__ import annotations
 
+import gzip  # R117 — rotação do events.jsonl
 import json
 import logging
 import os
+import re  # R117 — parse de events.jsonl.N.gz
+import shutil  # R117 — copia para .gz em chunks
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,6 +45,12 @@ _REPO = Path(__file__).resolve().parents[2]
 _DATA_DIR = _REPO / "data"
 _EVENT_LOG = _DATA_DIR / "events.jsonl"
 _STATE_FILE = _DATA_DIR / "kernel_state.json"
+
+# R117 — limite de rotação. 50 MB é um meio-termo razoável: a ~300 B
+# por evento dá ~170k eventos por ficheiro (meses de uso normal) e
+# mantém-se barato comprimir num único shot quando rodamos.
+_ROTATE_MAX_BYTES = 50_000_000
+_ROTATED_RE = re.compile(r"^events\.jsonl\.(\d+)\.gz$")
 
 _LOCK = threading.Lock()
 
@@ -165,6 +174,39 @@ def _apply_event_to_state(state: dict, event: dict) -> dict:
 
 # ----- Event log -----------------------------------------------------------
 
+def _rotate_event_log_if_needed() -> None:
+    """R117 — se events.jsonl > 50 MB, comprime para events.jsonl.{N+1}.gz.
+
+    Encontra o N mais alto dos ficheiros rotados existentes e usa N+1.
+    Falhas de rotação são silenciadas — auditoria recente continua a
+    funcionar mesmo que o disco esteja cheio.
+
+    Assume que o caller já segura _LOCK.
+    """
+    try:
+        if not _EVENT_LOG.exists():
+            return
+        if _EVENT_LOG.stat().st_size <= _ROTATE_MAX_BYTES:
+            return
+        max_n = 0
+        for entry in _DATA_DIR.iterdir():
+            m = _ROTATED_RE.match(entry.name)
+            if m:
+                n = int(m.group(1))
+                if n > max_n:
+                    max_n = n
+        next_n = max_n + 1
+        rotated = _DATA_DIR / f"events.jsonl.{next_n}.gz"
+        # Comprime em streaming (não carrega tudo em memória).
+        with open(_EVENT_LOG, "rb") as src, gzip.open(rotated, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+        os.remove(_EVENT_LOG)
+        logger.info("kernel: events.jsonl rodado para %s", rotated.name)
+    except Exception as e:  # noqa: BLE001
+        # Rotação é best-effort — nunca pode bloquear o emit.
+        logger.warning("kernel: falha a rodar events.jsonl: %s", e)
+
+
 def emit_event(event_type: str, payload: dict | None = None) -> dict:
     """Regista um evento no log + actualiza estado. Thread-safe.
 
@@ -175,6 +217,9 @@ def emit_event(event_type: str, payload: dict | None = None) -> dict:
 
     _ensure_data_dir()
     with _LOCK:
+        # R117 — rodar ANTES do append. Se o ficheiro foi rodado, o
+        # open(..., "a") a seguir cria um novo events.jsonl vazio.
+        _rotate_event_log_if_needed()
         state = get_state()
         event = {
             "version": (state.get("version") or 0) + 1,
@@ -201,36 +246,42 @@ def replay(from_event: int = 0) -> dict:
 
     Se from_event > 0, salta os primeiros N eventos.
     """
+    # R117 — lock contra leitura parcial enquanto emit_event escreve
+    # (Windows: ficheiro aberto duas vezes pode devolver bytes truncados).
+    # _LOCK é threading.Lock (não RLock): seguro porque _apply_event_to_state
+    # é puro e replay nunca chama emit_event.
     state = _empty_state()
-    if not _EVENT_LOG.exists():
-        return state
-    skipped = 0
-    with open(_EVENT_LOG, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            if skipped < from_event:
-                skipped += 1
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                logger.warning("evento corrompido no log, a saltar")
-                continue
-            state = _apply_event_to_state(state, event)
+    with _LOCK:
+        if not _EVENT_LOG.exists():
+            return state
+        skipped = 0
+        with open(_EVENT_LOG, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                if skipped < from_event:
+                    skipped += 1
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.warning("evento corrompido no log, a saltar")
+                    continue
+                state = _apply_event_to_state(state, event)
     return state
 
 
 def list_recent_events(limit: int = 50) -> list[dict]:
     """Devolve as últimas N entradas do log."""
-    if not _EVENT_LOG.exists():
-        return []
-    # Strategy: ler o ficheiro inteiro até linha N do fim. Para volumes
-    # grandes seria preciso indexar. Para já, OK.
-    lines: list[str] = []
-    with open(_EVENT_LOG, "r", encoding="utf-8") as f:
-        lines = f.readlines()
+    # R117 — lock contra leitura parcial concorrente com emit_event.
+    with _LOCK:
+        if not _EVENT_LOG.exists():
+            return []
+        # Strategy: ler o ficheiro inteiro até linha N do fim. Para volumes
+        # grandes seria preciso indexar. Para já, OK.
+        with open(_EVENT_LOG, "r", encoding="utf-8") as f:
+            lines = f.readlines()
     out: list[dict] = []
     for line in lines[-limit:]:
         line = line.strip()
@@ -245,10 +296,12 @@ def list_recent_events(limit: int = 50) -> list[dict]:
 
 def count_events() -> int:
     """Total de eventos no log."""
-    if not _EVENT_LOG.exists():
-        return 0
-    with open(_EVENT_LOG, "r", encoding="utf-8") as f:
-        return sum(1 for line in f if line.strip())
+    # R117 — lock contra leitura parcial concorrente com emit_event.
+    with _LOCK:
+        if not _EVENT_LOG.exists():
+            return 0
+        with open(_EVENT_LOG, "r", encoding="utf-8") as f:
+            return sum(1 for line in f if line.strip())
 
 
 # ----- Reset (para tests / re-bootstrap) ----------------------------------

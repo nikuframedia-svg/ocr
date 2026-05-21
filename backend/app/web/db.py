@@ -11,11 +11,15 @@ stored as TEXT and serialised via :mod:`json`.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
+
+# R117 — logger para auto-promote de propostas em save_proposal
+logger = logging.getLogger(__name__)
 
 _DB_PATH = Path(__file__).resolve().parents[3] / "data" / "app.db"
 
@@ -558,7 +562,26 @@ def save_proposal(
                 session_id,
             ),
         )
-        return cur.lastrowid
+        proposal_id = cur.lastrowid
+
+    # R117 — M2: auto-promover proposta se risk_class == "auto".
+    # Lazy import para evitar risco de import circular (policy_engine
+    # importa db). Try/except: se a promoção falhar, a proposta fica
+    # 'pending' e alguém revê depois — não fazemos rollback do save.
+    if risk_class == "auto" and proposal_id is not None:
+        try:
+            from app.pipeline import policy_engine
+            policy_engine.promote_policy_from_proposal(proposal_id)
+            logger.info(
+                "Proposal %d auto-promoted (risk_class=auto)", proposal_id
+            )
+        except Exception:
+            logger.exception(
+                "auto-promote falhou para proposal_id=%d (fica pending)",
+                proposal_id,
+            )
+
+    return proposal_id
 
 
 def list_proposals(
@@ -852,7 +875,12 @@ def _parse_hours(s: Any) -> float | None:
 
 
 def _parse_date_iso(s: Any) -> str | None:
-    """`09-04-2026` or `9-4-2026` -> `2026-04-09`."""
+    """`09-04-2026` or `9-4-2026` -> `2026-04-09`.
+
+    R117 — B5: valida ranges (1≤m≤12, 1≤d≤31, 2000≤y≤2099) para alinhar
+    com ``_normalize_data_pt_to_iso`` e evitar strings mal formadas
+    (e.g. ``2026-13-45``) a chegar à camada de KPIs.
+    """
     if not s:
         return None
     parts = re.split(r"[-/.\s]+", str(s).strip())
@@ -862,6 +890,9 @@ def _parse_date_iso(s: Any) -> str | None:
         d, m, y = (int(p) for p in parts)
         if y < 100:
             y += 2000
+        # R117 — validar ranges (consistente com _normalize_data_pt_to_iso)
+        if not (1 <= d <= 31 and 1 <= m <= 12 and 2000 <= y <= 2099):
+            return None
         return f"{y:04d}-{m:02d}-{d:02d}"
     except (ValueError, TypeError):
         return None
@@ -869,12 +900,38 @@ def _parse_date_iso(s: Any) -> str | None:
 
 def _sync_production_rows(c: sqlite3.Connection, sheet_id: int, sheet_data: dict) -> None:
     """Replace production_rows for this sheet. Called on every
-    update_extraction() and apply_edit() to keep aggregates in sync."""
+    update_extraction() and apply_edit() to keep aggregates in sync.
+
+    R117 — M3: agora é template-aware. Para templates sem produção
+    (paragens), sai imediatamente após o DELETE — não há rows a
+    alimentar. Para os restantes, o filter de "row vazio" usa o
+    ``cross_check_fields`` do template em vez do hardcoded
+    ``(pri, cliente, ov, of, modelo, qtd, lote)`` que excluía
+    paragens e quase-todas as variantes Gemini.
+    """
     c.execute("DELETE FROM production_rows WHERE sheet_id = ?", (sheet_id,))
 
+    # R117 — M3: resolver TemplateSpec (lazy import para evitar potencial
+    # circular). Preferimos ``sheet_data.template_name`` quando presente
+    # (R54+); para folhas legadas, ``detect_template`` infere via
+    # ``header.setor_maquina``.
+    from app.templates_registry import (  # noqa: PLC0415 — lazy intencional
+        detect_template,
+        get_template,
+    )
     header = sheet_data.get("header", {}) or {}
     footer = sheet_data.get("footer", {}) or {}
     rows = sheet_data.get("rows", []) or []
+
+    tname = sheet_data.get("template_name")
+    if tname:
+        tspec = get_template(tname)
+    else:
+        tspec = detect_template((header.get("setor_maquina") or "").strip())
+
+    # R117 — M3: paragens não têm production_rows; sair já.
+    if not tspec.has_production_rows:
+        return
 
     operador = (header.get("operador") or "").strip() or None
     sheet_date_raw = (header.get("data") or "").strip() or None
@@ -911,13 +968,20 @@ def _sync_production_rows(c: sqlite3.Connection, sheet_id: int, sheet_data: dict
 
     total_qty = sum((_parse_int(r.get("qtd")) or 0) for r in rows if isinstance(r, dict))
 
+    # R117 — M3: filter template-aware. Se o template tem
+    # ``cross_check_fields`` definidos (caso geral), usamos esses para
+    # decidir se a linha é "vazia". Caso contrário, fallback ao
+    # critério legado (pri/cliente/ov/of/modelo/qtd/lote).
+    empty_check_fields: tuple[str, ...] = (
+        tspec.cross_check_fields
+        or ("pri", "cliente", "ov", "of", "modelo", "qtd", "lote")
+    )
+
     for i, row in enumerate(rows):
         if not isinstance(row, dict):
             continue
-        # Skip totally empty rows
-        if not any((row.get(k) or "").strip() for k in (
-            "pri", "cliente", "ov", "of", "modelo", "qtd", "lote",
-        )):
+        # Skip totally empty rows (R117 — usa fields do template)
+        if not any((row.get(k) or "").strip() for k in empty_check_fields):
             continue
         c.execute(
             """INSERT INTO production_rows

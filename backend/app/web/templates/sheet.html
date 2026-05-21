@@ -266,7 +266,7 @@
                 {# R112 — botão para abrir wizard "Corrigir via OF" da linha #}
                 {% if sheet.status != 'validated' %}
                 <button type="button" class="btn ghost row-of-wand-btn"
-                        @click="console.log('R116-DBG wand click', { row_index: {{ loop.index0 }}, current_of: {{ (row.of or '') | tojson }} }); $dispatch('open-of-wizard', {
+                        @click="$dispatch('open-of-wizard', {
                           row_index: {{ loop.index0 }},
                           current_of: {{ (row.of or '') | tojson }}
                         })"
@@ -348,8 +348,7 @@
 
 <!-- ============== R112 — Wizard "Corrigir via OF" ============== -->
 <div x-data="ofWizard({{ sheet.id }})"
-     @open-of-wizard.window="console.log('R116-DBG listener fired', $event.detail); open($event.detail)"
-     x-init="console.log('R116-DBG ofWizard mounted for sheet', {{ sheet.id }})">
+     @open-of-wizard.window="open($event.detail)">
   <template x-if="active">
     <div class="sheet-bg" @click.self="cancel()">
       <div class="sheet-modal of-wizard-modal">
@@ -462,7 +461,6 @@
 
 <script>
 function ofWizard(sheetId) {
-  console.log('R116-DBG ofWizard() factory called with sheetId=', sheetId);
   return {
     sheetId: sheetId,
     active: false, row_index: 0, ofInput: '', current_of: '',
@@ -470,7 +468,6 @@ function ofWizard(sheetId) {
     applying: false,
     includeDone: false,  // R113 — toggle "mostrar peças já fechadas"
     open(detail) {
-      console.log('R116-DBG ofWizard.open() called with', detail);
       this.active = true;
       this.row_index = detail.row_index;
       this.current_of = detail.current_of || '';
