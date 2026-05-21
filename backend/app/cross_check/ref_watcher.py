@@ -42,11 +42,14 @@ from typing import Any
 
 from app.pipeline.scoring_engine import normalize_of
 
-# R64 — overridable via KANBAN_DOC_DIR env var. Lets the laptop runtime
-# point at a local refs folder (or `kanban_refs/04_Documentacao` inside
-# the repo) instead of the hardcoded desktop path.
-_DEFAULT_DOC_DIR = Path(
-    os.environ.get("KANBAN_DOC_DIR", r"C:\kanban\nifruka\04_Documentacao")
+# R64 + R118 — fallback inteligente: env var > path produção (se existe) >
+# `<repo>/kanban_refs/04_Documentacao`. Faz o servidor "just work" em dev
+# laptop sem `.env` (antes: `refs.available=False` → cells todas cinzas).
+from app.config import resolve_kanban_path
+_DEFAULT_DOC_DIR = resolve_kanban_path(
+    "KANBAN_DOC_DIR",
+    r"C:\kanban\nifruka\04_Documentacao",
+    "kanban_refs/04_Documentacao",
 )
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 

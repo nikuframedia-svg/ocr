@@ -832,10 +832,17 @@ async def sheet_edit(
 # Defaults to the local factory clone in C:\kanban\nifruka\... (set up
 # by the user in this workspace). Set FACTORY_CSV_DIR env var to override
 # or to "" to disable auto-deposit.
-_FACTORY_CSV_DIR = Path(os.environ.get(
-    "FACTORY_CSV_DIR",
-    r"C:\kanban\nifruka\02_Dados_Extraidos\csv",
-)) if os.environ.get("FACTORY_CSV_DIR", "_DEFAULT_") != "" else None
+# R118 — usar resolve_kanban_path para cair em repo-local quando o disco
+# C:\kanban\ não existe (laptop dev sem .env).
+if os.environ.get("FACTORY_CSV_DIR", "_DEFAULT_") != "":
+    from app.config import resolve_kanban_path
+    _FACTORY_CSV_DIR = resolve_kanban_path(
+        "FACTORY_CSV_DIR",
+        r"C:\kanban\nifruka\02_Dados_Extraidos\csv",
+        "kanban_refs/02_Dados_Extraidos/csv",
+    )
+else:
+    _FACTORY_CSV_DIR = None
 
 
 def _factory_csv_filename(sheet: dict) -> str:
@@ -1408,55 +1415,70 @@ async def refs_upload(
         return RedirectResponse(
             "/refs?err=o+ficheiro+tem+de+ser+.xlsx", status_code=303)
 
-    watcher = get_watcher()
-    target = watcher.sap_path if kind == "stocksap" else watcher.plan_path
-    target.parent.mkdir(parents=True, exist_ok=True)
-    # Temp file keeps the .xlsx suffix — openpyxl validates by extension.
-    tmp = target.with_name(f"{target.stem}.upload-tmp{target.suffix}")
-
-    bytes_written = 0
-    with tmp.open("wb") as f:
-        while chunk := await file.read(1024 * 1024):
-            bytes_written += len(chunk)
-            if bytes_written > _MAX_UPLOAD_BYTES:
-                f.close()
-                tmp.unlink(missing_ok=True)
-                return RedirectResponse(
-                    "/refs?err=ficheiro+demasiado+grande", status_code=303)
-            f.write(chunk)
-
-    err = _validate_refs_xlsx(tmp, kind)
-    if err:
-        tmp.unlink(missing_ok=True)
-        return RedirectResponse(
-            f"/refs?err=ficheiro+rejeitado:+{err}", status_code=303)
-
-    # os.replace falha se o ficheiro vivo estiver aberto (ex.: Excel) — tenta
-    # algumas vezes antes de desistir com um erro claro.
-    replaced = False
-    for _ in range(5):
-        try:
-            os.replace(tmp, target)
-            replaced = True
-            break
-        except PermissionError:
-            await asyncio.sleep(0.3)
-    if not replaced:
-        tmp.unlink(missing_ok=True)
-        return RedirectResponse(
-            "/refs?err=ficheiro+em+uso+-+fecha+o+Excel+e+tenta+outra+vez",
-            status_code=303)
-    refs = get_watcher().force_reload()  # recarrega direto do ficheiro
-    # R115 — refs novas invalidam o agregado /obras
+    # R118 — rede de segurança global: qualquer exceção (PermissionError no
+    # mkdir, falha do watcher, etc.) é silenciosa hoje e dá página em branco
+    # ao operador. Captura e devolve mensagem útil em ?err=...
     try:
-        from app.pipeline.obras_status import invalidate_cache as obras_inv
-        obras_inv()
-    except Exception:  # noqa: BLE001
-        pass
-    stats = refs.get("stats", {})
-    n_rows = stats.get("n_plan_rows" if kind == "plan" else "n_lotes", 0)
-    refs_uploads.record(kind, target.name, n_rows)
-    return RedirectResponse(f"/refs?ok={kind}+atualizado", status_code=303)
+        watcher = get_watcher()
+        target = watcher.sap_path if kind == "stocksap" else watcher.plan_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Temp file keeps the .xlsx suffix — openpyxl validates by extension.
+        tmp = target.with_name(f"{target.stem}.upload-tmp{target.suffix}")
+
+        bytes_written = 0
+        with tmp.open("wb") as f:
+            while chunk := await file.read(1024 * 1024):
+                bytes_written += len(chunk)
+                if bytes_written > _MAX_UPLOAD_BYTES:
+                    f.close()
+                    tmp.unlink(missing_ok=True)
+                    return RedirectResponse(
+                        "/refs?err=ficheiro+demasiado+grande", status_code=303)
+                f.write(chunk)
+
+        err = _validate_refs_xlsx(tmp, kind)
+        if err:
+            tmp.unlink(missing_ok=True)
+            return RedirectResponse(
+                f"/refs?err=ficheiro+rejeitado:+{err}", status_code=303)
+
+        # os.replace falha se o ficheiro vivo estiver aberto (ex.: Excel) — tenta
+        # algumas vezes antes de desistir com um erro claro.
+        replaced = False
+        for _ in range(5):
+            try:
+                os.replace(tmp, target)
+                replaced = True
+                break
+            except PermissionError:
+                await asyncio.sleep(0.3)
+        if not replaced:
+            tmp.unlink(missing_ok=True)
+            return RedirectResponse(
+                "/refs?err=ficheiro+em+uso+-+fecha+o+Excel+e+tenta+outra+vez",
+                status_code=303)
+        refs = get_watcher().force_reload()  # recarrega direto do ficheiro
+        # R115 — refs novas invalidam o agregado /obras
+        try:
+            from app.pipeline.obras_status import invalidate_cache as obras_inv
+            obras_inv()
+        except Exception:  # noqa: BLE001
+            pass
+        stats = refs.get("stats", {})
+        n_rows = stats.get("n_plan_rows" if kind == "plan" else "n_lotes", 0)
+        # R118 — record() é best-effort; nunca falhar o ?ok=
+        try:
+            refs_uploads.record(kind, target.name, n_rows)
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+        return RedirectResponse(f"/refs?ok={kind}+atualizado", status_code=303)
+    except Exception as e:  # noqa: BLE001
+        # R118 — captura qualquer exceção não tratada e devolve mensagem
+        # útil ao operador (antes: silêncio / página em branco).
+        traceback.print_exc()
+        msg = str(e)[:80].replace("\n", " ").replace("&", "").replace("?", "")
+        return RedirectResponse(
+            f"/refs?err=erro+inesperado:+{msg}", status_code=303)
 
 
 @app.post("/refs/revalidate")

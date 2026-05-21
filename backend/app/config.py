@@ -1,7 +1,9 @@
 """Application settings loaded from environment / .env."""
 from __future__ import annotations
 
+import os
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field, HttpUrl
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -115,3 +117,32 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Return the process-wide settings singleton."""
     return Settings()
+
+
+def resolve_kanban_path(env_var: str, prod_default: str, repo_subpath: str) -> Path:
+    """R118 — resolve a kanban-data path com fallback inteligente.
+
+    Ordem:
+      1. Se env var set → usa esse path (interpretado relativo ao repo se não absoluto).
+      2. Senão, se o path produção ``prod_default`` existe → usa-o (compat com PC Metalogalva).
+      3. Senão → usa ``<repo>/{repo_subpath}`` (dev laptop).
+
+    Args:
+        env_var: nome da env var (ex: ``KANBAN_DOC_DIR``).
+        prod_default: path Windows-style absoluto do PC produção
+            (ex: ``r"C:\\kanban\\nifruka\\04_Documentacao"``).
+        repo_subpath: sub-path relativo ao repo root, usado como fallback
+            de dev (ex: ``"kanban_refs/04_Documentacao"``).
+
+    O caller pode setar a env var com path absoluto OU relativo. Relativos
+    são resolvidos contra o repo root (não contra CWD).
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    env_val = os.environ.get(env_var)
+    if env_val:
+        p = Path(env_val)
+        return p if p.is_absolute() else repo_root / p
+    prod = Path(prod_default)
+    if prod.exists():
+        return prod
+    return repo_root / repo_subpath

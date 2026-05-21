@@ -19,20 +19,27 @@ Read API:
 from __future__ import annotations
 
 import json
-import os
 import threading
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-_DEFAULT_BASE_DIR = Path(r"C:\kanban\nifruka\03_Cross_Check")
+# R118 — fallback inteligente igual ao de ref_watcher. Sem este fix, em
+# laptop dev sem `.env`, o JSON de cross-check ia parar a C:\kanban\... e
+# o `load_sheet_cross_check` para folhas locais devolvia None.
+from app.config import resolve_kanban_path
+
 _lock = threading.Lock()
 
 
 def _base_dir() -> Path:
-    """Resolve from env or default. Created lazily."""
-    p = Path(os.environ.get("CROSS_CHECK_DIR", str(_DEFAULT_BASE_DIR)))
+    """Resolve from env or smart default. Created lazily."""
+    p = resolve_kanban_path(
+        "CROSS_CHECK_DIR",
+        r"C:\kanban\nifruka\03_Cross_Check",
+        "kanban_refs/03_Cross_Check",
+    )
     p.mkdir(parents=True, exist_ok=True)
     return p
 

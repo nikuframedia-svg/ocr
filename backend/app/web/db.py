@@ -1376,10 +1376,15 @@ def delete_sheet(sheet_id: int) -> dict:
         pass
 
     # 5. Delete factory CSV (operador + date filename pattern)
-    factory_csv_dir = Path(os.environ.get(
+    # R118 — usar resolve_kanban_path para cair em repo-local quando o disco
+    # C:\kanban\ não existe (laptop dev sem .env). Lazy import para evitar
+    # ciclo se config.py vier a importar de db.
+    from app.config import resolve_kanban_path
+    factory_csv_dir = resolve_kanban_path(
         "FACTORY_CSV_DIR",
         r"C:\kanban\nifruka\02_Dados_Extraidos\csv",
-    ))
+        "kanban_refs/02_Dados_Extraidos/csv",
+    )
     if factory_csv_dir.exists() and image_rel:
         # Best-effort: filename from sheet header (matches _factory_csv_filename
         # in main.py logic). Actual filename pattern depends on header.operador
