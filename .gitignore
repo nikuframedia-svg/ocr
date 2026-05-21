@@ -86,3 +86,12 @@ desktop.ini
 # Build / dist
 dist/
 build/
+
+# R121 — Runtime state diverges per deployment (PC Metalogalva vs portátil)
+# A migração inicial PC↔Portátil já foi feita; manter tracked causava
+# conflitos no `git pull` (R121 update.ps1).
+data/app.db
+data/cross_sheet.json
+lexicons/sap_plan_mined.json
+lexicons/learned_overlay.json
+kanban_refs/04_Documentacao/_refs_status.json

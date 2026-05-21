@@ -11,9 +11,12 @@ Write-Host "REPO_ROOT=$root"
 
 # --- Proteger os ficheiros que a aplicacao reescreve enquanto corre -------
 # A base de dados e os ficheiros derivados sao DESTE PC. O 'git pull' nunca
-# os deve sobrepor (nem rebentar por causa deles). 'skip-worktree' diz ao
-# git para os ignorar nos pulls. E idempotente — correr varias vezes nao faz
-# mal. Assim o codigo actualiza-se mas os dados de producao ficam intactos.
+# os deve sobrepor (nem rebentar por causa deles). 'assume-unchanged' diz ao
+# git para nao esperar mudancas no ficheiro (R121: antes era 'skip-worktree'
+# que abortava o pull quando o upstream tambem mexia no ficheiro). Em
+# conjunto com o .gitignore (R121) e idempotente — correr varias vezes nao
+# faz mal. Assim o codigo actualiza-se mas os dados de producao ficam
+# intactos.
 $protect = @(
   "data/app.db",
   "data/cross_sheet.json",
@@ -24,7 +27,7 @@ $protect = @(
 )
 foreach ($f in $protect) {
   if (Test-Path "$root\$f") {
-    git -C $root update-index --skip-worktree $f 2>$null
+    git -C $root update-index --assume-unchanged $f 2>$null
     if ($?) { Write-Host "  protegido: $f" }
   }
 }
