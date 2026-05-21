@@ -1,10 +1,10 @@
 {
-  "version": 3,
-  "last_event_at": "2026-05-20T22:20:46.454990+00:00",
+  "version": 21,
+  "last_event_at": "2026-05-21T10:41:12.616675+00:00",
   "counts": {
     "sheets_uploaded": 0,
     "sheets_validated": 0,
-    "proposals_created": 0,
+    "proposals_created": 18,
     "proposals_accepted": 1,
     "proposals_rejected": 1,
     "policies_promoted": 1,
@@ -14,7 +14,7 @@
     "qwen_sessions": 0,
     "shadow_runs": 0
   },
-  "active_policy_version": 64,
+  "active_policy_version": 103,
   "last_r98_run_at": null,
   "last_qwen_session_at": null,
   "last_circuit_breaker_at": null
