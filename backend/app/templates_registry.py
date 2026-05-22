@@ -5,12 +5,11 @@ This module is the single source of truth for which fields each template
 has, how to detect a template from the OCR'd setor/máquina, and which
 fields participate in DQ / cross-check.
 
-Templates fall into 3 families:
+Templates fall into 2 families:
 
 | Family | Templates | Common schema |
 |---|---|---|
-| TPL103 Produção Colunas | 10 variants | `pri, cliente, ov, of, modelo` + variable tail |
-| TPL103 Paragens | quinadora_pav4_paragens | `motivo, inicio, fim, duracao, resolvido` |
+| TPL103 Produção Colunas | 11 variants | `pri, cliente, ov, of, modelo` + variable tail |
 | TPL102 Produção Gemini | gasparini, hpe32, hd36 | `pf, cliente, of, modelo, cf, m2, qtd, nesting, inicio, fim, np` |
 
 Phase mapping (matches dashboard R29 sector flow). R68: phases
@@ -23,8 +22,7 @@ merged into "Abertura Portinholas".
 | Bobine Formato         | bobine_formato                             |
 | Corte                  | guilhotina, linha_corte, gasparini,        |
 |                        | hpe32, hd36                                |
-| Quinadora              | quinadora_pav4_paragens, quinadora_pav8,   |
-|                        | guifil                                     |
+| Quinadora              | quinadora_pav4, quinadora_pav8, guifil     |
 | Soldadura              | soldline, laser                            |
 | Abertura Portinholas   | manual, robot                              |
 | Acabamento             | (template TBD — aguarda foto real, R69+)   |
@@ -118,7 +116,7 @@ class TemplateSpec:
 
 
 # ============================================================================
-#  TPL103 — Produção Colunas (10 variants)
+#  TPL103 — Produção Colunas (11 variants)
 # ============================================================================
 
 # Common header / footer for all TPL103 production templates
@@ -293,24 +291,21 @@ _EXPEDICAO = TemplateSpec(
     description="Expedição. QTD colunas + CESTA Nº.",
 )
 
-# ============================================================================
-#  TPL103 — Paragens (não-produção)
-# ============================================================================
-
-# Quinadora PAV.4 — Paragens (motivo / início / fim / duração / resolvido)
-_QUINADORA_PAV4_PARAGENS = TemplateSpec(
-    name="quinadora_pav4_paragens",
+# Quinadora PAV.4 — produção de colunas. R123: estava erradamente definido
+# como tabela de paragens (downtime); a folha real é produção normal de
+# colunas, com o mesmo schema do PAV.8.
+_QUINADORA_PAV4 = TemplateSpec(
+    name="quinadora_pav4",
     tpl_code="TPL103",
     phase="Quinadora",
     setor_aliases=("QUINADORA PAV.4", "QUINADORA PAV 4", "QUINADORA PAV4"),
     row_fields=(
-        "motivo", "inicio", "fim", "duracao", "resolvido",
+        "pri", "cliente", "ov", "of", "modelo", "qtd",
     ),
-    footer_fields=(),
-    has_production_rows=False,
-    cross_check_fields=(),
-    csv_block_label="TABELA DE PARAGENS",
-    description="Quinadora PAV.4 paragens (downtime tracking). Sem produção.",
+    cross_check_fields=(
+        "cliente", "ov", "of", "modelo",
+    ),
+    description="Quinadora PAV.4 (produção de colunas).",
 )
 
 # ============================================================================
@@ -376,7 +371,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         _GUILHOTINA,
         _LINHA_CORTE,
         _QUINADORA_PAV8,
-        _QUINADORA_PAV4_PARAGENS,
+        _QUINADORA_PAV4,
         _GUIFIL,
         _SOLDLINE,
         _LASER,
