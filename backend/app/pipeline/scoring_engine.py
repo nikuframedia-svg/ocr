@@ -171,7 +171,9 @@ _STATUS_LABELS = {
     "NA":             "Sem referência",
 }
 
-_ENGINE_VERSION = "shadow_v5_R108"
+# R123 — versão do motor. Gravada em cada cross-check JSON; o viewer
+# regenera on-demand qualquer folha cujo JSON seja de uma versão anterior.
+ENGINE_VERSION = "v6_R123"
 
 
 # Utilidades de distância ----------------------------------------------------
@@ -787,7 +789,7 @@ def shadow_score(
 
     scoring = {
         "checked_at": datetime.now(timezone.utc).isoformat(),
-        "engine_version": _ENGINE_VERSION,
+        "engine_version": ENGINE_VERSION,
         "template_name": template_name,
         "summary": {
             "confirmed": confirmed,
@@ -917,4 +919,4 @@ def cross_check_sheet(
 
 
 __all__ = ["shadow_score", "cross_check_sheet", "CROSS_CHECK_STATUSES",
-           "score_entry", "normalize_of"]
+           "score_entry", "normalize_of", "ENGINE_VERSION"]

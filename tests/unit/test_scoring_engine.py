@@ -167,7 +167,7 @@ class TestShadowScore:
         scoring, total, snapped, confirmed, na, dur_ms = shadow_score(
             sheet_data, None, _REFS
         )
-        assert scoring["engine_version"] == "shadow_v5_R108"
+        assert scoring["engine_version"] == "v6_R123"
         assert scoring["template_name"] == "bobine_formato"
         assert "checked_at" in scoring
         assert scoring["summary"]["total"] == total

@@ -703,12 +703,12 @@ function captureApp() {
     async submitQtds() {
       if (this.savingQtds) return;
 
-      // R122 — sem bloqueios: operador é cruzado automaticamente pelo
-      // backend e a cesta é campo livre. Apenas grava o que estiver.
+      // R123 — o mobile grava as quantidades (qtd, cesta_n,
+      // colunas_produzidas) mas NÃO valida a folha. Cruzar o operador é
+      // automático; validar é um acto humano deliberado, feito no desktop
+      // (revertido o auto-validate de Expedição do R122).
       this.savingQtds = true;
-      // Build edits: QTD + cesta_n (R114) + colunas_produzidas
       const edits = [];
-      const validate = [];
       for (const s of this.qtdSheets) {
         for (const r of s.rows) {
           edits.push({
@@ -729,23 +729,14 @@ function captureApp() {
           field_path: 'footer.colunas_produzidas',
           value: String(s.colunas_produzidas ?? ''),
         });
-        // R122 — operador vem já cruzado pelo backend (_apply_operador_snap)
-        if (this.hasCesta(s)) {
-          validate.push({ sheet_id: s.sheet_id, operador: s.operador || '' });
-        }
       }
       try {
         const res = await fetch('/mobile/qtds-batch', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({edits, validate}),
+          body: JSON.stringify({edits}),
         });
         if (!res.ok) throw new Error('save failed');
-        const body = await res.json();
-        if (body.validate_errors && body.validate_errors.length > 0) {
-          alert('Algumas folhas não validaram:\n'
-                + body.validate_errors.map(e => e.error).join('\n'));
-        }
       } catch (e) {
         alert('Erro a gravar quantidades: ' + e.message);
       }
