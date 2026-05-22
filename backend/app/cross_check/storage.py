@@ -108,6 +108,10 @@ def store_cross_check(
         "refs_loaded_at": cross_check_result.get("refs_loaded_at"),
         "summary": summary,
         "rows": cross_check_result.get("rows", []),
+        # R123 (B9) — header/footer validados passam a ser persistidos
+        # para o viewer os poder colorir (_build_cc_maps lê-os daqui).
+        "header": cross_check_result.get("header", {}),
+        "footer": cross_check_result.get("footer", {}),
         "to_analisar": to_analisar,
     }
 
@@ -171,7 +175,9 @@ def _update_index(
     raw = _read_index()
     sheets = raw.get("sheets", raw) if isinstance(raw, dict) and "sheets" in raw else raw
     total = summary.get("total", 0) or 1
-    ok = summary.get("ok", 0) + summary.get("corrigido", 0) + summary.get("preenchido", 0)
+    # R123 (G1) — o summary do motor v5 usa match/no_match/na; as chaves
+    # antigas (ok/corrigido/preenchido) já não existem e davam ok_rate=0.
+    ok = summary.get("match", 0)
     sheets[str(sheet_id)] = {
         "sheet_id": sheet_id,
         "operador": operador,
@@ -249,7 +255,9 @@ def _update_to_analisar() -> None:
                 "row_index": item.get("row_index"),
                 "field": item.get("field"),
                 "value": item.get("value"),
-                "plan_value": item.get("plan_value"),
+                # R123 (G2) — o item do to_analisar usa a chave `ref`,
+                # não `plan_value` (que vinha sempre None).
+                "plan_value": item.get("ref"),
                 "reason": item.get("reason"),
             })
     out = {
