@@ -20,6 +20,7 @@ Filosofia (Luís, R108 v5):
 from __future__ import annotations
 
 import time
+import unicodedata
 from datetime import datetime, timezone
 from itertools import product
 from typing import Any
@@ -516,67 +517,17 @@ def _make_cell(value: str, status: str, source: str, **extra) -> dict:
     return cell
 
 
-def _apply_winner_to_field(
+def _finish_cell(
     field: str,
     ocr_value: str,
-    winner: dict | None,
-    candidates: list[dict],
-    refs: dict,
+    proposed: str,
+    source: str,
+    score: int | None,
 ) -> dict:
-    if field in _NO_REF_FIELDS:
-        return _make_cell(ocr_value, "NA", "ocr_raw")
-
-    if winner is None and not candidates:
-        # R120 — se o operador escreveu algo num campo validável (não em
-        # _NO_REF_FIELDS) e o motor não achou candidato nem winner no plan,
-        # sinaliza vermelho (very_different) em vez de cinza (NA). Antes
-        # ficava NA e escondia a divergência. Cells com OCR vazio continuam
-        # NA (sem dado para validar).
-        if ocr_value:
-            return _make_cell(ocr_value, "very_different", "ocr_raw")
-        return _make_cell(ocr_value, "NA", "ocr_raw")
-
-    # Extrair valor proposto pela entry vencedora
-    proposed: str | None = None
-    if winner is not None:
-        if field == "of":
-            proposed = str(winner.get("_of") or winner.get("of") or "").strip()
-        elif field == "ov":
-            proposed = str(winner.get("ov") or "").strip()
-        elif field == "modelo":
-            proposed = str(winner.get("designacao") or "").strip()
-        elif field == "cliente":
-            proposed = str(winner.get("cliente") or "").strip()
-        elif field in ("comp_mm", "larg_mm", "lbase", "ltopo", "esp"):
-            plan_attr = {
-                "comp_mm": "comp", "larg_mm": "larg",
-                "lbase": "lbase", "ltopo": "ltopo", "esp": "esp",
-            }[field]
-            v = winner.get(plan_attr)
-            if v is not None and v != "":
-                proposed = str(v)
-
-    # Lote (R123): valida-se directamente contra o StockSAP — o lote
-    # identifica a bobine de matéria-prima e não liga a uma entry do plan.
-    # Lote no SAP → confirmed; parecido com um do SAP → snapped; escrito
-    # mas desconhecido → very_different (amarelo via cc-warn no _cell.html).
-    if field == "lote" and ocr_value:
-        sap_full = refs.get("lotes_sap_full", {}) or {}
-        if ocr_value.strip().upper() in sap_full:
-            proposed = ocr_value
-        elif candidates and candidates[0].get("sim", 0) >= 80:
-            proposed = str(candidates[0].get("value") or "")
-        else:
-            return _make_cell(ocr_value, "very_different", "ocr_raw")
-
-    if not proposed:
-        return _make_cell(ocr_value, "NA", "ocr_raw")
-
+    """Formata o valor proposto, decide o estado vs o OCR, devolve a célula."""
     proposed_fmt = _format_value(field, proposed)
     ocr_fmt = _format_value(field, ocr_value)
-
-    # Status
-    if proposed_fmt.upper() == ocr_fmt.upper() if proposed_fmt and ocr_fmt else False:
+    if proposed_fmt and ocr_fmt and proposed_fmt.upper() == ocr_fmt.upper():
         status = "confirmed"
     elif not ocr_value:
         status = "snapped"  # autofill
@@ -584,10 +535,85 @@ def _apply_winner_to_field(
         status = "very_different"
     else:
         status = "snapped"
+    return _make_cell(proposed_fmt, status, source=source, score=score)
 
-    return _make_cell(
-        proposed_fmt,
-        status,
+
+def _apply_winner_to_field(
+    field: str,
+    ocr_value: str,
+    winner: dict | None,
+    candidates: list[dict],
+    refs: dict,
+    row: dict,
+) -> dict:
+    if field in _NO_REF_FIELDS:
+        return _make_cell(ocr_value, "NA", "ocr_raw")
+
+    # --- Campos validados directamente contra o StockSAP (R123) ---------
+    # O lote e a largura vivem no StockSAP, não na entry do plan_colunas.
+    if field == "lote":
+        if not ocr_value:
+            return _make_cell("", "NA", "ocr_raw")
+        sap_full = refs.get("lotes_sap_full", {}) or {}
+        if ocr_value.strip().upper() in sap_full:
+            return _make_cell(ocr_value, "confirmed", "sap")
+        if candidates and candidates[0].get("sim", 0) >= 80:
+            return _make_cell(str(candidates[0].get("value") or ""), "snapped", "sap")
+        # lote escrito mas desconhecido — amarelo via cc-warn no _cell.html
+        return _make_cell(ocr_value, "very_different", "ocr_raw")
+
+    if field == "larg_mm":
+        # B7 — a entry do plan_colunas não tem coluna larg; a referência é
+        # a largura da bobine no StockSAP, indexada pelo lote da linha.
+        op_lote = (row.get("lote") or "").strip().upper()
+        sap_e = (refs.get("lotes_sap_full", {}) or {}).get(op_lote) if op_lote else None
+        sap_larg = sap_e.get("larg") if sap_e else None
+        if sap_larg in (None, ""):
+            return _make_cell(ocr_value, "NA", "ocr_raw")
+        return _finish_cell(field, ocr_value, str(sap_larg), "sap", None)
+
+    # --- Campos resolvidos pela entry vencedora do plan -----------------
+    if winner is None and not candidates:
+        # R120 — operador escreveu algo num campo validável e o motor não
+        # achou candidato nem winner: vermelho (very_different) em vez de
+        # cinza. OCR vazio continua NA (sem dado para validar).
+        if ocr_value:
+            return _make_cell(ocr_value, "very_different", "ocr_raw")
+        return _make_cell(ocr_value, "NA", "ocr_raw")
+
+    proposed: str | None = None
+    if winner is not None:
+        if field == "of":
+            proposed = str(winner.get("_of") or winner.get("of") or "").strip()
+        elif field == "ov":
+            proposed = str(winner.get("ov") or "").strip()
+        elif field == "modelo":
+            # B8 (R123) — propor o CÓDIGO do modelo, não a designação
+            # longa. O código é a parte antes do " - " na designação.
+            # Se o operador já escreveu o código (está contido na
+            # designação), mantém-se o valor do operador.
+            des = str(winner.get("designacao") or "").strip()
+            modelo_code = des.split(" - ", 1)[0].strip()
+            if ocr_value and ocr_value.upper() in des.upper():
+                proposed = ocr_value
+            else:
+                proposed = modelo_code or des
+        elif field == "cliente":
+            proposed = str(winner.get("cliente") or "").strip()
+        elif field in ("comp_mm", "lbase", "ltopo", "esp"):
+            plan_attr = {
+                "comp_mm": "comp", "lbase": "lbase",
+                "ltopo": "ltopo", "esp": "esp",
+            }[field]
+            v = winner.get(plan_attr)
+            if v is not None and v != "":
+                proposed = str(v)
+
+    if not proposed:
+        return _make_cell(ocr_value, "NA", "ocr_raw")
+
+    return _finish_cell(
+        field, ocr_value, proposed,
         source="plan" if winner else "lexicon",
         score=winner.get("_score") if winner else None,
     )
@@ -636,7 +662,8 @@ def _score_row(
         ocr_value = str(row.get(field) or "").strip()
         if field in _ROW_FIELDS:
             result = _apply_winner_to_field(
-                field, ocr_value, winner, candidates_by_field.get(field, []), refs
+                field, ocr_value, winner,
+                candidates_by_field.get(field, []), refs, row,
             )
         elif field in _NO_REF_FIELDS:
             result = _make_cell(ocr_value, "NA", "ocr_raw")
@@ -664,6 +691,44 @@ def _score_row(
         "winner_score": (winner or {}).get("_score") if winner else None,
     }
     return row_out, snapped, confirmed, na, very_diff, total
+
+
+# Cabeçalho / rodapé ---------------------------------------------------------
+
+def _norm_name(s: object) -> str:
+    """Upper + sem acentos — para comparar nomes de operador com a
+    ListaColaboradores (cujos snames são UPPERCASE ASCII sem acentos)."""
+    d = unicodedata.normalize("NFKD", str(s or ""))
+    return "".join(c for c in d if not unicodedata.combining(c)).strip().upper()
+
+
+def _score_header_footer(header: dict, footer: dict, refs: dict) -> tuple[dict, dict]:
+    """R123 (B9) — valida o cabeçalho e o rodapé em vez de os forçar a NA.
+
+    `operador` cruza-se com a ListaColaboradores e `cod_maquina` com o
+    catálogo de máquinas; os restantes campos (n_operador, setor_maquina,
+    data, footer) recebem validação leve — preenchido = confirmed, vazio
+    = NA — por não haver referência directa para os validar a fundo.
+    """
+    colaboradores = refs.get("colaboradores", {}) or {}
+    snames = {_norm_name(c.get("sname")) for c in colaboradores.values()}
+    maquinas = {str(m).upper() for m in (refs.get("maquinas_by_codmaq", {}) or {})}
+
+    def _cell(field: str, value: object) -> dict:
+        v = str(value).strip() if value is not None else ""
+        if not v:
+            return _make_cell("", "NA", "ocr_raw")
+        if field == "operador" and snames:
+            st = "confirmed" if _norm_name(v) in snames else "very_different"
+        elif field == "cod_maquina" and maquinas:
+            st = "confirmed" if v.upper() in maquinas else "very_different"
+        else:
+            st = "confirmed"  # campo preenchido, sem ref directa
+        return _make_cell(v, st, "ocr_raw")
+
+    header_out = {k: _cell(k, v) for k, v in header.items()}
+    footer_out = {k: _cell(k, v) for k, v in footer.items()}
+    return header_out, footer_out
 
 
 # Entry point ----------------------------------------------------------------
@@ -702,15 +767,20 @@ def shadow_score(
         na += n
         very_diff += vd
 
-    header_out = {
-        k: _make_cell(str(v) if v is not None else "", "NA", "ocr_raw")
-        for k, v in header.items()
-    }
-    footer_out = {
-        k: _make_cell(str(v) if v is not None else "", "NA", "ocr_raw")
-        for k, v in footer.items()
-    }
-    na += len(header_out) + len(footer_out)
+    # R123 (B9) — header/footer validados (operador vs ListaColaboradores,
+    # máquina, etc.) em vez de forçados a NA; os estados contam como
+    # qualquer outra célula.
+    header_out, footer_out = _score_header_footer(header, footer, refs)
+    for cell in (*header_out.values(), *footer_out.values()):
+        st = cell["status"]
+        if st == "confirmed":
+            confirmed += 1
+        elif st == "snapped":
+            snapped += 1
+        elif st == "very_different":
+            very_diff += 1
+        else:
+            na += 1
 
     total = snapped + confirmed + na + very_diff
     duration_ms = int((time.perf_counter() - started) * 1000)

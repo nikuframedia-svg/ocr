@@ -421,19 +421,17 @@ def _apply_codmaq_fill(sheet_id: int, sheet: dict, refs: dict) -> int:
 def _run_and_store_cross_check(sheet_id: int) -> dict | None:
     """Round 33 — invisible verification inline in /upload pipeline.
 
-    Round 61 — for modelo + cliente cells, AUTO-OVERWRITE the operator's
-    value when cross-check finds a MATCH and the value differs from the
-    plan canonical. Targeted (only name-like fields), not the R32
-    aggressive auto-fill (which was reverted in R33).
-
-    Identifiers (of/ov/lote) and physical measurements (comp/larg/esp/
-    lbase/ltopo) are NEVER touched — operator's input authoritative.
+    R109/R123 — para QUALQUER célula que o motor marque como ``snapped``
+    (escolheu ou preencheu um valor diferente do OCR), ``_apply_auto_overwrites``
+    escreve o valor canónico do plano na sheet_data. Células ``very_different``
+    (vermelho) ficam para revisão humana — nunca são aplicadas.
 
     Steps:
       1. Run cross_check_sheet → per-cell status against refs
-      2. R61: apply_auto_overwrites (modelo+cliente when MATCH ≠ canonical)
-      3. If any overwrites were applied, re-run cross_check_sheet on
-         updated sheet_data so the persisted JSON reflects final state
+      2. apply_auto_overwrites (todas as células snapped) + operador snap
+         + cod_maquina fill
+      3. If any edits were applied, re-run cross_check_sheet on the updated
+         sheet_data so the persisted JSON reflects the final state
       4. Persist JSON to ``C:\\kanban\\nifruka\\03_Cross_Check\\``
     """
     sheet = db.get_sheet(sheet_id)
@@ -701,6 +699,16 @@ def _build_cc_maps(sheet_id: int) -> tuple[
                 ref_map[path] = str(ref)
             if info.get("suspended_by_stub"):
                 suspended_map[path] = True
+    # R123 (B9) — header/footer também coloridos (operador, data, máquina,
+    # colunas_produzidas, ...). Cross-checks gravados antes do R123 não os
+    # têm — `cc.get(section)` devolve {} e o cabeçalho fica neutro.
+    for section in ("header", "footer"):
+        for f, info in (cc.get(section) or {}).items():
+            path = f"{section}.{f}"
+            status_map[path] = info.get("status", "NA")
+            ref = info.get("ref")
+            if ref is not None:
+                ref_map[path] = str(ref)
     return status_map, ref_map, suspended_map, snapped_map
 
 
@@ -808,6 +816,18 @@ async def sheet_edit(
         _run_and_store_cross_check(sheet_id)
     except Exception as cc_err:  # noqa: BLE001
         print(f"[cross-check] sheet {sheet_id} edit: {cc_err}", file=sys.stderr)
+    # R123 — re-ler a folha DEPOIS do cross-check: _apply_auto_overwrites /
+    # _apply_operador_snap / _apply_codmaq_fill podem ter reescrito sheet_data
+    # com o valor canónico. Devolver `new` (valor submetido) fazia a célula
+    # mostrar uma coisa e a DB guardar outra → o valor "mudava sozinho" no
+    # próximo reload. Devolvemos o valor REAL persistido.
+    sheet = db.get_sheet(sheet_id) or sheet
+    try:
+        real_value = db._get_by_path(sheet.get("sheet_data") or {}, field_path)
+    except Exception:  # noqa: BLE001
+        real_value = new
+    if real_value is None:
+        real_value = new
     cells_by_path = (sheet.get("dq_audit") or {}).get("cells", {})
     cc_status_by_path, cc_ref_by_path, cc_suspended_by_path, cc_snapped_by_path = (
         _build_cc_maps(sheet_id)
@@ -818,9 +838,9 @@ async def sheet_edit(
         {
             "sheet_id": sheet_id,
             "field_path": field_path,
-            "value": new,
+            "value": real_value,
             "audit": cells_by_path.get(field_path, {}),
-            "edited": old != new,
+            "edited": old != real_value,
             "cc_status_by_path": cc_status_by_path,
             "cc_ref_by_path": cc_ref_by_path,
             "cc_suspended_by_path": cc_suspended_by_path,

@@ -174,11 +174,14 @@ class TestShadowScore:
         assert total == snapped + confirmed + na
         assert dur_ms >= 0
         assert len(scoring["rows"]) == 1
-        # Header/footer always NA
+        # R123 (B9) — header/footer agora validados (já não forçados a NA).
+        assert set(scoring["header"]) == {"operador", "data"}
+        assert set(scoring["footer"]) == {"horas_trabalhadas"}
+        _valid = {"confirmed", "snapped", "very_different", "NA"}
         for v in scoring["header"].values():
-            assert v["status"] == "NA"
+            assert v["status"] in _valid
         for v in scoring["footer"].values():
-            assert v["status"] == "NA"
+            assert v["status"] in _valid
 
     def test_perfect_row_all_confirmed(self):
         """Linha que bate perfeitamente com plan: tudo confirmed, nada snapped."""
@@ -220,17 +223,20 @@ class TestShadowScore:
         scoring, total, snapped, confirmed, na, _ = shadow_score(
             sheet_data, None, empty_refs
         )
-        assert confirmed == 0
-        # R120: campos validáveis com OCR ≠ vazio agora marcam very_different.
+        # Sem refs, nenhuma célula de LINHA confirma.
+        for r in scoring["rows"]:
+            for cell in r["fields"].values():
+                assert cell["status"] != "confirmed"
+        # R120: campos validáveis com OCR ≠ vazio marcam very_different.
         row0 = scoring["rows"][0]["fields"]
         assert row0["cliente"]["status"] == "very_different"
         assert row0["of"]["status"] == "very_different"
         assert row0["lote"]["status"] == "very_different"
         # Campos sem OCR (ov, modelo, comp_mm, ...) ficam NA.
         assert row0["ov"]["status"] == "NA"
-        # Header/_NO_REF/footer continuam NA — comportamento intencional.
-        for v in scoring["header"].values():
-            assert v["status"] == "NA"
+        # R123 (B9) — sem ListaColaboradores, o operador recebe validação
+        # leve (preenchido = confirmed).
+        assert scoring["header"]["operador"]["status"] == "confirmed"
 
     def test_no_ref_fields_stay_ocr_raw(self):
         """PRI/CONI/QTD ficam OCR raw + status NA mesmo com refs disponíveis."""
