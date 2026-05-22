@@ -95,10 +95,13 @@
                  pattern="\d{1,5}" placeholder="ex: 1481"
                  required class="kv-select" style="width:80px;">
         </label>
-        <select name="operador" required class="kv-select" style="min-width:180px;">
-          <option value="">Confirmar nome…</option>
-          {% for op in operadores %}<option value="{{ op }}">{{ op }}</option>{% endfor %}
-        </select>
+        {# R122 — operador vem do cabeçalho já cruzado com o ListaColaboradores
+           (_apply_operador_snap). Sem dropdown de 3 nomes hardcoded. #}
+        <span style="display:inline-flex; align-items:center; gap:6px;">
+          <span class="lbl" style="margin:0; font-size:10px;">OPERADOR</span>
+          <span class="mono" style="font-size:13px;">{{ header.operador or '—' }}</span>
+        </span>
+        <input type="hidden" name="operador" value="{{ header.operador or '' }}">
         <button class="btn primary" type="submit">Validar</button>
       </form>
     {% endif %}

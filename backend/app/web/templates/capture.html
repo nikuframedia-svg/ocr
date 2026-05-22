@@ -211,10 +211,6 @@
                 Folha #<span x-text="sheet.sheet_id"></span> ·
                 <span x-text="sheet.rows.length"></span>
                 <span x-text="sheet.rows.length === 1 ? ' linha' : ' linhas'"></span>
-                <template x-if="hasCesta(sheet)">
-                  <span> · <b x-text="confirmedCount(sheet)"></b> de
-                    <b x-text="sheet.rows.length"></b> confirmadas</span>
-                </template>
               </div>
             </div>
           </div>
@@ -229,15 +225,11 @@
                   <template x-if="hasCesta(sheet)">
                     <th style="text-align:right; padding:6px 8px; width:70px;">CESTA</th>
                   </template>
-                  <template x-if="hasCesta(sheet)">
-                    <th style="text-align:center; padding:6px 8px; width:40px;">OK</th>
-                  </template>
                 </tr>
               </thead>
               <tbody>
                 <template x-for="row in sheet.rows" :key="row.row_index">
-                  <tr style="border-top:1px solid var(--rule);"
-                      :class="{ 'qtd-row-confirmed': isRowConfirmed(sheet, row.row_index) }">
+                  <tr style="border-top:1px solid var(--rule);">
                     <td class="mono tiny" style="padding:8px;" x-text="row.row_index + 1"></td>
                     <td class="mono tiny" style="padding:8px; font-weight:600;"
                         x-text="row.of || '—'"></td>
@@ -255,26 +247,14 @@
                     </td>
                     <template x-if="hasCesta(sheet)">
                       <td style="padding:6px 8px;">
+                        {# R122 — cesta é campo de texto livre, sem pattern #}
                         <input type="text" inputmode="numeric"
-                               pattern="\d{1,4}"
                                placeholder="cesta"
                                :value="row.cesta_n"
                                @input="row.cesta_n = $event.target.value"
                                style="width:100%; padding:6px; text-align:right;
                                       font-family:var(--font-mono); font-size:14px;
                                       border:1px solid var(--rule-2); border-radius:4px;">
-                      </td>
-                    </template>
-                    <template x-if="hasCesta(sheet)">
-                      <td style="padding:6px 4px; text-align:center;">
-                        <button type="button" class="qtd-ok-btn"
-                                :class="{ active: isRowConfirmed(sheet, row.row_index) }"
-                                @click="toggleConfirm(sheet, row.row_index)"
-                                :title="isRowConfirmed(sheet, row.row_index)
-                                  ? 'Confirmada — clica para tirar'
-                                  : 'Confirmar valores OCR desta linha'">
-                          ✓
-                        </button>
                       </td>
                     </template>
                   </tr>
@@ -285,7 +265,7 @@
                   <td colspan="3" style="padding:8px; font-weight:600;">
                     Total colunas produzidas
                   </td>
-                  <td :colspan="hasCesta(sheet) ? 3 : 1" style="padding:6px 8px;">
+                  <td :colspan="hasCesta(sheet) ? 2 : 1" style="padding:6px 8px;">
                     <input type="number" inputmode="numeric"
                            :value="sheet.colunas_produzidas"
                            @input="sheet.colunas_produzidas = $event.target.value"
@@ -296,25 +276,6 @@
                 </tr>
               </tfoot>
             </table>
-          </div>
-        </div>
-      </template>
-
-      {# R114 — quando há cestas para validar mobile, mostrar selector de operador #}
-      <template x-if="anyCesta">
-        <div class="card">
-          <div class="card-b">
-            <label class="muted tiny" style="display:block; margin-bottom:6px;">
-              Quem está a validar?
-            </label>
-            <select x-model="validateOperador"
-                    style="width:100%; padding:8px; font-size:14px;
-                           border:1px solid var(--rule-2); border-radius:4px;">
-              <option value="">— Escolher operador —</option>
-              {% for op in operadores %}
-                <option value="{{ op }}">{{ op }}</option>
-              {% endfor %}
-            </select>
           </div>
         </div>
       </template>
@@ -399,9 +360,6 @@ function captureApp() {
     _pollTimer: null,         // R71 — setInterval handle
     qtdSheets: [],            // payload from GET /mobile/qtds for editing QTDs
     savingQtds: false,
-    // R114 — mobile cesta + confirmar
-    confirmedByKey: {},       // { "<sheet_id>:<row_index>": true }
-    validateOperador: '',     // operador escolhido para validar (Expedição)
     _stream: null,
     _photoCounter: 0,
     _backLockArmed: false,
@@ -733,7 +691,7 @@ function captureApp() {
       }
     },
 
-    // R114 — helpers para cesta + confirmação
+    // R114 — helpers para cesta (R122: removidos helpers de confirmação)
     hasCesta(sheet) {
       return Array.isArray(sheet.row_fields_extra)
         && sheet.row_fields_extra.includes('cesta_n');
@@ -741,64 +699,12 @@ function captureApp() {
     get anyCesta() {
       return this.qtdSheets.some(s => this.hasCesta(s));
     },
-    _confirmKey(sheet, ri) { return sheet.sheet_id + ':' + ri; },
-    isRowConfirmed(sheet, ri) {
-      return !!this.confirmedByKey[this._confirmKey(sheet, ri)];
-    },
-    toggleConfirm(sheet, ri) {
-      const key = this._confirmKey(sheet, ri);
-      if (this.confirmedByKey[key]) {
-        delete this.confirmedByKey[key];
-      } else {
-        this.confirmedByKey[key] = true;
-      }
-    },
-    confirmedCount(sheet) {
-      return sheet.rows.filter(r => this.isRowConfirmed(sheet, r.row_index)).length;
-    },
 
     async submitQtds() {
       if (this.savingQtds) return;
 
-      // R114 — Validações para Expedição (folhas com cesta)
-      if (this.anyCesta) {
-        if (!this.validateOperador) {
-          alert('Escolhe quem está a validar antes de enviar.');
-          return;
-        }
-        // Cestas vazias?
-        const emptyCestas = [];
-        for (const s of this.qtdSheets) {
-          if (!this.hasCesta(s)) continue;
-          for (const r of s.rows) {
-            if (!String(r.cesta_n || '').trim()) {
-              emptyCestas.push(`Folha ${s.sheet_id}, linha ${r.row_index + 1}`);
-            }
-          }
-        }
-        if (emptyCestas.length > 0) {
-          alert('Preenche o número da cesta em todas as linhas:\n'
-                + emptyCestas.slice(0, 5).join('\n')
-                + (emptyCestas.length > 5 ? `\n+${emptyCestas.length - 5} mais` : ''));
-          return;
-        }
-        // Confirmações parciais? aviso mas não bloqueia
-        const unconfirmed = [];
-        for (const s of this.qtdSheets) {
-          if (!this.hasCesta(s)) continue;
-          const n = this.confirmedCount(s);
-          if (n < s.rows.length) {
-            unconfirmed.push(`Folha ${s.sheet_id}: ${n} de ${s.rows.length} linhas confirmadas`);
-          }
-        }
-        if (unconfirmed.length > 0) {
-          const proceed = confirm(
-            'Há linhas não confirmadas:\n' + unconfirmed.join('\n')
-            + '\n\nQueres validar mesmo assim?');
-          if (!proceed) return;
-        }
-      }
-
+      // R122 — sem bloqueios: operador é cruzado automaticamente pelo
+      // backend e a cesta é campo livre. Apenas grava o que estiver.
       this.savingQtds = true;
       // Build edits: QTD + cesta_n (R114) + colunas_produzidas
       const edits = [];
@@ -823,8 +729,9 @@ function captureApp() {
           field_path: 'footer.colunas_produzidas',
           value: String(s.colunas_produzidas ?? ''),
         });
-        if (this.hasCesta(s) && this.validateOperador) {
-          validate.push({sheet_id: s.sheet_id, operador: this.validateOperador});
+        // R122 — operador vem já cruzado pelo backend (_apply_operador_snap)
+        if (this.hasCesta(s)) {
+          validate.push({ sheet_id: s.sheet_id, operador: s.operador || '' });
         }
       }
       try {
@@ -848,8 +755,6 @@ function captureApp() {
 
     skipConfirm() {
       // Operator chose not to edit QTDs — proceed to done with existing values
-      this.confirmedByKey = {};
-      this.validateOperador = '';
       this.stage = 'done';
     },
 

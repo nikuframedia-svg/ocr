@@ -893,8 +893,11 @@ async def sheet_validate(
     # Round 34 — mobile cannot validate (server-side enforcement)
     if _is_mobile_request(request):
         raise HTTPException(403, "Validação só pode ser feita em desktop")
-    if operador not in OPERADORES:
-        raise HTTPException(400, f"unknown operador: {operador}")
+    # R122 — o operador vem do cabeçalho já cruzado contra o
+    # ListaColaboradores (_apply_operador_snap). Já não há dropdown de
+    # 3 nomes hardcoded; só rejeitamos se vier mesmo vazio.
+    if not operador.strip():
+        raise HTTPException(400, "operador em falta — corrige o cabeçalho antes de validar")
     # Round 50 — re-validate bloqueada; folha validada é final.
     sheet_pre = db.get_sheet(sheet_id)
     if sheet_pre is None:
