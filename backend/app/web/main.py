@@ -682,7 +682,18 @@ def _build_cc_maps(sheet_id: int) -> tuple[
 
     Returns ({}, {}, {}, {}) if no cross-check data available."""
     from app.cross_check.storage import load_sheet_cross_check
+    from app.pipeline.scoring_engine import ENGINE_VERSION
     cc = load_sheet_cross_check(sheet_id)
+    # R123 (D1) — fallback on-demand. A folha nunca teve cross-check
+    # (processada antes do R118) ou o JSON é de um motor anterior ao R123:
+    # regenera-o agora e relê, para nenhuma folha abrir toda cinza nem com
+    # cores de um motor antigo.
+    if not cc or cc.get("engine_version") != ENGINE_VERSION:
+        try:
+            _run_and_store_cross_check(sheet_id)
+            cc = load_sheet_cross_check(sheet_id)
+        except Exception:  # noqa: BLE001
+            pass
     snapped_map = _build_snapped_map_from_raw(db.get_sheet(sheet_id) or {})
     if not cc:
         return {}, {}, {}, snapped_map
@@ -1074,23 +1085,18 @@ def mobile_qtds(ids: str) -> JSONResponse:
 @app.post("/mobile/qtds-batch")
 async def mobile_qtds_batch(request: Request) -> JSONResponse:
     """Apply a batch of qty edits at once. Body is JSON:
-        {
-          "edits": [ {sheet_id, field_path, value}, ... ],
-          "validate": [ {sheet_id, operador}, ... ]   # R114, optional
-        }
+        { "edits": [ {sheet_id, field_path, value}, ... ] }
 
     Restricts field_path to qty/cesta_n/colunas_produzidas only —
     anything else is rejected. Re-cross-checks each affected sheet.
-    R114 — opcionalmente valida folhas mobile (Expedição) sem precisar
-    de desktop.
+
+    R123 — já NÃO valida folhas: o auto-validate mobile do R114/R122 foi
+    revertido. Validar é um acto humano deliberado, feito no desktop.
     """
     body = await request.json()
     edits = body.get("edits", [])
     if not isinstance(edits, list):
         raise HTTPException(400, "edits must be a list")
-    validate_requests = body.get("validate", []) or []
-    if not isinstance(validate_requests, list):
-        validate_requests = []
 
     # Whitelist: qty + cesta_n (R114) + footer counters
     allowed_suffixes = (
@@ -1128,48 +1134,11 @@ async def mobile_qtds_batch(request: Request) -> JSONResponse:
         except Exception:  # noqa: BLE001
             traceback.print_exc()
 
-    # R114 — validate sheets after edits
-    validated: list[int] = []
-    validate_errors: list[dict] = []
-    for v in validate_requests:
-        try:
-            sid = int(v.get("sheet_id"))
-            operador = str(v.get("operador") or "").strip()
-        except (TypeError, ValueError):
-            validate_errors.append({"req": v, "error": "bad shape"})
-            continue
-        if not operador:
-            validate_errors.append({"req": v, "error": "operador obrigatório"})
-            continue
-        sheet = db.get_sheet(sid)
-        if sheet is None:
-            validate_errors.append({"req": v, "error": "sheet not found"})
-            continue
-        if sheet.get("status") == "validated":
-            validate_errors.append({"req": v, "error": "já validada"})
-            continue
-        try:
-            db.validate_sheet(sid, operador)
-            validated.append(sid)
-            # Invalidate of_consumption (R113) + obras_status (R115) —
-            # peças consumidas nesta folha contam agora
-            try:
-                from app.pipeline.of_consumption import invalidate_cache
-                invalidate_cache()
-                from app.pipeline.obras_status import invalidate_cache as obras_inv
-                obras_inv()
-            except Exception:  # noqa: BLE001
-                pass
-        except Exception as ex:  # noqa: BLE001
-            validate_errors.append({"req": v, "error": str(ex)})
-
     return JSONResponse({
         "ok": True,
         "applied": applied,
         "errors": errors,
         "sheets_updated": list(affected_sheets),
-        "validated": validated,
-        "validate_errors": validate_errors,
     })
 
 

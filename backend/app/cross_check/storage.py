@@ -106,6 +106,8 @@ def store_cross_check(
         "sheet_status": sheet_status,
         "checked_at": cross_check_result.get("checked_at"),
         "refs_loaded_at": cross_check_result.get("refs_loaded_at"),
+        # R123 — versão do motor; o viewer regenera JSONs de versões antigas.
+        "engine_version": cross_check_result.get("engine_version"),
         "summary": summary,
         "rows": cross_check_result.get("rows", []),
         # R123 (B9) — header/footer validados passam a ser persistidos
