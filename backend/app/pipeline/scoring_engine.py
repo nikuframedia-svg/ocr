@@ -431,28 +431,18 @@ def _entry_key(entry: dict) -> tuple:
     )
 
 
-def _entry_is_real(entry: dict, row: dict, refs: dict) -> bool:
-    """R108 v5 — a única validação: entry vem do plan (sempre) e, se o
-    operador escreveu lote, esse lote existe no SAP. Não compara com OCR."""
-    op_lote = (row.get("lote") or "").strip().upper()
-    if op_lote:
-        sap_full = refs.get("lotes_sap_full", {}) or {}
-        if op_lote not in sap_full:
-            return False
-    return True
-
-
 def _find_winner_entry(
     candidates_by_field: dict[str, list[dict]],
     row: dict,
     refs: dict,
 ) -> dict | None:
-    """R108 v5 + R113 — entries vencedoras são reais (existem no plan + SAP),
-    e quando há vários scores iguais, preferimos a que falta menos para
-    fechar (operador acaba uma peça e passa à próxima naturalmente).
+    """R108 v5 + R113 + R123 — escolhe a entry do plan com melhor score.
 
-    Entries com `remaining ≤ 0` (já totalmente produzidas) são filtradas.
-    Empate em score → menor remaining ganha.
+    R123: já não se exige que o lote esteja no SAP (o lote passou a ser
+    um campo pontuado por `score_entry`), nem se filtram entries já
+    produzidas — a folha é fotografada *depois* de produzir, pelo que a
+    peça certa tem quase sempre `remaining ≤ 0` e era erradamente
+    eliminada. O `remaining` fica só como desempate entre scores iguais.
     """
     from app.pipeline.of_consumption import remaining as _remaining
 
@@ -466,13 +456,10 @@ def _find_winner_entry(
     if not entries_by_key:
         return None
 
-    # Recolher entries elegíveis (reais + ainda por produzir).
-    # Tuple (-score, remaining_sortable, key, entry) — depois sort asc:
-    # primeiro o maior score (negativo desempata), depois menor remaining.
+    # Tuple (-score, remaining_sortable, key, entry) — sort asc: primeiro
+    # o maior score (negativo desempata), depois menor remaining.
     eligible: list[tuple[float, float, tuple, dict]] = []
     for k, e in entries_by_key.items():
-        if not _entry_is_real(e, row, refs):
-            continue
         if "_of" not in e:
             e = dict(e)
             e["_of"] = k[0]
@@ -480,9 +467,6 @@ def _find_winner_entry(
         if score < 1:
             continue
         rem = _remaining(e)
-        # Entry totalmente produzida — não a recomendar.
-        if rem <= 0:
-            continue
         rem_sort = 9e9 if rem == float("inf") else rem
         eligible.append((-float(score), rem_sort, k, e))
 
@@ -572,9 +556,18 @@ def _apply_winner_to_field(
             if v is not None and v != "":
                 proposed = str(v)
 
-    # Lote: o operador escreveu, e validámos que está no SAP via _entry_is_real
-    if field == "lote" and winner is not None and ocr_value:
-        proposed = ocr_value  # lote OCR mantido (já validado no SAP)
+    # Lote (R123): valida-se directamente contra o StockSAP — o lote
+    # identifica a bobine de matéria-prima e não liga a uma entry do plan.
+    # Lote no SAP → confirmed; parecido com um do SAP → snapped; escrito
+    # mas desconhecido → very_different (amarelo via cc-warn no _cell.html).
+    if field == "lote" and ocr_value:
+        sap_full = refs.get("lotes_sap_full", {}) or {}
+        if ocr_value.strip().upper() in sap_full:
+            proposed = ocr_value
+        elif candidates and candidates[0].get("sim", 0) >= 80:
+            proposed = str(candidates[0].get("value") or "")
+        else:
+            return _make_cell(ocr_value, "very_different", "ocr_raw")
 
     if not proposed:
         return _make_cell(ocr_value, "NA", "ocr_raw")
