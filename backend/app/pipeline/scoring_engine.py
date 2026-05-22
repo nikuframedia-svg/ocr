@@ -595,22 +595,34 @@ def _apply_winner_to_field(
 
 # Scoring de uma linha completa ----------------------------------------------
 
-def _score_row(row_idx: int, row: dict, refs: dict, idx: dict) -> tuple[dict, int, int, int, int, int]:
+def _score_row(
+    row_idx: int,
+    row: dict,
+    refs: dict,
+    idx: dict,
+    row_fields: tuple[str, ...],
+) -> tuple[dict, int, int, int, int, int]:
+    """R123 — itera os `row_fields` do template (não os 10 fixos do bobine).
+
+    Cada campo cai num de três tratamentos:
+      - campo com referência no plan/SAP (_ROW_FIELDS) → winner/candidatos;
+      - campo sem referência (_NO_REF_FIELDS: pri, qtd, coni, ...) → NA;
+      - campo próprio do template (cesta_n, qtd_metros, m2, sobras, ...) →
+        validação sintáctica leve: preenchido = confirmed, vazio = NA.
+    """
+    # Candidatos só para os campos do template que o motor sabe validar.
     candidates_by_field: dict[str, list[dict]] = {}
     for field in _ROW_FIELDS:
-        candidates_by_field[field] = _candidates_for_field(field, row, refs, idx)
+        if field in row_fields:
+            candidates_by_field[field] = _candidates_for_field(field, row, refs, idx)
 
     winner = _find_winner_entry(candidates_by_field, row, refs)
 
     fields_out: dict[str, dict] = {}
     snapped = confirmed = na = very_diff = 0
-    for field in _ROW_FIELDS:
-        ocr_value = str(row.get(field) or "").strip()
-        result = _apply_winner_to_field(
-            field, ocr_value, winner, candidates_by_field[field], refs
-        )
-        fields_out[field] = result
-        st = result["status"]
+
+    def _tally(st: str) -> None:
+        nonlocal snapped, confirmed, na, very_diff
         if st == "snapped":
             snapped += 1
         elif st == "confirmed":
@@ -620,12 +632,29 @@ def _score_row(row_idx: int, row: dict, refs: dict, idx: dict) -> tuple[dict, in
         else:
             na += 1
 
+    for field in row_fields:
+        ocr_value = str(row.get(field) or "").strip()
+        if field in _ROW_FIELDS:
+            result = _apply_winner_to_field(
+                field, ocr_value, winner, candidates_by_field.get(field, []), refs
+            )
+        elif field in _NO_REF_FIELDS:
+            result = _make_cell(ocr_value, "NA", "ocr_raw")
+        else:
+            # Campo próprio do template, sem referência no plan/SAP —
+            # validação sintáctica: preenchido = confirmed, vazio = NA.
+            result = _make_cell(
+                ocr_value, "confirmed" if ocr_value else "NA", "ocr_raw"
+            )
+        fields_out[field] = result
+        _tally(result["status"])
+
+    # Campos extra que o OCR leu fora do schema do template — registar NA.
     for k, v in row.items():
-        if k in _ROW_FIELDS or k in fields_out:
+        if k in fields_out:
             continue
-        if k in _NO_REF_FIELDS:
-            fields_out[k] = _make_cell(str(v) if v is not None else "", "NA", "ocr_raw")
-            na += 1
+        fields_out[k] = _make_cell(str(v) if v is not None else "", "NA", "ocr_raw")
+        na += 1
 
     total = snapped + confirmed + na + very_diff
     row_out = {
@@ -657,11 +686,16 @@ def shadow_score(
     header = sheet_data.get("header") or {}
     footer = sheet_data.get("footer") or {}
     template_name = sheet_data.get("template_name", "bobine_formato")
+    # R123 — o motor itera os row_fields do template da folha, não os 10
+    # campos fixos do bobine. Folhas não-bobine deixam de ter os campos
+    # próprios (cesta_n, qtd_metros, m2, ...) invisíveis ao cross-check.
+    from app.templates_registry import get_template
+    row_fields = get_template(template_name).row_fields
 
     out_rows = []
     snapped = confirmed = na = very_diff = 0
     for i, row in enumerate(rows):
-        row_out, s, c, n, vd, _t = _score_row(i, row, refs, idx)
+        row_out, s, c, n, vd, _t = _score_row(i, row, refs, idx, row_fields)
         out_rows.append(row_out)
         snapped += s
         confirmed += c
