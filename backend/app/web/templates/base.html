@@ -302,5 +302,15 @@ function liveBanner(initialWatermark) {
 }
 </script>
 {% endif %}
+<script>
+  // R123 — re-inicializar Alpine no conteúdo trazido por HTMX. As células
+  // editáveis (_cell.html) são swapped com hx-swap="outerHTML" e o <td> é o
+  // próprio root x-data; sem isto, após a 1ª edição a célula podia ficar sem
+  // handleClick() ligado → clique morto ("outras vezes não faz nada").
+  // Alpine marca nós já processados com __x, logo não há dupla-init.
+  document.body.addEventListener('htmx:afterSwap', function (e) {
+    if (window.Alpine && e.target) Alpine.initTree(e.target);
+  });
+</script>
 </body>
 </html>

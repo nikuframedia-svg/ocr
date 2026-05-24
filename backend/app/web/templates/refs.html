@@ -60,12 +60,23 @@
         <div class="card-h-sub">plan_colunas_cpis.xlsx — OFs, OVs, clientes, fases</div>
       </div>
       <div class="card-b">
+        {# R123 — feedback de ficheiro: mostra o nome escolhido antes de
+           submeter e desativa o botão durante o upload (anti-duplo-clique). #}
         <form method="post" action="/refs/upload" enctype="multipart/form-data"
-              class="refs-form">
+              class="refs-form" x-data="{ fileName: '', uploading: false }"
+              @submit="uploading = true">
           <input type="hidden" name="kind" value="plan">
-          <input type="file" name="file" accept=".xlsx,.xlsm" required>
-          <button class="btn primary" type="submit">Carregar plano</button>
+          <input type="file" name="file" accept=".xlsx,.xlsm" required
+                 @change="fileName = $event.target.files.length ? $event.target.files[0].name : ''">
+          <div class="refs-file-chosen" x-show="fileName" x-cloak>
+            <span>✓ Ficheiro selecionado:</span> <strong x-text="fileName"></strong>
+          </div>
+          <button class="btn primary" type="submit" :disabled="uploading">
+            <span x-show="!uploading">Carregar plano</span>
+            <span x-show="uploading" x-cloak>A carregar…</span>
+          </button>
         </form>
+        <div class="muted tiny">Ficheiro atual: {{ plan_file_date }}</div>
       </div>
     </div>
     <div class="card">
@@ -74,12 +85,22 @@
         <div class="card-h-sub">StockSAP.xlsx — lotes, espessura, largura</div>
       </div>
       <div class="card-b">
+        {# R123 — feedback de ficheiro (ver card "Carregar plano"). #}
         <form method="post" action="/refs/upload" enctype="multipart/form-data"
-              class="refs-form">
+              class="refs-form" x-data="{ fileName: '', uploading: false }"
+              @submit="uploading = true">
           <input type="hidden" name="kind" value="stocksap">
-          <input type="file" name="file" accept=".xlsx,.xlsm" required>
-          <button class="btn primary" type="submit">Carregar StockSAP</button>
+          <input type="file" name="file" accept=".xlsx,.xlsm" required
+                 @change="fileName = $event.target.files.length ? $event.target.files[0].name : ''">
+          <div class="refs-file-chosen" x-show="fileName" x-cloak>
+            <span>✓ Ficheiro selecionado:</span> <strong x-text="fileName"></strong>
+          </div>
+          <button class="btn primary" type="submit" :disabled="uploading">
+            <span x-show="!uploading">Carregar StockSAP</span>
+            <span x-show="uploading" x-cloak>A carregar…</span>
+          </button>
         </form>
+        <div class="muted tiny">Ficheiro atual: {{ sap_file_date }}</div>
       </div>
     </div>
   </div>
