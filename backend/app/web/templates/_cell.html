@@ -54,7 +54,17 @@
       lastTap: 0,
       isMobile() { return window.innerWidth <= 768; },
       handleClick() {
-        if (!this.isMobile()) { this.editing = true; return; }
+        if (!this.isMobile()) {
+          this.editing = true;
+          // R123 — focar o input no $nextTick (depois de x-show o tornar
+          // visível). O x-init antigo corria na init do componente, com o
+          // form ainda display:none, e focus() num elemento oculto é no-op
+          // — por isso a edição "muitas vezes não fazia nada".
+          this.$nextTick(() => {
+            if (this.$refs.input) { this.$refs.input.focus(); this.$refs.input.select(); }
+          });
+          return;
+        }
         // R58 — duplo-toque (<400ms) abre o modal com input vazio para
         // o operador poder escrever o novo valor de raiz, sem ter de
         // apagar o existente.
@@ -93,11 +103,20 @@
         hx-swap="outerHTML"
         @submit="editing = false">
     <input type="hidden" name="field_path" value="{{ field_path }}">
-    <input type="text" name="new_value" value="{{ value }}"
-           x-init="$nextTick(() => $el.focus())"
-           @blur="$el.form.requestSubmit()"
-           @keydown.escape="editing = false; $el.value = original"
-           style="width:100%; font-family:var(--font-mono); font-size:12px; padding:2px 4px; border:1px solid var(--ink); border-radius:3px;">
+    {# R123 — botões ✓/✕ visíveis (antes só blur/Enter, save escondido).
+       O blur só guarda quando o foco sai do form: clicar em ✓ ou ✕ tem
+       relatedTarget dentro do form e não dispara um submit duplicado. #}
+    <div style="display:flex; gap:3px; align-items:center;">
+      <input type="text" name="new_value" value="{{ value }}" x-ref="input"
+             @blur="if (!$el.form.contains($event.relatedTarget)) $el.form.requestSubmit()"
+             @keydown.escape="editing = false; $el.value = original"
+             style="width:100%; font-family:var(--font-mono); font-size:12px; padding:2px 4px; border:1px solid var(--ink); border-radius:3px;">
+      <button type="submit" title="Guardar"
+              style="flex:none; padding:2px 7px; font-size:12px; line-height:1.4; border:1px solid var(--ink); border-radius:3px; background:var(--ink); color:var(--paper); cursor:pointer;">✓</button>
+      <button type="button" title="Cancelar"
+              @click="editing = false; $refs.input.value = original"
+              style="flex:none; padding:2px 7px; font-size:12px; line-height:1.4; border:1px solid var(--rule-2); border-radius:3px; background:var(--paper); cursor:pointer;">✕</button>
+    </div>
   </form>
   {% endif %}
 </td>
