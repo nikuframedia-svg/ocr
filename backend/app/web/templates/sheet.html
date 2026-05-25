@@ -3,13 +3,19 @@
 {% block content %}
 <div x-data="cellEditor()" @open-cell-editor.window="open($event.detail)">
 
-{# R88: botão "← Voltar à lista" preserva filtros da página de origem
-   (queue ou kanbans). Só aparece quando o URL veio com ?back=<path>. #}
-{% if back_url %}
+{# R88+: seta "← Voltar à lista" sempre visível.
+   - back_url (de ?back=): preserva filtros do histórico/kanbans.
+   - Sem back_url: history.back() volta à página anterior do browser
+     (resiliente a navegação interna na folha, mudar de aba, F5).
+   - Fallback final: /queue. #}
 <div style="margin-bottom:10px;">
-  <a href="{{ back_url }}" class="btn ghost" style="font-size:12px;">← Voltar à lista</a>
+  {% if back_url %}
+    <a href="{{ back_url }}" class="btn ghost" style="font-size:12px;">← Voltar à lista</a>
+  {% else %}
+    <a href="/queue" onclick="if(history.length>1){history.back();return false;}"
+       class="btn ghost" style="font-size:12px;">← Voltar à lista</a>
+  {% endif %}
 </div>
-{% endif %}
 
 <div class="page-h">
   <div style="flex:1; min-width:0;">
@@ -200,53 +206,9 @@
   <div style="display:flex; flex-direction:column; gap:12px;">
     {# R56 — color legend for the cross-check status of each cell. #}
     {% include "_legend.html" %}
-    {# R95 — Validação manual das cestas para folhas de Expedição.
-       Inputs ligam ao form de validate (id="validate-form") via attribute
-       form="..." e só são submetidos quando o operador clica Validar.
-       Required + pattern impedem submeter com cesta vazia ou não-numérica. #}
-    {% if template_name == "expedicao" and sheet.status != 'validated' %}
-    <div class="card" style="margin-bottom:16px;">
-      <div class="card-h">
-        <div class="card-h-title">Confirmar Cestas (Expedição)</div>
-        <div class="card-h-sub muted tiny">
-          Verifica o nº de cada cesta manualmente antes de validar.
-          Os valores aqui são submetidos com o botão "Validar" no topo.
-        </div>
-      </div>
-      <div class="scroll-x">
-        <table class="tbl">
-          <thead>
-            <tr>
-              <th>L</th>
-              <th>OF</th>
-              <th>Modelo</th>
-              <th style="text-align:right;">QTD</th>
-              <th>Cesta Nº</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for r in rows %}
-            <tr>
-              <td class="mono"><b>L{{ loop.index }}</b></td>
-              <td class="mono">{{ r.of or '—' }}</td>
-              <td>{{ r.modelo or '—' }}</td>
-              <td class="mono" style="text-align:right;">{{ r.qtd or '—' }}</td>
-              <td>
-                <input type="text" name="cesta_{{ loop.index0 }}"
-                       value="{{ r.cesta_n or '' }}"
-                       pattern="\d{1,4}" inputmode="numeric"
-                       form="validate-form"
-                       placeholder="ex: 024"
-                       required
-                       class="kv-select" style="width:80px;">
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-    {% endif %}
+    {# R126 — bloco "Confirmar Cestas (Expedição)" removido.
+       A edição da cesta (`cesta_n`) é exclusiva do fluxo mobile de captura
+       (capture.html, stage qtd_confirm). Histórico/desktop não edita cesta. #}
 
     <!-- Rows -->
     <div class="card">

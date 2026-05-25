@@ -177,16 +177,21 @@ _LINHA_CORTE = TemplateSpec(
 )
 
 # Quinadora PAV.8 — produção, tail é apenas QTD
+# R126: alargado para alinhar com guifil — pav4/pav8 e guifil processam o
+# mesmo tipo de peça e o plano tem coni/esp/lbase/ltopo na linha. Antes só
+# tinha cliente/ov/of/modelo validáveis → cobertura de cross-check fraca.
 _QUINADORA_PAV8 = TemplateSpec(
     name="quinadora_pav8",
     tpl_code="TPL103",
     phase="Quinadora",
     setor_aliases=("QUINADORA PAV.8", "QUINADORA PAV 8", "QUINADORA PAV8"),
     row_fields=(
-        "pri", "cliente", "ov", "of", "modelo", "qtd",
+        "pri", "cliente", "ov", "of", "modelo",
+        "qtd", "coni", "esp", "lbase", "ltopo",
     ),
     cross_check_fields=(
         "cliente", "ov", "of", "modelo",
+        "esp", "lbase", "ltopo",
     ),
     csv_block_label="TABELA DE EXPEDIÇÃO",
     description="Quinadora PAV.8 (colunas expedidas).",
@@ -294,16 +299,19 @@ _EXPEDICAO = TemplateSpec(
 # Quinadora PAV.4 — produção de colunas. R123: estava erradamente definido
 # como tabela de paragens (downtime); a folha real é produção normal de
 # colunas, com o mesmo schema do PAV.8.
+# R126: alargado para coni/esp/lbase/ltopo, idêntico a pav8 e guifil.
 _QUINADORA_PAV4 = TemplateSpec(
     name="quinadora_pav4",
     tpl_code="TPL103",
     phase="Quinadora",
     setor_aliases=("QUINADORA PAV.4", "QUINADORA PAV 4", "QUINADORA PAV4"),
     row_fields=(
-        "pri", "cliente", "ov", "of", "modelo", "qtd",
+        "pri", "cliente", "ov", "of", "modelo",
+        "qtd", "coni", "esp", "lbase", "ltopo",
     ),
     cross_check_fields=(
         "cliente", "ov", "of", "modelo",
+        "esp", "lbase", "ltopo",
     ),
     description="Quinadora PAV.4 (produção de colunas).",
 )

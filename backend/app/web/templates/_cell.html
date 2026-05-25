@@ -44,8 +44,12 @@
 {% endif %}
 {# Round 50 — sheets validadas são read-only; sem click handler nem form. #}
 {% set _is_validated = sheet_status is defined and sheet_status == 'validated' %}
+{# R125 — quando o motor marcou a linha como "obra_concluida no plan",
+   sobrescreve o tooltip do plan-diz para o operador investigar. #}
+{% set _obra_concluida = cc_obra_concluida_by_path is defined and cc_obra_concluida_by_path.get(field_path) %}
 <td class="{{ cell_class }} {{ cc_class }} {% if edited %}cell-edited{% endif %} {% if _is_validated %}cell-locked{% endif %}"
-    {% if cc_status == 'NO_MATCH' and cc_ref_by_path is defined %}title="Plan diz: {{ cc_ref_by_path.get(field_path, '') }}"{% endif %}
+    {% if _obra_concluida %}title="Obra já concluída no plan — verificar"
+    {% elif cc_status == 'NO_MATCH' and cc_ref_by_path is defined %}title="Plan diz: {{ cc_ref_by_path.get(field_path, '') }}"{% endif %}
     style="padding:6px 8px; font-family:var(--font-mono); font-size:12px; {% if _is_validated %}cursor:default;{% else %}cursor:text;{% endif %} min-width:60px;"
     {% if not _is_validated %}
     x-data='{

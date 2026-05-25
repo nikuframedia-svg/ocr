@@ -284,31 +284,71 @@ async def upload(
 
 
 # --- Cross-check helper (Round 33: pure verification) ---
+# R124: política de substituição vive em `_apply_auto_overwrites` e
+# `_maybe_apply_snap` — cada célula decide pelo seu `engine_status` e
+# `source`. As constantes R61/R66 anteriores (campos hard-coded) saíram
+# por dead code; R109 substituiu-as pela flag `snapped` por célula.
 
-# R61 — name-like fields that get auto-overwritten when cross-check
-# finds a MATCH and the value differs from the plan canonical. NEVER
-# overwrite identifiers (of/ov/lote) or physical measurements (dim).
-_AUTO_OVERWRITE_FIELDS = ("modelo", "cliente")
+# Campos dimensionais — `very_different` aqui fica para revisão humana
+# (não auto-aplicado), porque o plan/SAP pode estar desactualizado e o
+# operador viu a peça real. `snapped` (delta pequena) é sempre aplicado.
+_DIM_FIELDS = ("comp_mm", "larg_mm", "lbase", "ltopo", "esp")
 
-# R66 — fields eligible for overwrite ONLY when cell["snapped"] is True
-# (set by engine._apply_lev1_snap when row context + Lev-1 OCR-confidence
-# implies the operator's value is an OCR-misread of the plan canonical).
-# Includes identifiers (ov/of/lote) and dims/esp — broader than R61.
-_SNAPPED_OVERWRITE_FIELDS = (
-    "ov", "of", "lote",
-    "modelo", "cliente",
-    "comp_mm", "larg_mm", "lbase", "ltopo", "esp",
-)
+
+def _maybe_apply_snap(sheet_id: int, field_path: str, cell: dict) -> bool:
+    """R124 — aplica o canonical proposto pelo motor para uma célula.
+
+    Política:
+      - `snapped` (motor confiante, delta suave) → aplica sempre.
+      - `very_different` (motor confiante mas delta grande) → aplica
+        APENAS para campos não-dimensionais (modelo, cliente, of, ov,
+        operador, cod_maquina, etc.) e só quando o motor TEM proposta
+        concreta vinda de uma ref (`source` != "ocr_raw"). Dimensões
+        físicas ficam para revisão humana porque o plan/SAP pode estar
+        desactualizado e o operador viu a peça real.
+      - Outros estados (`confirmed`, `NA`) → no-op.
+
+    Retorna True quando aplicou um edit.
+    """
+    # R125 — quando a linha do plan está totalmente concluída na etapa
+    # actual, o motor marca cada cell com source="obra_concluida". Não
+    # auto-substituir: o operador tem de investigar (kanban a tentar
+    # registar produção numa obra fechada).
+    if cell.get("source") == "obra_concluida":
+        return False
+    engine_status = cell.get("engine_status")
+    if engine_status == "snapped":
+        pass
+    elif engine_status == "very_different":
+        field_name = field_path.rsplit(".", 1)[-1]
+        if field_name in _DIM_FIELDS:
+            return False
+        if cell.get("source") in (None, "ocr_raw"):
+            return False  # fallback do motor sem proposta concreta — no-op
+    else:
+        return False
+    canonical = (cell.get("value") or "").strip()
+    if not canonical:
+        return False
+    try:
+        db.apply_edit(sheet_id, field_path, canonical, source="system")
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _apply_auto_overwrites(sheet_id: int, result: dict) -> int:
-    """R109 — Para qualquer célula que o motor unificado marcou como
-    `snapped` (motor escolheu valor diferente do OCR mas com confiança),
-    aplica apply_edit para escrever o valor canónico na sheet_data.
+    """R109/R124 — aplica snaps em rows + header + footer.
 
-    Células `very_different` (vermelho) NÃO são aplicadas — ficam para
-    revisão humana. Status do output legacy é sempre MATCH para snapped
-    e NO_MATCH para very_different.
+    R109 introduziu o ciclo sobre `result["rows"]` e `snapped=True`.
+    R124 estende:
+      - cobre também `result["header"]` e `result["footer"]` (motor já
+        produz cells nessas secções desde R123 Fase 4 B9);
+      - aplica `very_different` em campos não-dimensionais quando o
+        motor tem proposta concreta (modelo/cliente/of/ov, cod_maquina,
+        etc. que antes ficavam vermelhos sem auto-correcção).
+
+    Ver `_maybe_apply_snap` para a regra por célula.
     """
     n_applied = 0
     for row_r in result.get("rows", []):
@@ -316,17 +356,12 @@ def _apply_auto_overwrites(sheet_id: int, result: dict) -> int:
         if i is None:
             continue
         for fn, cell in row_r.get("fields", {}).items():
-            if not cell.get("snapped"):
-                continue
-            canonical = (cell.get("value") or "").strip()
-            if not canonical:
-                continue
-            field_path = f"rows[{i}].{fn}"
-            try:
-                db.apply_edit(sheet_id, field_path, canonical, source="system")
+            if _maybe_apply_snap(sheet_id, f"rows[{i}].{fn}", cell):
                 n_applied += 1
-            except Exception:  # noqa: BLE001
-                continue
+    for section in ("header", "footer"):
+        for fn, cell in (result.get(section) or {}).items():
+            if _maybe_apply_snap(sheet_id, f"{section}.{fn}", cell):
+                n_applied += 1
     return n_applied
 
 
@@ -390,29 +425,33 @@ def _apply_operador_snap(sheet_id: int, sheet: dict, refs: dict) -> int:
 
 
 def _apply_codmaq_fill(sheet_id: int, sheet: dict, refs: dict) -> int:
-    """R85 — fill header.cod_maquina from setor_maquina via maquinas.xlsx.
+    """R85/R124 — fill OR correct header.cod_maquina from setor_maquina.
 
     Looks up ``header.setor_maquina`` (e.g. "HPE32", "GUIFIL", "LASER")
     in ``refs["maquinas_by_kanban"]`` and writes the canonical
-    ``codmaq`` (M024 / M067 / M030) to ``header.cod_maquina`` when empty.
+    ``codmaq`` (M024 / M067 / M030) to ``header.cod_maquina``.
 
-    Idempotent: skips when cod_maquina already set OR when setor doesn't
-    map (e.g. "GUILHOTINA" without width — registry has GUILHOTINA 3M/6M/
-    9M/10M, so the bare label has no unambiguous codmaq).
+    R124: substitui também quando o operador escreveu um cod errado —
+    antes só preenchia se estivesse vazio. O setor é a chave fiável (vem
+    do template da folha); o cod é derivável e portanto sobrescrevível.
+    Skipped quando o setor não mapeia unambiguamente (ex: "GUILHOTINA"
+    sem largura — registry tem GUILHOTINA 3M/6M/9M/10M).
 
-    Returns 1 if filled, 0 otherwise.
+    Returns 1 if applied, 0 otherwise.
     """
     header = (sheet.get("sheet_data") or {}).get("header") or {}
-    if (header.get("cod_maquina") or "").strip():
-        return 0  # already set — don't overwrite
     setor = (header.get("setor_maquina") or "").strip().upper()
     if not setor:
         return 0
     maq = (refs.get("maquinas_by_kanban") or {}).get(setor)
     if not maq or not maq.get("codmaq"):
         return 0
+    canonical = maq["codmaq"]
+    current = (header.get("cod_maquina") or "").strip()
+    if current == canonical:
+        return 0  # já igual — nada a fazer
     try:
-        db.apply_edit(sheet_id, "header.cod_maquina", maq["codmaq"], source="system")
+        db.apply_edit(sheet_id, "header.cod_maquina", canonical, source="system")
         return 1
     except Exception:  # noqa: BLE001
         return 0
@@ -572,12 +611,14 @@ def sheet_page(
         # Show original OCR — disable cross-check colors (they validate
         # the post-snap values, not raw)
         src = sheet["raw_extraction"]
-        cc_status_by_path, cc_ref_by_path, cc_suspended_by_path, cc_snapped_by_path = (
-            {}, {}, {}, {},
+        (cc_status_by_path, cc_ref_by_path, cc_suspended_by_path,
+         cc_snapped_by_path, cc_obra_concluida_by_path) = (
+            {}, {}, {}, {}, {},
         )
     else:
         src = sheet.get("sheet_data") or {}
-        cc_status_by_path, cc_ref_by_path, cc_suspended_by_path, cc_snapped_by_path = (
+        (cc_status_by_path, cc_ref_by_path, cc_suspended_by_path,
+         cc_snapped_by_path, cc_obra_concluida_by_path) = (
             _build_cc_maps(sheet_id)
         )
 
@@ -613,6 +654,7 @@ def sheet_page(
             "cc_ref_by_path": cc_ref_by_path,
             "cc_suspended_by_path": cc_suspended_by_path,
             "cc_snapped_by_path": cc_snapped_by_path,
+            "cc_obra_concluida_by_path": cc_obra_concluida_by_path,
             "operadores": OPERADORES,
             "flagged_count": flagged,
             "view_mode": view_mode,
@@ -667,7 +709,8 @@ def _build_snapped_map_from_raw(sheet: dict) -> dict[str, bool]:
 
 
 def _build_cc_maps(sheet_id: int) -> tuple[
-    dict[str, str], dict[str, str], dict[str, bool], dict[str, bool]
+    dict[str, str], dict[str, str], dict[str, bool], dict[str, bool],
+    dict[str, bool],
 ]:
     """Round 33: load cross-check JSON for sheet, build {field_path: status}
     + {field_path: ref} maps for template rendering of green/red cell colors.
@@ -696,10 +739,15 @@ def _build_cc_maps(sheet_id: int) -> tuple[
             pass
     snapped_map = _build_snapped_map_from_raw(db.get_sheet(sheet_id) or {})
     if not cc:
-        return {}, {}, {}, snapped_map
+        return {}, {}, {}, snapped_map, {}
     status_map: dict[str, str] = {}
     ref_map: dict[str, str] = {}
     suspended_map: dict[str, bool] = {}
+    # R125 — paths cujas cells foram marcadas pelo motor com
+    # source="obra_concluida" (todas as linhas do plan para esta OF
+    # estão fechadas na etapa actual). Usado pelo template para mostrar
+    # tooltip "obra concluída — verificar".
+    obra_concluida_map: dict[str, bool] = {}
     for r in cc.get("rows", []):
         i = r.get("row_index")
         for f, info in (r.get("fields") or {}).items():
@@ -710,6 +758,8 @@ def _build_cc_maps(sheet_id: int) -> tuple[
                 ref_map[path] = str(ref)
             if info.get("suspended_by_stub"):
                 suspended_map[path] = True
+            if info.get("source") == "obra_concluida":
+                obra_concluida_map[path] = True
     # R123 (B9) — header/footer também coloridos (operador, data, máquina,
     # colunas_produzidas, ...). Cross-checks gravados antes do R123 não os
     # têm — `cc.get(section)` devolve {} e o cabeçalho fica neutro.
@@ -720,7 +770,7 @@ def _build_cc_maps(sheet_id: int) -> tuple[
             ref = info.get("ref")
             if ref is not None:
                 ref_map[path] = str(ref)
-    return status_map, ref_map, suspended_map, snapped_map
+    return status_map, ref_map, suspended_map, snapped_map, obra_concluida_map
 
 
 def _maybe_record_operador_alias(sheet_id: int) -> None:
@@ -840,7 +890,8 @@ async def sheet_edit(
     if real_value is None:
         real_value = new
     cells_by_path = (sheet.get("dq_audit") or {}).get("cells", {})
-    cc_status_by_path, cc_ref_by_path, cc_suspended_by_path, cc_snapped_by_path = (
+    (cc_status_by_path, cc_ref_by_path, cc_suspended_by_path,
+     cc_snapped_by_path, cc_obra_concluida_by_path) = (
         _build_cc_maps(sheet_id)
     )
     return templates.TemplateResponse(
@@ -856,6 +907,7 @@ async def sheet_edit(
             "cc_ref_by_path": cc_ref_by_path,
             "cc_suspended_by_path": cc_suspended_by_path,
             "cc_snapped_by_path": cc_snapped_by_path,
+            "cc_obra_concluida_by_path": cc_obra_concluida_by_path,
             "sheet_status": sheet.get("status"),
         },
     )
@@ -959,21 +1011,8 @@ async def sheet_validate(
         except Exception:  # noqa: BLE001
             pass
 
-    # R95 — apply cesta_N edits before lock (expedicao template only; other
-    # templates simply don't submit any cesta_* and the loop finds nothing).
-    form_data = await request.form()
-    rows_pre = (sheet_pre.get("sheet_data") or {}).get("rows", []) or []
-    for i, row in enumerate(rows_pre):
-        key = f"cesta_{i}"
-        if key not in form_data:
-            continue
-        new_cesta = str(form_data[key] or "").strip()
-        cur_cesta = str(row.get("cesta_n") or "").strip()
-        if new_cesta != cur_cesta:
-            try:
-                db.apply_edit(sheet_id, f"rows[{i}].cesta_n", new_cesta)
-            except Exception:  # noqa: BLE001
-                pass
+    # R126 — edição de cesta_n foi removida do sheet.html (validate desktop).
+    # A cesta entra exclusivamente pelo fluxo mobile (capture.html → /mobile/qtds-batch).
 
     db.validate_sheet(sheet_id, operador)
     # R117 — kernel event: folha validada (lock confirmado pelo operador).
@@ -1924,6 +1963,7 @@ def kanban_viewer(
                 "cells_by_path": {},
                 "cc_status_by_path": {},
                 "cc_ref_by_path": {},
+                "cc_obra_concluida_by_path": {},
                 "valid_operadores": OPERADORES,
                 **_template_ctx_for_sheet(None),  # bobine_formato defaults
             },
@@ -1976,11 +2016,11 @@ def kanban_viewer(
     footer = (sheet.get("sheet_data") or {}).get("footer", {}) if sheet else {}
 
     # Round 33: cross-check colors per cell
-    cc_status_by_path, cc_ref_by_path, cc_suspended_by_path, cc_snapped_by_path = (
-        {}, {}, {}, {},
-    )
+    (cc_status_by_path, cc_ref_by_path, cc_suspended_by_path,
+     cc_snapped_by_path, cc_obra_concluida_by_path) = ({}, {}, {}, {}, {})
     if sheet:
-        cc_status_by_path, cc_ref_by_path, cc_suspended_by_path, cc_snapped_by_path = (
+        (cc_status_by_path, cc_ref_by_path, cc_suspended_by_path,
+         cc_snapped_by_path, cc_obra_concluida_by_path) = (
             _build_cc_maps(sheet["id"])
         )
 
@@ -2014,6 +2054,7 @@ def kanban_viewer(
             "cc_ref_by_path": cc_ref_by_path,
             "cc_suspended_by_path": cc_suspended_by_path,
             "cc_snapped_by_path": cc_snapped_by_path,
+            "cc_obra_concluida_by_path": cc_obra_concluida_by_path,
             "valid_operadores": OPERADORES,
             "data_iso_for_validate": data_iso_for_validate,
             "has_cropped": sheet_has_cropped,

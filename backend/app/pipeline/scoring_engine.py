@@ -434,18 +434,55 @@ def _entry_key(entry: dict) -> tuple:
     )
 
 
+# R125 — consciência do estado de produção (fases do plan) ------------------
+
+def _current_phase(sheet_data: dict, refs: dict) -> str | None:
+    """R125 — coluna do plan (bf/c/q/s/r/a/exp) que corresponde à máquina
+    da folha. None se não houver mapeamento — toda a lógica de fases
+    fica em no-op.
+    """
+    setor = ((sheet_data.get("header") or {}).get("setor_maquina") or "").strip().upper()
+    if not setor:
+        return None
+    maq = (refs.get("maquinas_by_kanban") or {}).get(setor)
+    if not maq:
+        return None
+    col = (maq.get("colunaexcel") or "").strip().lower()
+    return col or None
+
+
+def _phase_is_full(entry: dict, phase: str) -> bool:
+    """R125 — True se a fase `phase` já atingiu `quanttrp` (sector
+    fechado para esta linha do plan).
+    """
+    q = _num(entry.get("quanttrp"))
+    fases = entry.get("fases") or {}
+    p = _num(fases.get(phase))
+    if q is None or p is None or q <= 0:
+        return False
+    return p >= q
+
+
 def _find_winner_entry(
     candidates_by_field: dict[str, list[dict]],
     row: dict,
     refs: dict,
+    current_phase: str | None = None,
 ) -> dict | None:
-    """R108 v5 + R113 + R123 — escolhe a entry do plan com melhor score.
+    """R108 v5 + R113 + R123 + R125 — escolhe a entry do plan com melhor
+    score.
 
     R123: já não se exige que o lote esteja no SAP (o lote passou a ser
     um campo pontuado por `score_entry`), nem se filtram entries já
     produzidas — a folha é fotografada *depois* de produzir, pelo que a
     peça certa tem quase sempre `remaining ≤ 0` e era erradamente
     eliminada. O `remaining` fica só como desempate entre scores iguais.
+
+    R125: quando `current_phase` é dado (etapa em curso do kanban,
+    derivada de `setor_maquina → colunaexcel`), desempate intermédio
+    favorece linhas com espaço na etapa actual (`fases[phase] < quanttrp`).
+    Linhas concluídas nessa etapa não são excluídas — vão só para o fim
+    da lista entre empates de score.
     """
     from app.pipeline.of_consumption import remaining as _remaining
 
@@ -459,9 +496,10 @@ def _find_winner_entry(
     if not entries_by_key:
         return None
 
-    # Tuple (-score, remaining_sortable, key, entry) — sort asc: primeiro
-    # o maior score (negativo desempata), depois menor remaining.
-    eligible: list[tuple[float, float, tuple, dict]] = []
+    # Tuple (-score, phase_full, remaining_sortable, key, entry):
+    # 1) maior score primeiro, 2) sectores ainda com espaço primeiro,
+    # 3) menor remaining.
+    eligible: list[tuple[float, int, float, tuple, dict]] = []
     for k, e in entries_by_key.items():
         if "_of" not in e:
             e = dict(e)
@@ -469,19 +507,55 @@ def _find_winner_entry(
         score = score_entry(e, row, refs)
         if score < 1:
             continue
+        phase_full = 1 if (current_phase and _phase_is_full(e, current_phase)) else 0
         rem = _remaining(e)
         rem_sort = 9e9 if rem == float("inf") else rem
-        eligible.append((-float(score), rem_sort, k, e))
+        eligible.append((-float(score), phase_full, rem_sort, k, e))
 
     if not eligible:
         return None
     eligible.sort()
-    best_neg_score, best_rem_sort, best_key, _ = eligible[0]
+    best_neg_score, _best_phase_full, best_rem_sort, best_key, _ = eligible[0]
     winner = dict(entries_by_key[best_key])
     winner["_score"] = int(-best_neg_score)
     if best_rem_sort < 9e9:
         winner["_remaining"] = best_rem_sort
     return winner
+
+
+def _all_eligible_phase_full(
+    candidates_by_field: dict[str, list[dict]],
+    row: dict,
+    refs: dict,
+    current_phase: str | None,
+) -> bool:
+    """R125 — True se TODAS as entries elegíveis (score≥1) para esta
+    linha estão concluídas em `current_phase`. Sinaliza "obra concluída"
+    no plan: o operador está a registar produção numa OF/peça já fechada
+    naquele sector. False quando `current_phase` é None, não há
+    candidatos elegíveis, ou pelo menos uma linha ainda tem espaço.
+    """
+    if not current_phase:
+        return False
+    entries_by_key: dict[tuple, dict] = {}
+    for field in _PLAN_FIELDS:
+        for cand in candidates_by_field.get(field, []):
+            for e in cand.get("plan_entries", []):
+                k = _entry_key(e)
+                entries_by_key.setdefault(k, e)
+    if not entries_by_key:
+        return False
+    found_eligible = False
+    for k, e in entries_by_key.items():
+        if "_of" not in e:
+            e = dict(e)
+            e["_of"] = k[0]
+        if score_entry(e, row, refs) < 1:
+            continue
+        found_eligible = True
+        if not _phase_is_full(e, current_phase):
+            return False
+    return found_eligible
 
 
 # Detecção de "muito diferente" ---------------------------------------------
@@ -590,16 +664,26 @@ def _apply_winner_to_field(
         elif field == "ov":
             proposed = str(winner.get("ov") or "").strip()
         elif field == "modelo":
-            # B8 (R123) — propor o CÓDIGO do modelo, não a designação
-            # longa. O código é a parte antes do " - " na designação.
-            # Se o operador já escreveu o código (está contido na
-            # designação), mantém-se o valor do operador.
+            # B8 (R123) / R124 / R126 — propor o CÓDIGO do modelo, não a
+            # designação longa. O código é a parte antes do " - " na
+            # designação.
+            # R124: comparação estricta — só se mantém o valor do
+            # operador quando bate EXACTAMENTE com o código.
+            # R126: quando a designação NÃO tem " - " (típico em corte
+            # CAD do TPL102 — hpe32/gasparini/hd36), não há código
+            # parseável; forçar a designação inteira como canónico fazia
+            # `modelo` ficar permanentemente NO_MATCH (operador escreve
+            # algo curto, motor propõe longo). Nesse caso respeita o
+            # valor do operador se preenchido.
             des = str(winner.get("designacao") or "").strip()
-            modelo_code = des.split(" - ", 1)[0].strip()
-            if ocr_value and ocr_value.upper() in des.upper():
-                proposed = ocr_value
+            if " - " in des:
+                modelo_code = des.split(" - ", 1)[0].strip()
+                if ocr_value and ocr_value.strip().upper() == modelo_code.upper():
+                    proposed = ocr_value
+                else:
+                    proposed = modelo_code
             else:
-                proposed = modelo_code or des
+                proposed = ocr_value if ocr_value else des
         elif field == "cliente":
             proposed = str(winner.get("cliente") or "").strip()
         elif field in ("comp_mm", "lbase", "ltopo", "esp"):
@@ -629,14 +713,23 @@ def _score_row(
     refs: dict,
     idx: dict,
     row_fields: tuple[str, ...],
+    current_phase: str | None = None,
 ) -> tuple[dict, int, int, int, int, int]:
-    """R123 — itera os `row_fields` do template (não os 10 fixos do bobine).
+    """R123 / R125 — itera os `row_fields` do template (não os 10 fixos
+    do bobine).
 
     Cada campo cai num de três tratamentos:
       - campo com referência no plan/SAP (_ROW_FIELDS) → winner/candidatos;
       - campo sem referência (_NO_REF_FIELDS: pri, qtd, coni, ...) → NA;
       - campo próprio do template (cesta_n, qtd_metros, m2, sobras, ...) →
         validação sintáctica leve: preenchido = confirmed, vazio = NA.
+
+    R125: quando `current_phase` é passado, desempata o winner entre
+    linhas ainda com espaço nessa fase e, se TODAS as linhas candidatas
+    estiverem fechadas nessa fase, marca a linha inteira como
+    "obra_concluída" — todos os campos passam a `very_different` com
+    `source="obra_concluida"`, o que sinaliza vermelho na UI e impede a
+    auto-substituição em `_apply_auto_overwrites`.
     """
     # Candidatos só para os campos do template que o motor sabe validar.
     candidates_by_field: dict[str, list[dict]] = {}
@@ -644,7 +737,10 @@ def _score_row(
         if field in row_fields:
             candidates_by_field[field] = _candidates_for_field(field, row, refs, idx)
 
-    winner = _find_winner_entry(candidates_by_field, row, refs)
+    winner = _find_winner_entry(candidates_by_field, row, refs, current_phase)
+    obra_concluida = _all_eligible_phase_full(
+        candidates_by_field, row, refs, current_phase
+    )
 
     fields_out: dict[str, dict] = {}
     snapped = confirmed = na = very_diff = 0
@@ -685,12 +781,22 @@ def _score_row(
         fields_out[k] = _make_cell(str(v) if v is not None else "", "NA", "ocr_raw")
         na += 1
 
+    # R125 — override final para obra concluída no plan
+    if obra_concluida:
+        snapped = confirmed = na = very_diff = 0
+        for fn, cell in fields_out.items():
+            fields_out[fn] = _make_cell(
+                cell.get("value", ""), "very_different", "obra_concluida",
+            )
+            very_diff += 1
+
     total = snapped + confirmed + na + very_diff
     row_out = {
         "row_index": row_idx,
         "fields": fields_out,
         "winner_of": (winner or {}).get("_of") if winner else None,
         "winner_score": (winner or {}).get("_score") if winner else None,
+        "obra_concluida": obra_concluida,
     }
     return row_out, snapped, confirmed, na, very_diff, total
 
@@ -758,11 +864,16 @@ def shadow_score(
     # próprios (cesta_n, qtd_metros, m2, ...) invisíveis ao cross-check.
     from app.templates_registry import get_template
     row_fields = get_template(template_name).row_fields
+    # R125 — fase em curso (bf/c/q/...) derivada do setor da máquina;
+    # usada para desempatar o winner e detectar obra concluída.
+    current_phase = _current_phase(sheet_data, refs)
 
     out_rows = []
     snapped = confirmed = na = very_diff = 0
     for i, row in enumerate(rows):
-        row_out, s, c, n, vd, _t = _score_row(i, row, refs, idx, row_fields)
+        row_out, s, c, n, vd, _t = _score_row(
+            i, row, refs, idx, row_fields, current_phase
+        )
         out_rows.append(row_out)
         snapped += s
         confirmed += c
@@ -822,7 +933,12 @@ _V5_TO_LEGACY = {
 
 
 def _to_legacy_cell(v5_cell: dict, ref_value: str | None = None) -> dict:
-    """Converte célula do shadow output para shape esperado pela UI."""
+    """Converte célula do shadow output para shape esperado pela UI.
+
+    R124: expõe também `source` ("plan", "sap", "lexicon", "ocr_raw") para
+    `_apply_auto_overwrites` distinguir propostas concretas vindas de
+    refs (auto-aplicáveis) do fallback OCR (no-op).
+    """
     v5_status = v5_cell.get("status", "NA")
     legacy_status = _V5_TO_LEGACY.get(v5_status, "NA")
     out = {
@@ -831,6 +947,7 @@ def _to_legacy_cell(v5_cell: dict, ref_value: str | None = None) -> dict:
         "label": v5_cell.get("label", ""),
         "snapped": v5_status == "snapped",
         "engine_status": v5_status,
+        "source": v5_cell.get("source"),
     }
     if ref_value is not None:
         out["ref"] = ref_value
@@ -893,6 +1010,8 @@ def cross_check_sheet(
             "summary": row_summary,
             "winner_of": r.get("winner_of"),
             "winner_score": r.get("winner_score"),
+            # R125 — bandeira propagada para UI / auto-overwrites
+            "obra_concluida": r.get("obra_concluida", False),
         })
 
     legacy_header = {k: _to_legacy_cell(v) for k, v in scoring.get("header", {}).items()}

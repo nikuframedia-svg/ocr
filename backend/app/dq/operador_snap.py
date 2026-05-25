@@ -203,6 +203,24 @@ def _lev1_digit_candidates(cod: int) -> list[int]:
     return out
 
 
+def _find_unique_name_match(
+    name_norm: str,
+    colaboradores: dict[int, dict[str, str]],
+) -> tuple[int, dict[str, str]] | None:
+    """R124 — devolve (cod, entry) se o nome normalizado bate exactamente
+    com UM único colaborador; None caso contrário (0 ou ≥2 matches).
+    """
+    if not name_norm:
+        return None
+    matches = [
+        (cod, entry) for cod, entry in colaboradores.items()
+        if _normalize_name(entry.get("sname", "")) == name_norm
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
 def snap_operador(
     raw_name: str | None,
     raw_cod: str | int | None,
@@ -263,6 +281,24 @@ def snap_operador(
                 rule="operador.confusion_unique",
                 applied=True,
                 suspended=True,  # yellow flag — operator should verify
+            )
+
+        # R124 — name_unique_match: cod inválido, mas o nome OCR normaliza
+        # exactamente para UM único colaborador → snap completo. Marca
+        # suspended (amarelo) para o operador verificar — o cod ficou só
+        # a "esperar" pela confirmação humana.
+        match = _find_unique_name_match(name_norm_pre, colaboradores)
+        if match is not None:
+            cand_cod, entry = match
+            return SnapResult(
+                raw_name=name_raw,
+                raw_cod=cod_raw_str,
+                snapped_name=entry["sname"],
+                snapped_cod=str(cand_cod),
+                pernr=entry["pernr"],
+                rule="operador.name_unique_match",
+                applied=True,
+                suspended=True,
             )
 
         # Multiple or no candidates → no_ref (cinza, sem flag)
@@ -353,6 +389,23 @@ def snap_operador(
             rule="operador.cod_lev1_token_match",
             applied=True,
             suspended=False,
+        )
+
+    # R124 — antes do fallback "preserva OCR name": se o nome normalizado
+    # bate exactamente com UM único colaborador, snap pelo nome (mais
+    # fiável que cod-Lev-1 ambíguo). Mantém suspended (amarelo).
+    match = _find_unique_name_match(name_norm, colaboradores)
+    if match is not None:
+        cand_cod, entry = match
+        return SnapResult(
+            raw_name=name_raw,
+            raw_cod=cod_raw_str,
+            snapped_name=entry["sname"],
+            snapped_cod=str(cand_cod),
+            pernr=entry["pernr"],
+            rule="operador.name_unique_match",
+            applied=True,
+            suspended=True,
         )
 
     # Condition E — ambiguous (≥2) or no Lev-1 with overlap.
