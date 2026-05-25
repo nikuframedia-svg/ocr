@@ -345,13 +345,20 @@ def _mine_from_excel(
     # R85 — maquinas.xlsx (cod / desmaq / desigkanban / sector). Lives in
     # the same docs dir as the other Excel refs. Optional: if missing,
     # cod_maquina auto-fill simply skips.
+    # R127 — lookup tolerante: o SAP exporta `desigkanban` específico
+    # (ex: "LASER MTG2") mas os operadores escrevem o termo genérico
+    # ("LASER"). Indexamos cada máquina sob 3 chaves com prioridade:
+    #   P0 desigkanban exacto · P1 desmaq · P2 desmaq sem sufixo " MTG\d+"
+    # Quando vários M-cods reclamam a mesma chave, ganha o de menor
+    # `ordem` (máquina mais usada). Prioridade mais baixa nunca é
+    # sobrescrita — desigkanban exacto continua sempre autoritativo.
     maq_path = colab_path.parent / "maquinas.xlsx" if colab_path else None
     if maq_path and maq_path.exists():
         wb = openpyxl.load_workbook(maq_path, read_only=True, data_only=True)
         ws = wb.active
-        by_kanban: dict[str, dict] = {}
         by_codmaq: dict[str, dict] = {}
         hdrs: dict[str, int] = {}
+        all_recs: list[dict] = []
         for i, row in enumerate(ws.iter_rows(values_only=True)):
             if i == 0:
                 for j, h in enumerate(row):
@@ -360,6 +367,11 @@ def _mine_from_excel(
                 continue
             if row[0] is None:
                 continue
+            try:
+                ordem_raw = row[hdrs["ordem"]] if "ordem" in hdrs else None
+                ordem_n = int(ordem_raw) if ordem_raw is not None else 999
+            except (TypeError, ValueError):
+                ordem_n = 999
             rec = {
                 "codmaq": str(row[hdrs["codmaq"]] or "").strip().upper(),
                 "desmaq": str(row[hdrs.get("desmaq", -1)] or "").strip(),
@@ -370,12 +382,34 @@ def _mine_from_excel(
                 "codsec": str(row[hdrs.get("codsec", -1)] or "").strip(),
                 "dessec": str(row[hdrs.get("dessec", -1)] or "").strip(),
                 "colunaexcel": str(row[hdrs.get("colunaexcel", -1)] or "").strip(),
+                "ordem": ordem_n,
             }
             if rec["codmaq"]:
                 by_codmaq[rec["codmaq"]] = rec
-            if rec["desigkanban"]:
-                by_kanban[rec["desigkanban"].upper()] = rec
+                all_recs.append(rec)
         wb.close()
+
+        _MTG_SUFFIX = re.compile(r"\s+MTG\d+\s*$")
+        candidates: dict[str, list[tuple[int, int, dict]]] = {}
+        for rec in all_recs:
+            desig = (rec.get("desigkanban") or "").strip().upper()
+            desmaq = (rec.get("desmaq") or "").strip().upper()
+            stripped = _MTG_SUFFIX.sub("", desmaq).strip() if desmaq else ""
+            ordem = rec["ordem"]
+            if desig:
+                candidates.setdefault(desig, []).append((0, ordem, rec))
+            if desmaq and desmaq != desig:
+                candidates.setdefault(desmaq, []).append((1, ordem, rec))
+            if stripped and stripped not in (desmaq, desig):
+                candidates.setdefault(stripped, []).append((2, ordem, rec))
+
+        by_kanban: dict[str, dict] = {}
+        for key, options in candidates.items():
+            # Sort by priority asc, then ordem asc — desigkanban exacto
+            # vence sempre; em empate, máquina mais usada (menor ordem).
+            options.sort(key=lambda t: (t[0], t[1]))
+            by_kanban[key] = options[0][2]
+
         refs["maquinas_by_kanban"] = by_kanban
         refs["maquinas_by_codmaq"] = by_codmaq
         refs["maquinas_mtime"] = maq_path.stat().st_mtime
