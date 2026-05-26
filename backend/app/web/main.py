@@ -1649,43 +1649,120 @@ def sheet_rotate(sheet_id: int, request: Request) -> JSONResponse:
 def sheet_of_lookup(
     sheet_id: int,
     of: str = "",
+    q: str = "",
     include_done: int = 0,
 ) -> JSONResponse:
-    """R112 — devolve entries do plan_colunas para um OF.
+    """R112 — devolve entries do plan_colunas para um OF/OV/modelo.
 
     R113 — entries são ordenadas por "faltam menos primeiro" e entries
     já fechadas (remaining ≤ 0) são filtradas por defeito.
     `include_done=1` para mostrar todas (recuperação de folhas antigas).
+
+    R128 — auto-detect multi-modo. O parâmetro `q` aceita OF (6 dígitos),
+    OV (≥6 dígitos) ou prefixo de modelo (alfanumérico). Ordem de
+    tentativa: OF → OV → modelo prefix. `of=` mantido para back-compat
+    com clients antigos.
     """
     sheet = db.get_sheet(sheet_id)
     if sheet is None:
         raise HTTPException(404, f"sheet {sheet_id} not found")
-    of_raw = (of or "").strip()
-    if not of_raw:
-        return JSONResponse({"found": False, "of": "", "entries": []})
-    from app.pipeline.scoring_engine import normalize_of
-    of_norm = normalize_of(of_raw)
-    refs = get_watcher().get_refs() or {}
-    entries = (refs.get("of_to_entries") or {}).get(of_norm) or []
-    if not entries:
-        return JSONResponse({"found": False, "of": of_norm, "entries": []})
+    query_raw = (q or of or "").strip()
+    if not query_raw:
+        return JSONResponse({
+            "found": False, "mode": "none", "q": "", "of": "", "entries": [],
+        })
 
-    # R113 — anotar _of para o cálculo de remaining usar a chave certa.
-    # R116 — anotar _orig_idx: o apply-of-entry indexa na lista NÃO ordenada
-    # (entries), enquanto a UI vê a sorted_entries. orig_idx faz a ponte.
-    entries_with_of = [
-        {**e, "_of": of_norm, "_orig_idx": i} for i, e in enumerate(entries)
-    ]
+    from app.pipeline.scoring_engine import normalize_of
     from app.pipeline.of_consumption import sort_entries_by_remaining
+
+    refs = get_watcher().get_refs() or {}
+    of_to_entries = refs.get("of_to_entries") or {}
+    plan_by_ov = refs.get("plan_by_ov") or {}
+    plan_by_modelo_ft = refs.get("plan_by_modelo_ft") or {}
+
+    LIMIT = 50
+    mode = "none"
+    matched_of = ""
+    pooled: list[dict] = []
+    n_total_pre_filter = 0
+    truncated = False
+
+    q_upper = query_raw.upper()
+    is_numeric = query_raw.isdigit()
+
+    # Tier 1 — OF (numérico)
+    if is_numeric:
+        of_norm = normalize_of(query_raw)
+        entries = of_to_entries.get(of_norm) or []
+        if entries:
+            mode = "of"
+            matched_of = of_norm
+            n_total_pre_filter = len(entries)
+            pooled = [
+                {**e, "_of": of_norm, "_orig_idx": i}
+                for i, e in enumerate(entries)
+            ]
+
+    # Tier 2 — OV (numérico, exact match)
+    if mode == "none" and is_numeric:
+        ov_entries = plan_by_ov.get(query_raw) or []
+        if ov_entries:
+            mode = "ov"
+            n_total_pre_filter = len(ov_entries)
+            # plan_by_ov entries já têm "_of" anotado (ver
+            # ref_watcher._derive_plan_indexes). _orig_idx é por OF para
+            # apply-of-entry; rebuild aqui contra of_to_entries.
+            for e in ov_entries:
+                of_of_entry = str(e.get("_of") or "")
+                source = of_to_entries.get(of_of_entry) or []
+                orig_idx = next(
+                    (i for i, se in enumerate(source) if se is e
+                     or (se.get("ov") == e.get("ov")
+                         and se.get("designacao") == e.get("designacao"))),
+                    -1,
+                )
+                pooled.append({**e, "_orig_idx": orig_idx})
+
+    # Tier 3 — modelo prefix
+    if mode == "none":
+        matching_keys = [k for k in plan_by_modelo_ft.keys()
+                         if k.startswith(q_upper)]
+        for k in matching_keys:
+            entries = plan_by_modelo_ft.get(k) or []
+            for e in entries:
+                of_of_entry = str(e.get("_of") or "")
+                source = of_to_entries.get(of_of_entry) or []
+                orig_idx = next(
+                    (i for i, se in enumerate(source) if se is e
+                     or (se.get("ov") == e.get("ov")
+                         and se.get("designacao") == e.get("designacao"))),
+                    -1,
+                )
+                pooled.append({**e, "_orig_idx": orig_idx})
+        if pooled:
+            mode = "modelo"
+            n_total_pre_filter = len(pooled)
+
+    if mode == "none":
+        return JSONResponse({
+            "found": False, "mode": "none", "q": query_raw, "of": "",
+            "entries": [], "n_entries": 0, "n_total": 0,
+        })
+
     sorted_entries = sort_entries_by_remaining(
-        entries_with_of, include_done=bool(include_done),
+        pooled, include_done=bool(include_done),
     )
+
+    if len(sorted_entries) > LIMIT:
+        sorted_entries = sorted_entries[:LIMIT]
+        truncated = True
 
     out_entries = []
     for i, e in enumerate(sorted_entries):
         out_entries.append({
             "idx": i,
             "orig_idx": e.get("_orig_idx"),  # R116 — usar este no apply
+            "of": str(e.get("_of") or ""),    # R128 — OF por entry (modo modelo/OV)
             "cliente": e.get("cliente", ""),
             "ov": str(e.get("ov", "")),
             "modelo": e.get("designacao", ""),
@@ -1700,10 +1777,14 @@ def sheet_of_lookup(
             "done": e.get("_done", False),
         })
     return JSONResponse({
-        "found": True, "of": of_norm,
+        "found": True,
+        "mode": mode,
+        "q": query_raw,
+        "of": matched_of,    # back-compat: vazio nos modos ov/modelo
         "entries": out_entries,
         "n_entries": len(out_entries),
-        "n_total": len(entries),  # quantas existem no plan antes do filtro
+        "n_total": n_total_pre_filter,
+        "truncated": truncated,
     })
 
 
@@ -2070,21 +2151,25 @@ def queue_page(
     of: str | None = None,
     operador: str | None = None,
     data: str | None = None,
+    captured: str | None = None,
     setor: str | None = None,
 ) -> Response:
-    """Round 36 — OF filter; R81 — operador/data/setor filters (combinable)."""
+    """Round 36 — OF filter; R81 — operador/data/setor filters (combinable).
+    R128 — captured (data de captura, distinta de header.data)."""
     of_filter = (of or "").strip() or None
     operador_filter = (operador or "").strip() or None
     data_filter = (data or "").strip() or None
+    captured_filter = (captured or "").strip() or None
     setor_filter = (setor or "").strip() or None
 
-    use_filtered = any([of_filter, operador_filter, data_filter, setor_filter])
+    use_filtered = any([of_filter, operador_filter, data_filter, captured_filter, setor_filter])
     if use_filtered:
         statuses_all = ("pending", "extracted", "validated", "error")
         statuses = (status,) if status and status != "all" else statuses_all
         sheets = db.list_sheets_filtered(
             operador=operador_filter,
             data_iso=data_filter,
+            captured_iso=captured_filter,
             setor=setor_filter,
             of=of_filter,
             statuses=statuses,
@@ -2103,6 +2188,7 @@ def queue_page(
             "of_filter": of_filter,
             "operador_filter": operador_filter,
             "data_filter": data_filter,
+            "captured_filter": captured_filter,
             "setor_filter": setor_filter,
             "operadores": db.list_distinct_operadores(),
             "setores": db.list_distinct_setores(),

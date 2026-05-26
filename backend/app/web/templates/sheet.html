@@ -322,20 +322,20 @@
           Corrigir linha via OF
         </div>
         <div class="muted tiny" style="margin-bottom:12px;">
-          Escreve o OF correcto, escolhe o modelo, e os outros campos
-          preenchem-se automaticamente do plano da fábrica.
+          Escreve OF, OV ou modelo. O sistema detecta automaticamente.
+          Escolhe a linha e os outros campos preenchem-se do plano.
         </div>
 
-        <!-- Step 1 — input OF -->
+        <!-- Step 1 — input multi-modo (R128: OF / OV / modelo auto-detect) -->
         <div style="margin-bottom:12px;">
-          <label class="lbl">OF correcto:</label>
+          <label class="lbl">Pesquisar:</label>
           <div style="display:flex; gap:8px; margin-top:4px;">
             <input type="text" x-model="ofInput"
-                   placeholder="ex: 262107"
+                   placeholder="ex: 262107 (OF) · 2503182 (OV) · CGC2E10 (modelo)"
                    @keydown.enter.prevent="lookup()"
                    x-ref="ofInputRef"
                    x-init="$nextTick(() => $refs.ofInputRef.focus())"
-                   inputmode="numeric"
+                   inputmode="text"
                    style="flex:1; padding:8px; font-size:16px; font-family:var(--font-mono);">
             <button class="btn primary" type="button" @click="lookup()"
                     :disabled="loading || !ofInput.trim()">
@@ -348,8 +348,8 @@
         <!-- Step 2 — lookup result -->
         <template x-if="lookupResult && !lookupResult.found">
           <div class="alert warn" style="padding:10px; margin-bottom:12px;">
-            OF "<b x-text="lookupResult.of"></b>" não existe no plano da
-            fábrica. Verifica que escreveste bem.
+            "<b x-text="lookupResult.q"></b>" não bate OF, OV nem prefixo
+            de modelo no plano da fábrica. Verifica que escreveste bem.
           </div>
         </template>
 
@@ -359,12 +359,17 @@
                  style="margin-bottom:6px; display:flex; align-items:center;
                         justify-content:space-between; gap:8px; flex-wrap:wrap;">
               <span>
+                <span class="of-mode-pill" :class="'mode-'+lookupResult.mode"
+                      x-text="lookupResult.mode === 'of' ? 'OF '+lookupResult.of
+                              : lookupResult.mode === 'ov' ? 'OV '+lookupResult.q
+                              : 'modelo '+lookupResult.q"></span>
                 <b x-text="lookupResult.entries.length"></b>
                 <span x-show="lookupResult.n_total &&
                               lookupResult.n_total > lookupResult.entries.length"
                       x-text="' de ' + lookupResult.n_total"></span>
-                linha(s) no plan para OF <b x-text="lookupResult.of"></b>.
-                Ordenadas por <b>faltam menos primeiro</b>.
+                linha(s).
+                <span x-show="lookupResult.truncated" class="pill warn"
+                      style="font-size:9px;">truncado a 50 — refina a pesquisa</span>
               </span>
               <label style="display:inline-flex; gap:4px; align-items:center;">
                 <input type="checkbox" x-model="includeDone" @change="lookup()">
@@ -451,14 +456,15 @@ function ofWizard(sheetId) {
              && this.selectedEntry >= 0;
     },
     async lookup() {
-      const of = (this.ofInput || '').trim();
-      if (!of) return;
+      const q = (this.ofInput || '').trim();
+      if (!q) return;
       this.loading = true;
       this.lookupResult = null;
       this.selectedEntry = -1;
       try {
+        // R128 — query genérica (?q=) com auto-detect OF/OV/modelo
         const url = '/sheet/' + this.sheetId
-                    + '/of-lookup?of=' + encodeURIComponent(of)
+                    + '/of-lookup?q=' + encodeURIComponent(q)
                     + (this.includeDone ? '&include_done=1' : '');
         const r = await fetch(url);
         this.lookupResult = await r.json();
@@ -466,7 +472,7 @@ function ofWizard(sheetId) {
           this.selectedEntry = 0;
         }
       } catch (e) {
-        this.lookupResult = { found: false, of: of, error: 'rede' };
+        this.lookupResult = { found: false, mode: 'none', q: q, error: 'rede' };
       } finally {
         this.loading = false;
       }
@@ -476,14 +482,15 @@ function ofWizard(sheetId) {
       this.applying = true;
       try {
         // R116 — selectedEntry é índice na lista ordenada; apply precisa do
-        // orig_idx (índice na lista não-ordenada, que é o que o backend indexa).
+        // orig_idx (índice na lista não-ordenada). R128 — entry.of vence
+        // sobre lookupResult.of porque modos modelo/OV agrupam OFs várias.
         const entry = this.lookupResult.entries[this.selectedEntry];
         const r = await fetch('/sheet/' + this.sheetId + '/apply-of-entry', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             row_index: this.row_index,
-            of: this.lookupResult.of,
+            of: entry.of || this.lookupResult.of,
             entry_idx: entry.orig_idx,
           }),
         });
@@ -517,17 +524,17 @@ function ofWizard(sheetId) {
 .row-of-wand-btn:hover { background: #faf6ed; }
 
 .of-wizard-modal {
-  max-width: 720px !important;
+  max-width: 880px !important;
 }
 
 .of-entries-list {
-  max-height: 360px;
+  max-height: min(60vh, 480px);
   overflow-y: auto;
   padding: 2px;
 }
 .of-entry-card {
-  display: flex; gap: 10px; align-items: flex-start;
-  padding: 10px 12px; margin-bottom: 6px;
+  display: flex; gap: 8px; align-items: flex-start;
+  padding: 6px 10px; margin-bottom: 3px;
   background: #fff; border: 1px solid rgba(22,20,15,0.1);
   border-radius: 6px; cursor: pointer;
   transition: background 0.1s, border-color 0.1s;
@@ -537,6 +544,23 @@ function ofWizard(sheetId) {
   border-color: #2F7D43; background: #f0f7e8;
 }
 .of-entry-card.done { opacity: 0.65; }
+.of-entry-card > div { min-width: 0; }
+.of-entry-card b {
+  overflow: hidden; text-overflow: ellipsis;
+  display: inline-block; max-width: 100%; vertical-align: bottom;
+}
+
+/* R128 — pill que mostra o modo (OF / OV / modelo) detectado */
+.of-mode-pill {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10px; font-weight: 700;
+  padding: 1px 6px; border-radius: 3px;
+  margin-right: 4px;
+}
+.of-mode-pill.mode-of { background: #e8f1d8; color: #2F5B33; }
+.of-mode-pill.mode-ov { background: #d8e8f1; color: #2F4A5B; }
+.of-mode-pill.mode-modelo { background: #f1e8d8; color: #5B4A2F; }
 
 /* R113 — badge "faltam X de Y" */
 .of-remaining-badge {

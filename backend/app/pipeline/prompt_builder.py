@@ -55,6 +55,9 @@ _FIELD_LABELS: dict[str, str] = {
     "esp": "ESP",
     "lbase": "LBASE",
     "ltopo": "LTOPO",
+    # R128 — kanban LASER (dimensões diâmetro base/topo)
+    "dbase": "DBASE",
+    "dtopo": "DTOPO",
     "sobras": "SOBRAS",
     "cesta_n": "CESTA Nº",
     "motivo": "MOTIVO DA PARAGEM",

@@ -84,6 +84,9 @@ def score_entry(
     op_lt = _num(row.get("ltopo"))
     op_esp = _num(row.get("esp"))
     op_larg = _num(row.get("larg_mm"))
+    # R128 — kanban LASER: dbase/dtopo distintos de lbase/ltopo
+    op_db = _num(row.get("dbase"))
+    op_dt = _num(row.get("dtopo"))
 
     # larg vive no StockSAP (indexado pelo lote), não na entry do plan.
     sap_full = refs.get("lotes_sap_full", {}) if refs else {}
@@ -124,6 +127,14 @@ def score_entry(
     plan_lt = _num(entry.get("ltopo"))
     if op_lt is not None and plan_lt is not None and abs(op_lt - plan_lt) <= 30:
         s += 1
+    # R128 — dbase (LASER) — campo próprio, threshold ±30mm
+    plan_db = _num(entry.get("dbase"))
+    if op_db is not None and plan_db is not None and abs(op_db - plan_db) <= 30:
+        s += 1
+    # R128 — dtopo (LASER)
+    plan_dt = _num(entry.get("dtopo"))
+    if op_dt is not None and plan_dt is not None and abs(op_dt - plan_dt) <= 30:
+        s += 1
     # esp
     plan_esp = _num(entry.get("esp"))
     if op_esp is not None and plan_esp is not None and abs(op_esp - plan_esp) <= 0.05:
@@ -142,13 +153,15 @@ _NO_REF_FIELDS = frozenset({
 _ROW_FIELDS = (
     "cliente", "ov", "of", "modelo", "lote",
     "comp_mm", "larg_mm", "lbase", "ltopo", "esp",
+    # R128 — kanban LASER: dimensões próprias (dbase/dtopo no plan_colunas)
+    "dbase", "dtopo",
 )
 
 # R123 — campos cujo top-K traz plan_entries para o pool do winner.
 # Inclui agora `cliente` (via plan_by_cliente) e `larg_mm`, para que uma
 # linha que só bate por esses campos ainda entre no pool de candidatas.
 _PLAN_FIELDS = ("of", "ov", "modelo", "cliente", "comp_mm", "larg_mm",
-                "lbase", "ltopo", "esp")
+                "lbase", "ltopo", "esp", "dbase", "dtopo")
 
 _TOP_K = 10
 
@@ -161,6 +174,9 @@ _VERY_DIFF_NUM_ABS = {             # ou se diferença absoluta > X, é muito dif
     "lbase": 30.0,
     "ltopo": 30.0,
     "esp": 0.5,
+    # R128 — LASER
+    "dbase": 30.0,
+    "dtopo": 30.0,
 }
 
 # Legendas para a UI (status → label PT-PT)
@@ -270,6 +286,8 @@ def _get_indices(refs: dict) -> dict:
     des_to_entries: dict[str, list[dict]] = {}
     dim_indices: dict[str, dict[float, list[dict]]] = {
         "comp": {}, "larg": {}, "lbase": {}, "ltopo": {}, "esp": {},
+        # R128 — kanban LASER (dbase/dtopo)
+        "dbase": {}, "dtopo": {},
     }
 
     for of_key, entries in of_to_entries.items():
@@ -282,7 +300,7 @@ def _get_indices(refs: dict) -> dict:
             des = str(e.get("designacao") or "").strip()
             if des:
                 des_to_entries.setdefault(des, []).append(stamped)
-            for attr in ("comp", "larg", "lbase", "ltopo", "esp"):
+            for attr in ("comp", "larg", "lbase", "ltopo", "esp", "dbase", "dtopo"):
                 v = _num(e.get(attr))
                 if v is not None:
                     dim_indices[attr].setdefault(v, []).append(stamped)
@@ -400,17 +418,20 @@ def _candidates_for_field(field: str, row: dict, refs: dict, idx: dict) -> list[
                     break
         return out[:_TOP_K]
 
-    if field in ("comp_mm", "larg_mm", "lbase", "ltopo", "esp"):
+    if field in ("comp_mm", "larg_mm", "lbase", "ltopo", "esp", "dbase", "dtopo"):
         ocr_num = _num(ocr_value)
         if ocr_num is None:
             return []
         plan_attr = {
             "comp_mm": "comp", "larg_mm": "larg",
             "lbase": "lbase", "ltopo": "ltopo", "esp": "esp",
+            # R128 — kanban LASER
+            "dbase": "dbase", "dtopo": "dtopo",
         }[field]
         max_delta = {
             "comp_mm": 100.0, "larg_mm": 50.0,
             "lbase": 30.0, "ltopo": 30.0, "esp": 0.1,
+            "dbase": 30.0, "dtopo": 30.0,
         }[field]
         in_range = [
             (val, entries) for val, entries in dim_indices[plan_attr].items()
@@ -676,10 +697,12 @@ def _apply_winner_to_field(
                 proposed = des
         elif field == "cliente":
             proposed = str(winner.get("cliente") or "").strip()
-        elif field in ("comp_mm", "lbase", "ltopo", "esp"):
+        elif field in ("comp_mm", "lbase", "ltopo", "esp", "dbase", "dtopo"):
             plan_attr = {
                 "comp_mm": "comp", "lbase": "lbase",
                 "ltopo": "ltopo", "esp": "esp",
+                # R128 — kanban LASER
+                "dbase": "dbase", "dtopo": "dtopo",
             }[field]
             v = winner.get(plan_attr)
             if v is not None and v != "":

@@ -203,6 +203,101 @@ def _lev1_digit_candidates(cod: int) -> list[int]:
     return out
 
 
+def _lev_distance(a: str, b: str) -> int:
+    """Levenshtein distance. Cópia local da função em scoring_engine para
+    evitar dependência cruzada entre dq/ e pipeline/. Short-circuit em
+    diferenças de comprimento > 5 (caso típico no fuzzy match: nomes muito
+    distintos não interessam)."""
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    if abs(len(a) - len(b)) > 5:
+        return 999
+    if len(a) > len(b):
+        a, b = b, a
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cost = 0 if ca == cb else 1
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost))
+        prev = cur
+    return prev[-1]
+
+
+def _find_fuzzy_name_match(
+    name_norm: str,
+    colaboradores: dict[int, dict[str, str]],
+) -> tuple[int, dict[str, str]] | None:
+    """R128 — best-effort fuzzy match contra ListaColaboradores. 2 tiers
+    em ordem de confiança; retorna o ÚNICO match dentro de um tier ou None.
+
+    Tier B: Levenshtein <= 2 no nome completo normalizado. Cobre typos em
+            nomes completos (MANYIT SINGH → MANJIT SINGH; RABHJOT SINGH →
+            PRABHJOT SINGH). Unicidade exigida: o segundo melhor tem de
+            estar estritamente pior.
+
+    Tier C: token overlap fuzzy — para cada colaborador, conta quantos
+            tokens do OCR têm match Lev<=1 com algum token canónico.
+            Selecciona o de score máximo apenas se único e score >= 1.
+            Cobre partial names (ADWAN cod errado → SYED ADNAN; ADWAN≈
+            ADNAN Lev=1).
+
+    Match suspended (yellow) — operador deve verificar.
+    """
+    if not name_norm:
+        return None
+    # Unicidade testada por NOME canónico (sname), não por cod — quando
+    # múltiplos cods partilham o mesmo sname (homónimos), o snap do nome
+    # é válido mesmo que o cod fique para revisão humana.
+    scored_b: list[tuple[int, int, dict, str]] = []
+    for cod, entry in colaboradores.items():
+        cs = _normalize_name(entry.get("sname", ""))
+        if not cs:
+            continue
+        d = _lev_distance(name_norm, cs)
+        if d <= 2:
+            scored_b.append((d, cod, entry, cs))
+    if scored_b:
+        scored_b.sort(key=lambda t: t[0])
+        top_d = scored_b[0][0]
+        top = [m for m in scored_b if m[0] == top_d]
+        top_snames = {m[3] for m in top}
+        if len(top_snames) == 1:
+            _, cod, entry, _ = top[0]
+            return cod, entry
+    ocr_tokens = _tokens(name_norm)
+    if not ocr_tokens:
+        return None
+    # Tier C: token overlap fuzzy. Lev<=2 nos tokens (cobre ADWAN≈ADNAN
+    # com Lev=2). Unicidade por sname canónico (top score, único nome).
+    scored_c: list[tuple[int, int, dict, str]] = []
+    for cod, entry in colaboradores.items():
+        cs = _normalize_name(entry.get("sname", ""))
+        can_tokens = _tokens(cs)
+        if not can_tokens:
+            continue
+        score = 0
+        for ot in ocr_tokens:
+            if any(_lev_distance(ot, ct) <= 2 for ct in can_tokens):
+                score += 1
+        if score >= 1:
+            scored_c.append((score, cod, entry, cs))
+    if not scored_c:
+        return None
+    scored_c.sort(key=lambda t: -t[0])
+    top_s = scored_c[0][0]
+    top = [m for m in scored_c if m[0] == top_s]
+    top_snames = {m[3] for m in top}
+    if len(top_snames) == 1:
+        _, cod, entry, _ = top[0]
+        return cod, entry
+    return None
+
+
 def _find_unique_name_match(
     name_norm: str,
     colaboradores: dict[int, dict[str, str]],
@@ -301,6 +396,23 @@ def snap_operador(
                 suspended=True,
             )
 
+        # R128 — fuzzy name fallback (Tier B Lev<=2 / Tier C token overlap)
+        # antes de desistir. Cobre OCR com typo no nome quando cod ficou
+        # vazio/inválido (ex: "MANYIT SINGH" → "MANJIT SINGH").
+        fuzzy = _find_fuzzy_name_match(name_norm_pre, colaboradores)
+        if fuzzy is not None:
+            cand_cod, entry = fuzzy
+            return SnapResult(
+                raw_name=name_raw,
+                raw_cod=cod_raw_str,
+                snapped_name=entry["sname"],
+                snapped_cod=str(cand_cod),
+                pernr=entry["pernr"],
+                rule="operador.fuzzy_name_match",
+                applied=True,
+                suspended=True,
+            )
+
         # Multiple or no candidates → no_ref (cinza, sem flag)
         return SnapResult(
             raw_name=name_raw,
@@ -324,16 +436,20 @@ def snap_operador(
         canonical_pernr = entry["pernr"]
         canonical_tokens = _tokens(canonical_sname)
 
-        # Condition A — exact match (cod + name) — no-op confirm
+        # Condition A — exact match (cod + name). R128: aplica edit quando
+        # case difere ("Rui Silva" → "RUI SILVA") para que o header fique
+        # com a forma canónica UPPER. No-op só quando a string raw já é
+        # exactamente igual ao canónico.
         if name_norm == canonical_sname:
+            case_diff = name_raw.strip() != canonical_sname
             return SnapResult(
                 raw_name=name_raw,
                 raw_cod=cod_raw_str,
                 snapped_name=canonical_sname,
                 snapped_cod=str(cod_int),
                 pernr=canonical_pernr,
-                rule="operador.exact_match",
-                applied=False,
+                rule="operador.case_normalize" if case_diff else "operador.exact_match",
+                applied=case_diff,
                 suspended=False,
             )
 
@@ -404,6 +520,23 @@ def snap_operador(
             snapped_cod=str(cand_cod),
             pernr=entry["pernr"],
             rule="operador.name_unique_match",
+            applied=True,
+            suspended=True,
+        )
+
+    # R128 — fuzzy name fallback antes do derive-only path. Cobre OCR com
+    # cod errado E nome só parcial (ex: "ADWAN" cod=2820 → SYED ADNAN via
+    # token overlap ADWAN≈ADNAN Lev=1).
+    fuzzy = _find_fuzzy_name_match(name_norm, colaboradores)
+    if fuzzy is not None:
+        cand_cod, entry = fuzzy
+        return SnapResult(
+            raw_name=name_raw,
+            raw_cod=cod_raw_str,
+            snapped_name=entry["sname"],
+            snapped_cod=str(cand_cod),
+            pernr=entry["pernr"],
+            rule="operador.fuzzy_name_match",
             applied=True,
             suspended=True,
         )

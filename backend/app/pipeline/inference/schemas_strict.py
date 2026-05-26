@@ -105,6 +105,11 @@ _ROW_SCHEMA: dict[str, Any] = {
         "esp": _string(_ESP),
         "lbase": _string(_NUMERIC_DIM),
         "ltopo": _string(_NUMERIC_DIM),
+        # R128 — kanban LASER (dbase/dtopo). Não vão a `required` —
+        # só são preenchidos para o template laser; mantemos
+        # `additionalProperties: False` válido para os outros.
+        "dbase": _string(_NUMERIC_DIM),
+        "dtopo": _string(_NUMERIC_DIM),
     },
 }
 

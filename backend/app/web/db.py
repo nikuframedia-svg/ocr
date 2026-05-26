@@ -78,6 +78,10 @@ CREATE TABLE IF NOT EXISTS production_rows (
     esp REAL,
     lbase INTEGER,
     ltopo INTEGER,
+    -- R128 — kanban LASER: dimensões próprias (dbase/dtopo). NULL para
+    -- todos os outros templates.
+    dbase INTEGER,
+    dtopo INTEGER,
     -- R86 — Gemini (TPL102) fields: m² (area) + nesting code.
     -- Populated only for HPE32/GASPARINI/HD36; NULL for other templates.
     m2 REAL,
@@ -297,6 +301,11 @@ def init_db() -> None:
             c.execute("ALTER TABLE production_rows ADD COLUMN m2 REAL")
         if "nesting" not in pr_cols:
             c.execute("ALTER TABLE production_rows ADD COLUMN nesting TEXT")
+        # R128 — kanban LASER: dbase/dtopo (diâmetro base/topo).
+        if "dbase" not in pr_cols:
+            c.execute("ALTER TABLE production_rows ADD COLUMN dbase INTEGER")
+        if "dtopo" not in pr_cols:
+            c.execute("ALTER TABLE production_rows ADD COLUMN dtopo INTEGER")
         for col, type_ in (
             ("qtd_metros", "REAL"),
             ("cesta_n", "TEXT"),
@@ -990,9 +999,10 @@ def _sync_production_rows(c: sqlite3.Connection, sheet_id: int, sheet_data: dict
                 sheet_status, sheet_hours, sheet_total_qty,
                 pri, cliente, ov, of, modelo, qtd,
                 comp_mm, larg_mm, lote, coni, esp, lbase, ltopo,
+                dbase, dtopo,
                 m2, nesting,
                 qtd_metros, cesta_n, inicio, fim)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 sheet_id, i,
                 operador, sheet_date_raw, sheet_iso, captured_at, validated_at,
@@ -1010,6 +1020,9 @@ def _sync_production_rows(c: sqlite3.Connection, sheet_id: int, sheet_data: dict
                 _parse_float(row.get("esp")),
                 _parse_int(row.get("lbase")),
                 _parse_int(row.get("ltopo")),
+                # R128 — kanban LASER (dbase/dtopo). NULL para outros templates.
+                _parse_int(row.get("dbase")),
+                _parse_int(row.get("dtopo")),
                 # R86 — Gemini fields (m2 + nesting). Optional; bobine/laser
                 # rows leave these NULL.
                 _parse_float(row.get("m2")),
@@ -1419,6 +1432,7 @@ def list_distinct_setores() -> list[str]:
 def list_sheets_filtered(
     operador: str | None = None,
     data_iso: str | None = None,
+    captured_iso: str | None = None,
     setor: str | None = None,
     of: str | None = None,
     statuses: tuple[str, ...] = ("extracted", "validated"),
@@ -1427,6 +1441,11 @@ def list_sheets_filtered(
 
     `data_iso` is YYYY-MM-DD; matches against header.data after format
     normalisation (header.data is DD-MM-YYYY in our schema).
+
+    R128 — `captured_iso` is YYYY-MM-DD; matches against the date portion
+    of `sheets.captured_at` (TIMESTAMP set by the backend on upload).
+    Distinct semantically from `data_iso`: the latter is what the operator
+    wrote on the sheet; this is when the upload happened.
 
     `of` filters sheets that have at least one production row with that OF
     (exact match against `production_rows.of`).
@@ -1482,6 +1501,15 @@ def list_sheets_filtered(
         if data_iso:
             iso = _normalize_data_pt_to_iso(d.get("sheet_data_str"))
             if iso != data_iso:
+                continue
+        # R128 — captured filter: dia da TIMESTAMP do upload. captured_at
+        # vem como datetime ou string consoante o driver SQLite/configuração;
+        # tratamos os dois.
+        if captured_iso:
+            cap_raw = d.get("captured_at")
+            cap = (cap_raw.isoformat() if hasattr(cap_raw, "isoformat")
+                   else str(cap_raw or ""))[:10]
+            if cap != captured_iso:
                 continue
         # of filter — sheet must have ≥ 1 row with this OF
         if of_sheet_ids is not None and d["id"] not in of_sheet_ids:

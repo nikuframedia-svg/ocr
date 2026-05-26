@@ -70,6 +70,16 @@
              onchange="if (this.checkValidity()) this.form.submit()">
     </label>
 
+    {# R128 — data de captura (timestamp do upload, distinta de header.data). #}
+    <label style="display:inline-flex; align-items:center; gap:6px;">
+      <span class="lbl" style="margin:0;">DATA CAPTURA</span>
+      <input type="date" name="captured" value="{{ captured_filter or '' }}"
+             min="2024-01-01" max="2030-12-31"
+             placeholder="aaaa-mm-dd" pattern="\d{4}-\d{2}-\d{2}"
+             class="kv-select"
+             onchange="if (this.checkValidity()) this.form.submit()">
+    </label>
+
     <label style="display:inline-flex; align-items:center; gap:6px;">
       <span class="lbl" style="margin:0;">SETOR</span>
       <select name="setor" class="kv-select" onchange="this.form.submit()">
@@ -88,7 +98,7 @@
       <button class="btn" type="submit">Filtrar</button>
     </label>
 
-    {% if operador_filter or data_filter or setor_filter or of_filter %}
+    {% if operador_filter or data_filter or captured_filter or setor_filter or of_filter %}
       <a class="btn ghost" style="font-size:12px;"
          href="/queue{% if status_filter and status_filter != 'all' %}?status={{ status_filter }}{% endif %}">✕ Limpar filtros</a>
     {% endif %}

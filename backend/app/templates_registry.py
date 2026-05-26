@@ -230,7 +230,9 @@ _SOLDLINE = TemplateSpec(
     description="Máquina de soldadura Soldline 4. QTD em colunas e em metros.",
 )
 
-# Laser — Soldadura laser (QTD col + QTD metros + LBASE/LTOPO)
+# Laser — Soldadura laser (QTD col + QTD metros + DBASE/DTOPO).
+# R128: campos DBASE/DTOPO são distintos de LBASE/LTOPO (são as dimensões
+# próprias do laser — colunas dbase/dtopo no plan_colunas_cpis.xlsx).
 _LASER = TemplateSpec(
     name="laser",
     tpl_code="TPL103",
@@ -238,13 +240,13 @@ _LASER = TemplateSpec(
     setor_aliases=("LASER", "SOLDADURA LASER"),
     row_fields=(
         "pri", "cliente", "ov", "of", "modelo",
-        "qtd", "qtd_metros", "lbase", "ltopo",
+        "qtd", "qtd_metros", "dbase", "dtopo",
     ),
     cross_check_fields=(
         "cliente", "ov", "of", "modelo",
-        "lbase", "ltopo",
+        "dbase", "dtopo",
     ),
-    description="Soldadura laser. QTD colunas/metros + LBASE/LTOPO.",
+    description="Soldadura laser. QTD colunas/metros + DBASE/DTOPO.",
 )
 
 # Manual — Produção manual (QTD + SOBRAS)

@@ -126,6 +126,9 @@ class Row(_StringFields):
     esp: str = ""
     lbase: str = ""
     ltopo: str = ""
+    # R128 — kanban LASER (dimensões diâmetro base/topo)
+    dbase: str = ""
+    dtopo: str = ""
 
 
 class Footer(_StringFields):

@@ -176,6 +176,7 @@ def _derive_plan_indexes(of_to_entries: dict[str, list[dict]]) -> dict[str, Any]
     modelo_fts: set[str] = set()
     cli_idx: dict[str, list[dict]] = {}
     mod_idx: dict[str, list[dict]] = {}
+    ov_idx: dict[str, list[dict]] = {}
     n_rows = 0
     for of_str, entries in of_to_entries.items():
         for e in entries:
@@ -195,6 +196,8 @@ def _derive_plan_indexes(of_to_entries: dict[str, list[dict]]) -> dict[str, Any]
                 cli_idx.setdefault(cli, []).append(e_with_of)
             if ft:
                 mod_idx.setdefault(ft, []).append(e_with_of)
+            if ov_v:
+                ov_idx.setdefault(ov_v, []).append(e_with_of)
     return {
         "ofs_plan_str": frozenset(of_to_entries.keys()),
         "of_to_entries": of_to_entries,
@@ -205,6 +208,7 @@ def _derive_plan_indexes(of_to_entries: dict[str, list[dict]]) -> dict[str, Any]
         "modelos_plan": frozenset(modelo_fts),
         "plan_by_cliente": cli_idx,
         "plan_by_modelo_ft": mod_idx,
+        "plan_by_ov": ov_idx,
         "n_ofs": len(of_to_entries),
         "n_clientes": len(clientes),
         "n_ovs": len(ovs_global),
@@ -258,7 +262,7 @@ def _mine_from_excel(
         refs["stats"]["n_lotes_file"] = len(stock_full)
         refs["sap_mtime"] = sap_path.stat().st_mtime
 
-    # ---- plan_colunas: cliente, ov, of, designacao, quanttrp, bf, esp, lbase, ltopo, ltotal, comp, ...
+    # ---- plan_colunas: cliente, ov, of, designacao, quanttrp, bf, esp, lbase, ltopo, ltotal, comp, dbase, dtopo, ...
     of_to_entries: dict[str, list[dict]] = {}
     if plan_path.exists():
         wb = openpyxl.load_workbook(plan_path, read_only=True, data_only=True)
@@ -303,6 +307,9 @@ def _mine_from_excel(
                 "ltopo": r[hdrs["ltopo"]] if "ltopo" in hdrs else None,
                 "ltotal": r[hdrs["ltotal"]] if "ltotal" in hdrs else None,
                 "comp": r[hdrs["comp"]] if "comp" in hdrs else None,
+                # R128 — kanban LASER: campos próprios (diâmetro base/topo).
+                "dbase": r[hdrs["dbase"]] if "dbase" in hdrs else None,
+                "dtopo": r[hdrs["dtopo"]] if "dtopo" in hdrs else None,
                 # Round 38: load npecas (canonical pieces-per-bobine count)
                 # + material for weight + material consistency checks.
                 "npecas": r[hdrs["npecas"]] if "npecas" in hdrs else None,
@@ -326,7 +333,8 @@ def _mine_from_excel(
     _plan_idx = _derive_plan_indexes(of_to_entries)
     for _k in ("ofs_plan_str", "of_to_entries", "of_to_ovs",
                "of_to_designacoes", "clientes_plan", "ovs_plan",
-               "modelos_plan", "plan_by_cliente", "plan_by_modelo_ft"):
+               "modelos_plan", "plan_by_cliente", "plan_by_modelo_ft",
+               "plan_by_ov"):
         refs[_k] = _plan_idx[_k]
     refs["stats"]["n_plan_rows"] = _plan_idx["n_plan_rows"]
     refs["stats"]["n_ofs"] = _plan_idx["n_ofs"]
