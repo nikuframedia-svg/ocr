@@ -173,7 +173,7 @@ _STATUS_LABELS = {
 
 # R123 — versão do motor. Gravada em cada cross-check JSON; o viewer
 # regenera on-demand qualquer folha cujo JSON seja de uma versão anterior.
-ENGINE_VERSION = "v6_R123"
+ENGINE_VERSION = "v7_R128"
 
 
 # Utilidades de distância ----------------------------------------------------
@@ -664,26 +664,16 @@ def _apply_winner_to_field(
         elif field == "ov":
             proposed = str(winner.get("ov") or "").strip()
         elif field == "modelo":
-            # B8 (R123) / R124 / R126 — propor o CÓDIGO do modelo, não a
-            # designação longa. O código é a parte antes do " - " na
-            # designação.
-            # R124: comparação estricta — só se mantém o valor do
-            # operador quando bate EXACTAMENTE com o código.
-            # R126: quando a designação NÃO tem " - " (típico em corte
-            # CAD do TPL102 — hpe32/gasparini/hd36), não há código
-            # parseável; forçar a designação inteira como canónico fazia
-            # `modelo` ficar permanentemente NO_MATCH (operador escreve
-            # algo curto, motor propõe longo). Nesse caso respeita o
-            # valor do operador se preenchido.
-            des = str(winner.get("designacao") or "").strip()
-            if " - " in des:
-                modelo_code = des.split(" - ", 1)[0].strip()
-                if ocr_value and ocr_value.strip().upper() == modelo_code.upper():
-                    proposed = ocr_value
-                else:
-                    proposed = modelo_code
+            # R128 — reverte R123/R124/R126. O canónico do modelo é a
+            # designação COMPLETA do plan (ex: "CGC2E10D - Coluna Tronco-
+            # Cónica 10m"), não o código curto. _finish_cell trata o status
+            # (confirmed se OCR == des, snapped se diferente mas próximo,
+            # very_different se muito diferente).
+            des = " ".join(str(winner.get("designacao") or "").split())
+            if not des:
+                proposed = ocr_value or None
             else:
-                proposed = ocr_value if ocr_value else des
+                proposed = des
         elif field == "cliente":
             proposed = str(winner.get("cliente") or "").strip()
         elif field in ("comp_mm", "lbase", "ltopo", "esp"):
