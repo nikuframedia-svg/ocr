@@ -47,7 +47,7 @@ _PRI = r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$|^$"
 # enough not to fight the model on legitimate strings, tight enough to
 # block hallucinations like full sentences.
 _OPERADOR = r"^[A-ZÀ-Ý][A-ZÀ-Ý .]{1,40}$|^$"
-_SETOR = r"^[A-Z][A-Z\- ]{1,40}$|^$"
+_SETOR = r"^[A-Z][A-Z0-9.\- ]{1,40}$|^$"  # R129 — aceita dígitos (MTG2, HPE32) e ponto (PAV.4)
 _CLIENTE = r"^[A-Z0-9][A-Z0-9 .,'ÉÊÇª-]{0,40}$|^$"
 # Allow lowercase i/v/iv suffixes ("CLC8F07Ri-V", "CLC8F06Div"), Ç, °, ª.
 _MODELO = r"^[A-Z0-9][A-Z0-9 .\-/°ªivÇ+]{0,60}$|^$"
@@ -56,6 +56,8 @@ _MODELO = r"^[A-Z0-9][A-Z0-9 .\-/°ªivÇ+]{0,60}$|^$"
 def _string(pattern: str) -> dict[str, Any]:
     return {"type": "string", "pattern": pattern}
 
+
+_TURNO = r"^(M|R|XM|T)?$"  # R129 — só no kanban Acabamento MTG2
 
 _HEADER_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -70,6 +72,9 @@ _HEADER_SCHEMA: dict[str, Any] = {
         # allowed for kanbans where the code isn't printed.
         "cod_maquina": {"type": "string", "pattern": r"^M\d{3}$|^$"},
         "data": _string(_DATE),
+        # R129 — turno: M/R/XM/T (Acabamento MTG2). Não em `required` —
+        # vazio para todos os outros templates.
+        "turno": _string(_TURNO),
     },
 }
 

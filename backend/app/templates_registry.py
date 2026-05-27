@@ -48,7 +48,7 @@ Backward compat:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field as dc_field
 from typing import Iterable
 
 
@@ -113,6 +113,12 @@ class TemplateSpec:
 
     # Free-form description shown in UI tooltips / queue badges.
     description: str = ""
+
+    # R129 — per-template override do label de uma coluna (no prompt, CSV).
+    # Default `{}` mantém o comportamento global (_FIELD_LABELS em
+    # prompt_builder.py). Acabamento MTG2 usa para mostrar "FERR." no
+    # kanban sobre o campo interno `coni`.
+    field_labels: dict[str, str] = dc_field(default_factory=dict)
 
 
 # ============================================================================
@@ -318,6 +324,31 @@ _QUINADORA_PAV4 = TemplateSpec(
     description="Quinadora PAV.4 (produção de colunas).",
 )
 
+# Acabamento MTG2 — kanban TPL086 (R129). Campos do operador: OV/OF/
+# REFERÊNCIA-PEÇA (modelo) / FERR. (reutiliza `coni` com label override) /
+# QTD. Header tem TURNO (M/R/XM/T) próprio deste kanban.
+_ACABAMENTO_MTG2 = TemplateSpec(
+    name="acabamento_mtg2",
+    tpl_code="TPL086",
+    phase="Acabamento",
+    setor_aliases=("ACABAMENTO MTG2",),
+    row_fields=(
+        "ov", "of", "modelo", "coni", "qtd",
+    ),
+    cross_check_fields=(
+        "ov", "of", "modelo",
+    ),
+    header_fields=(
+        "operador", "n_operador", "setor_maquina", "cod_maquina",
+        "data", "turno",
+    ),
+    footer_fields=("colunas_produzidas",),
+    csv_block_label="TABELA DE ACABAMENTO",
+    field_labels={"coni": "FERR."},
+    description="Acabamento MTG2. OV/OF/REFERÊNCIA/FERR/QTD; TURNO M/R/XM/T.",
+)
+
+
 # ============================================================================
 #  TPL102 — Produção Gemini (corte térmico, nesting de chapa)
 # ============================================================================
@@ -388,6 +419,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         _MANUAL,
         _ROBOT,
         _EXPEDICAO,
+        _ACABAMENTO_MTG2,
         _GASPARINI,
         _HPE32,
         _HD36,

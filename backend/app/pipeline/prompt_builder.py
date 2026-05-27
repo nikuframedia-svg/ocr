@@ -75,8 +75,13 @@ _FIELD_LABELS: dict[str, str] = {
 
 
 def _columns_line(template: TemplateSpec) -> str:
-    """Build the `COL1 | COL2 | COL3` line for the prompt."""
-    return " | ".join(_FIELD_LABELS.get(f, f.upper()) for f in template.row_fields)
+    """Build the `COL1 | COL2 | COL3` line for the prompt.
+
+    R129 — per-template overrides via `template.field_labels` (acabamento_mtg2
+    usa para mostrar "FERR." sobre o campo `coni`).
+    """
+    labels = {**_FIELD_LABELS, **(template.field_labels or {})}
+    return " | ".join(labels.get(f, f.upper()) for f in template.row_fields)
 
 
 def _row_skeleton(template: TemplateSpec) -> str:
@@ -109,6 +114,10 @@ _RULES_PRODUCTION = """IMPORTANT RULES:
 - PRI values can be: numbers (1, 2, 5), codes (c7, C16, C24, P2, P4), or combinations (REP. C9).
 - CLIENTE may have no spaces (MTGBELUX) or have spaces (MTG GMBH, DAV NORDIC, LE HAVRE).
 - CONI can be a number (10, 12, 14) or text (T, OCT, TORRES).
+- FERR. (in ACABAMENTO MTG2 kanbans only — same column as CONI) is one of:
+  OCT, CIL, CIQ, CIB, TORRES, CONI. Treat as the CONI field internally.
+- TURNO (header field, only in ACABAMENTO MTG2 kanbans) is one of: M, R,
+  XM, T (the operator marks which shift). Empty string for other templates.
 - LOTE follows pattern like M25B0746, M26B0307, H24B1003 — copy exactly what you see.
 - If a field is empty or not visible, use empty string "".
 - Do NOT invent values. If a digit is unclear, copy your best reading; do not make up plausible alternatives.

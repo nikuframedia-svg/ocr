@@ -98,6 +98,8 @@ class Header(_StringFields):
     setor_maquina: str = ""
     cod_maquina: str = ""
     data: str = ""
+    # R129 — turno (M/R/XM/T) só no kanban Acabamento MTG2; vazio nos outros.
+    turno: str = ""
 
     @field_validator("data", mode="after")
     @classmethod

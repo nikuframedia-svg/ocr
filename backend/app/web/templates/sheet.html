@@ -384,8 +384,9 @@
                   <input type="radio" :value="i" x-model="selectedEntry"
                          style="margin-top:4px;">
                   <div style="flex:1;">
-                    <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-                      <b x-text="e.modelo || '(sem modelo)'"></b>
+                    <div class="of-modelo-row">
+                      <b class="of-modelo" :title="e.modelo"
+                         x-text="e.modelo || '(sem modelo)'"></b>
                       <template x-if="e.remaining != null && e.quanttrp != null">
                         <span class="of-remaining-badge"
                               :class="e.done ? 'done' : (e.remaining < 5 ? 'urgent' : '')"
@@ -545,9 +546,38 @@ function ofWizard(sheetId) {
 }
 .of-entry-card.done { opacity: 0.65; }
 .of-entry-card > div { min-width: 0; }
-.of-entry-card b {
-  overflow: hidden; text-overflow: ellipsis;
-  display: inline-block; max-width: 100%; vertical-align: bottom;
+
+/* R128 fix — override do `.sheet-modal input { width:100%; padding:14px;
+   font-size:22px }` (design.css:624, intencional para o bottom-sheet
+   editor mobile) que esmaga radios/checkboxes dentro do wizard. */
+.of-wizard-modal .of-entry-card input[type="radio"],
+.of-wizard-modal input[type="checkbox"] {
+  width: auto;
+  padding: 0;
+  font-size: inherit;
+  flex-shrink: 0;
+  margin: 0;
+  border: 1px solid rgba(22,20,15,0.4);
+  border-radius: 3px;
+}
+.of-wizard-modal .of-entry-card input[type="radio"] {
+  margin-top: 3px;
+}
+
+/* Linha 1: modelo (truncate) + badges (flex-shrink:0 implícito). */
+.of-entry-card .of-modelo-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.of-entry-card .of-modelo {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 /* R128 — pill que mostra o modo (OF / OV / modelo) detectado */

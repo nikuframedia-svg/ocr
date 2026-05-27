@@ -1723,22 +1723,43 @@ def sheet_of_lookup(
                 )
                 pooled.append({**e, "_orig_idx": orig_idx})
 
-    # Tier 3 — modelo prefix
+    # Tier 3 — modelo: prefix no first-token (fast path) + substring na
+    # designação completa. R128 fez o campo modelo no cross-check guardar
+    # a designação completa; o operador escreve naturalmente parte longa
+    # ("Tronco-Cónica" ou "CGC2E10D - Coluna") e antes não batia nada.
     if mode == "none":
-        matching_keys = [k for k in plan_by_modelo_ft.keys()
-                         if k.startswith(q_upper)]
-        for k in matching_keys:
-            entries = plan_by_modelo_ft.get(k) or []
-            for e in entries:
-                of_of_entry = str(e.get("_of") or "")
-                source = of_to_entries.get(of_of_entry) or []
-                orig_idx = next(
-                    (i for i, se in enumerate(source) if se is e
-                     or (se.get("ov") == e.get("ov")
-                         and se.get("designacao") == e.get("designacao"))),
-                    -1,
-                )
-                pooled.append({**e, "_orig_idx": orig_idx})
+        seen: set[tuple] = set()
+
+        def _add_to_pool(e: dict) -> None:
+            of_of_entry = str(e.get("_of") or "")
+            key = (of_of_entry, str(e.get("ov") or ""),
+                   str(e.get("designacao") or ""))
+            if key in seen:
+                return
+            seen.add(key)
+            source = of_to_entries.get(of_of_entry) or []
+            orig_idx = next(
+                (i for i, se in enumerate(source) if se is e
+                 or (se.get("ov") == e.get("ov")
+                     and se.get("designacao") == e.get("designacao"))),
+                -1,
+            )
+            pooled.append({**e, "_orig_idx": orig_idx})
+
+        # Pass A — prefix no first-token (caso típico, queries curtas)
+        for k in plan_by_modelo_ft.keys():
+            if not k.startswith(q_upper):
+                continue
+            for e in plan_by_modelo_ft.get(k) or []:
+                _add_to_pool(e)
+        # Pass B — substring na designação completa (queries longas)
+        if len(q_upper) >= 3:
+            for of_key, entries in of_to_entries.items():
+                for e in entries:
+                    des = (e.get("designacao") or "").upper()
+                    if q_upper not in des:
+                        continue
+                    _add_to_pool({**e, "_of": of_key})
         if pooled:
             mode = "modelo"
             n_total_pre_filter = len(pooled)
