@@ -1,21 +1,21 @@
-{"version": 1, "type": "proposal_created", "at": "2026-05-26T15:57:32.759179+00:00", "payload": {"proposal_id": 682, "kind": "rule", "risk_class": "review"}}
-{"version": 2, "type": "proposal_created", "at": "2026-05-26T15:57:32.823694+00:00", "payload": {"proposal_id": 683, "kind": "template", "risk_class": "review"}}
-{"version": 3, "type": "proposal_created", "at": "2026-05-26T15:57:32.889401+00:00", "payload": {"proposal_id": 684, "kind": "rule", "risk_class": "review"}}
-{"version": 4, "type": "proposal_created", "at": "2026-05-26T15:57:32.919368+00:00", "payload": {"proposal_id": 685, "kind": "rule", "risk_class": "review"}}
-{"version": 5, "type": "proposal_created", "at": "2026-05-26T15:57:32.964806+00:00", "payload": {"proposal_id": 686, "kind": "rule", "risk_class": "review"}}
-{"version": 6, "type": "proposal_created", "at": "2026-05-26T15:57:33.015176+00:00", "payload": {"proposal_id": 687, "kind": "rule", "risk_class": "review"}}
-{"version": 7, "type": "proposal_created", "at": "2026-05-26T15:57:33.052767+00:00", "payload": {"proposal_id": 688, "kind": "rule", "risk_class": "review"}}
-{"version": 8, "type": "proposal_created", "at": "2026-05-26T15:57:33.098739+00:00", "payload": {"proposal_id": 689, "kind": "rule", "risk_class": "review"}}
-{"version": 9, "type": "proposal_created", "at": "2026-05-26T15:57:33.198984+00:00", "payload": {"proposal_id": 690, "kind": "rule", "risk_class": "review"}}
-{"version": 10, "type": "proposal_decided", "at": "2026-05-26T15:57:33.243384+00:00", "payload": {"proposal_id": 690, "decision": "accepted"}}
-{"version": 11, "type": "policy_promoted", "at": "2026-05-26T15:57:33.249104+00:00", "payload": {"version": 339}}
-{"version": 12, "type": "proposal_created", "at": "2026-05-26T15:57:33.269322+00:00", "payload": {"proposal_id": 691, "kind": "rule", "risk_class": "review"}}
-{"version": 13, "type": "proposal_decided", "at": "2026-05-26T15:57:33.286561+00:00", "payload": {"proposal_id": 691, "decision": "rejected"}}
-{"version": 14, "type": "proposal_created", "at": "2026-05-26T15:57:35.264948+00:00", "payload": {"proposal_id": 692, "kind": "rule", "risk_class": "auto"}}
-{"version": 15, "type": "proposal_created", "at": "2026-05-26T15:57:35.290225+00:00", "payload": {"proposal_id": 693, "kind": "rule", "risk_class": "review"}}
-{"version": 16, "type": "proposal_created", "at": "2026-05-26T15:57:35.308639+00:00", "payload": {"proposal_id": 694, "kind": "rule", "risk_class": "review"}}
-{"version": 17, "type": "proposal_created", "at": "2026-05-26T15:57:35.333143+00:00", "payload": {"proposal_id": 695, "kind": "rule", "risk_class": "approval"}}
-{"version": 18, "type": "proposal_created", "at": "2026-05-26T15:57:35.394632+00:00", "payload": {"proposal_id": 696, "kind": "rule", "risk_class": "auto"}}
-{"version": 19, "type": "proposal_created", "at": "2026-05-26T15:57:35.407361+00:00", "payload": {"proposal_id": 697, "kind": "template", "risk_class": "review"}}
-{"version": 20, "type": "proposal_created", "at": "2026-05-26T15:57:35.438256+00:00", "payload": {"proposal_id": 698, "kind": "cpis", "risk_class": "review"}}
-{"version": 21, "type": "proposal_created", "at": "2026-05-26T15:57:35.458628+00:00", "payload": {"proposal_id": 699, "kind": "rule", "risk_class": "review"}}
+{"version": 1, "type": "proposal_created", "at": "2026-05-27T08:26:23.371967+00:00", "payload": {"proposal_id": 736, "kind": "rule", "risk_class": "review"}}
+{"version": 2, "type": "proposal_created", "at": "2026-05-27T08:26:23.426678+00:00", "payload": {"proposal_id": 737, "kind": "template", "risk_class": "review"}}
+{"version": 3, "type": "proposal_created", "at": "2026-05-27T08:26:23.529459+00:00", "payload": {"proposal_id": 738, "kind": "rule", "risk_class": "review"}}
+{"version": 4, "type": "proposal_created", "at": "2026-05-27T08:26:23.562897+00:00", "payload": {"proposal_id": 739, "kind": "rule", "risk_class": "review"}}
+{"version": 5, "type": "proposal_created", "at": "2026-05-27T08:26:23.627958+00:00", "payload": {"proposal_id": 740, "kind": "rule", "risk_class": "review"}}
+{"version": 6, "type": "proposal_created", "at": "2026-05-27T08:26:23.693888+00:00", "payload": {"proposal_id": 741, "kind": "rule", "risk_class": "review"}}
+{"version": 7, "type": "proposal_created", "at": "2026-05-27T08:26:23.727223+00:00", "payload": {"proposal_id": 742, "kind": "rule", "risk_class": "review"}}
+{"version": 8, "type": "proposal_created", "at": "2026-05-27T08:26:23.790151+00:00", "payload": {"proposal_id": 743, "kind": "rule", "risk_class": "review"}}
+{"version": 9, "type": "proposal_created", "at": "2026-05-27T08:26:23.923205+00:00", "payload": {"proposal_id": 744, "kind": "rule", "risk_class": "review"}}
+{"version": 10, "type": "proposal_decided", "at": "2026-05-27T08:26:23.977465+00:00", "payload": {"proposal_id": 744, "decision": "accepted"}}
+{"version": 11, "type": "policy_promoted", "at": "2026-05-27T08:26:23.982437+00:00", "payload": {"version": 366}}
+{"version": 12, "type": "proposal_created", "at": "2026-05-27T08:26:23.992712+00:00", "payload": {"proposal_id": 745, "kind": "rule", "risk_class": "review"}}
+{"version": 13, "type": "proposal_decided", "at": "2026-05-27T08:26:24.027465+00:00", "payload": {"proposal_id": 745, "decision": "rejected"}}
+{"version": 14, "type": "proposal_created", "at": "2026-05-27T08:26:25.908694+00:00", "payload": {"proposal_id": 746, "kind": "rule", "risk_class": "auto"}}
+{"version": 15, "type": "proposal_created", "at": "2026-05-27T08:26:25.926079+00:00", "payload": {"proposal_id": 747, "kind": "rule", "risk_class": "review"}}
+{"version": 16, "type": "proposal_created", "at": "2026-05-27T08:26:25.947233+00:00", "payload": {"proposal_id": 748, "kind": "rule", "risk_class": "review"}}
+{"version": 17, "type": "proposal_created", "at": "2026-05-27T08:26:25.966966+00:00", "payload": {"proposal_id": 749, "kind": "rule", "risk_class": "approval"}}
+{"version": 18, "type": "proposal_created", "at": "2026-05-27T08:26:26.031763+00:00", "payload": {"proposal_id": 750, "kind": "rule", "risk_class": "auto"}}
+{"version": 19, "type": "proposal_created", "at": "2026-05-27T08:26:26.054815+00:00", "payload": {"proposal_id": 751, "kind": "template", "risk_class": "review"}}
+{"version": 20, "type": "proposal_created", "at": "2026-05-27T08:26:26.083874+00:00", "payload": {"proposal_id": 752, "kind": "cpis", "risk_class": "review"}}
+{"version": 21, "type": "proposal_created", "at": "2026-05-27T08:26:26.107407+00:00", "payload": {"proposal_id": 753, "kind": "rule", "risk_class": "review"}}

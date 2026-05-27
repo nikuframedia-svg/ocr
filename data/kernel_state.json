@@ -1,6 +1,6 @@
 {
   "version": 21,
-  "last_event_at": "2026-05-26T15:57:35.458628+00:00",
+  "last_event_at": "2026-05-27T08:26:26.107407+00:00",
   "counts": {
     "sheets_uploaded": 0,
     "sheets_validated": 0,
@@ -14,7 +14,7 @@
     "qwen_sessions": 0,
     "shadow_runs": 0
   },
-  "active_policy_version": 339,
+  "active_policy_version": 366,
   "last_r98_run_at": null,
   "last_qwen_session_at": null,
   "last_circuit_breaker_at": null
