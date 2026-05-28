@@ -1,10 +1,10 @@
 {
-  "version": 16,
-  "last_event_at": "2026-05-27T16:06:22.547218+00:00",
+  "version": 8,
+  "last_event_at": "2026-05-28T08:42:27.238771+00:00",
   "counts": {
     "sheets_uploaded": 0,
     "sheets_validated": 0,
-    "proposals_created": 16,
+    "proposals_created": 8,
     "proposals_accepted": 0,
     "proposals_rejected": 0,
     "policies_promoted": 0,
