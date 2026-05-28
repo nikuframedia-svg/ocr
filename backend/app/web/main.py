@@ -583,16 +583,23 @@ def _run_and_store_cross_check(sheet_id: int) -> dict | None:
     # auto-overwrite abaixo salta-os, senão o re-cross-check disparado por
     # `sheet_edit` reverte a correcção do operador ("escrevo mas não guarda").
     protected = _human_edited_paths(sheet_id)
-    # R61 — auto-overwrite modelo/cliente when MATCH but value diverges
-    n_overwritten = _apply_auto_overwrites(sheet_id, result, protected)
-    # R70 — operator snap against ListaColaboradores (SAP employee list).
-    # Resolves OCR name/cod against canonical sname/cod/pernr and applies
-    # auto-substitution when there's strong identity signal (cod + token
-    # overlap). See backend/app/dq/operador_snap.py for the 5 rules.
-    n_op_snapped = _apply_operador_snap(sheet_id, sheet, refs, protected)
-    # R85 — auto-fill cod_maquina from setor_maquina via maquinas.xlsx
-    # lookup. Fills empty cod_maquina when setor maps to a known machine.
-    n_codmaq_filled = _apply_codmaq_fill(sheet_id, sheet, refs, protected)
+    # R134 — folhas validadas são IMUTÁVEIS (audit trail EN 1090 / ISO 9001):
+    # nunca auto-substituir nada. O bump do ENGINE_VERSION faz `_build_cc_maps`
+    # regenerar o cross-check de folhas antigas ao abrir — para validated isso
+    # só pode refrescar o JSON de display, nunca tocar no sheet_data.
+    if sheet.get("status") == "validated":
+        n_overwritten = n_op_snapped = n_codmaq_filled = 0
+    else:
+        # R61 — auto-overwrite modelo/cliente when MATCH but value diverges
+        n_overwritten = _apply_auto_overwrites(sheet_id, result, protected)
+        # R70 — operator snap against ListaColaboradores (SAP employee list).
+        # Resolves OCR name/cod against canonical sname/cod/pernr and applies
+        # auto-substitution when there's strong identity signal (cod + token
+        # overlap). See backend/app/dq/operador_snap.py for the 5 rules.
+        n_op_snapped = _apply_operador_snap(sheet_id, sheet, refs, protected)
+        # R85 — auto-fill cod_maquina from setor_maquina via maquinas.xlsx
+        # lookup. Fills empty cod_maquina when setor maps to a known machine.
+        n_codmaq_filled = _apply_codmaq_fill(sheet_id, sheet, refs, protected)
     if n_overwritten > 0 or n_op_snapped > 0 or n_codmaq_filled > 0:
         # Re-fetch sheet (sheet_data was modified by apply_edit) and
         # re-run cross-check to refresh statuses against new values.

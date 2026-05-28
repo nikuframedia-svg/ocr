@@ -139,6 +139,16 @@ def _header_skel(template: TemplateSpec, setor: str) -> str:
 
 _RULES_PRODUCTION = """IMPORTANT RULES:
 - Extract EVERY row that has data — do not skip any row.
+- COLUMN ALIGNMENT (critical): the table has a FIXED set of columns. For EACH
+  row emit one value PER column, in order, using the exact JSON keys shown —
+  ALWAYS include every key, even when the cell is blank (then use ""). A blank
+  or unreadable cell is "" for THAT key only: never shift the next column's
+  value left to fill the gap, and never borrow a value from the row above/below.
+- Each column is independent — a value belongs to the column it physically sits
+  under. OF is EXACTLY 6 digits; OV is digits; PRI is a short priority code or
+  number (1, 2, C7, P4, REP. C9) and is NEVER a 6-digit number. If a value does
+  not fit its column's shape, you are probably reading the wrong column — re-check
+  the physical alignment before placing it.
 - Some rows may have the MODELO field written across 2 lines — join them with a space.
 - Some MODELO values include suffixes like "1ª PRIORIDADE" or "2ª PRIORIDADE" — preserve them.
 - PRI values can be: numbers (1, 2, 5), codes (c7, C16, C24, P2, P4), or combinations (REP. C9).
@@ -157,6 +167,11 @@ EXAMPLES of MODELO (copy verbatim, do not normalize):
   CGC2E10D, CLC8F07Ri-V, CFC5F45Riv, CD03P502, CB04E63D, CA08E10B,
   OMEGA60-6M, PTJ157578, 1383VF01, 8615F00, BSBCA0066, LMF1882T,
   BRAÇOS, CGC2E06Di-2ªPRIORIDADE.
+
+COLUMN ALIGNMENT EXAMPLE — a row whose PRI cell is blank keeps every key; the
+empty cell is "" and nothing shifts left:
+  CORRECT: {"pri":"", "cliente":"ENEDIS", "ov":"2603385", "of":"262559", "modelo":"CGC2E10D", ...}
+  WRONG  : {"pri":"ENEDIS", "cliente":"2603385", "of":"262559", "modelo":"CGC2E10D", ...}  (values shifted left)
 
 WATCH OUT FOR HANDWRITING CONFUSIONS:
 - 0 (zero) vs O (letter) — MODELO codes almost always have digits where they look like 0.

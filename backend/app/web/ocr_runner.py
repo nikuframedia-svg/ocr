@@ -33,6 +33,7 @@ from typing import Final  # R132
 
 import ocr6  # type: ignore  # noqa: E402
 
+from app.dq.alignment import check_and_fix_alignment  # noqa: E402
 from app.pipeline.prompt_builder import (  # noqa: E402
     build_prompt,
     build_side_detect_prompt,
@@ -156,6 +157,24 @@ def _empty_dq_stub() -> dict:
     }
 
 
+def _build_current_and_dq(raw_extraction: dict, template: Any) -> tuple[dict, dict]:
+    """R135 — corre o guard de alinhamento de colunas sobre a cópia editável
+    (`current`), mantendo `raw_extraction` como snapshot OCR intacto (audit).
+
+    Move valores trocados entre PRI<->OF nos casos não-ambíguos e regista cada
+    movimento / violação em `dq['violations']`.
+    """
+    dq = _empty_dq_stub()
+    rows = raw_extraction.get("rows", []) or []
+    fixed_rows, flags = check_and_fix_alignment(rows, tuple(template.row_fields))
+    current = dict(raw_extraction)
+    current["rows"] = fixed_rows
+    if flags:
+        dq["violations"] = flags
+        dq["summary"]["n_violations"] = len(flags)
+    return current, dq
+
+
 def run_pipeline(image_path: Path) -> dict:
     """R109 — corre OCR + detecção de template. Sem DQ.
 
@@ -202,10 +221,11 @@ def run_pipeline(image_path: Path) -> dict:
 
     raw_extraction["template_name"] = template.name
 
+    current, dq = _build_current_and_dq(raw_extraction, template)
     return {
         "raw": raw_extraction,
-        "dq": _empty_dq_stub(),
-        "current": raw_extraction,
+        "dq": dq,
+        "current": current,
         "template_name": template.name,
     }
 
@@ -226,10 +246,11 @@ def rerun_pipeline_for_template(image_path: Path, template_name: str) -> dict:
 
     raw_extraction["template_name"] = template.name
 
+    current, dq = _build_current_and_dq(raw_extraction, template)
     return {
         "raw": raw_extraction,
-        "dq": _empty_dq_stub(),
-        "current": raw_extraction,
+        "dq": dq,
+        "current": current,
         "template_name": template.name,
     }
 

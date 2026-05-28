@@ -199,7 +199,11 @@ _STATUS_LABELS = {
 # R130 — cross-check rigoroso: of/ov/cliente nunca silenciosamente
 # substituídos; dim só auto-corrige com winner score>=4; UI marca cells
 # auto-substituídas com cor amarela (cc-warn) via `proposed` no tooltip.
-ENGINE_VERSION = "v8_R130"
+# R134 — substitute-everything restaurado (of/ov/cliente voltam a ser
+# substituídos pela entry vencedora). BUMP obrigatório da versão: sem ele,
+# `_build_cc_maps` não regenera as folhas processadas sob R130 e elas ficam
+# presas no estado antigo (of/ov/cliente a amarelo, sem substituir).
+ENGINE_VERSION = "v9_R134"
 
 
 # Utilidades de distância ----------------------------------------------------
