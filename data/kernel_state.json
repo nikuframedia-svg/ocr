@@ -1,20 +1,20 @@
 {
-  "version": 21,
-  "last_event_at": "2026-05-27T08:26:26.107407+00:00",
+  "version": 16,
+  "last_event_at": "2026-05-27T16:06:22.547218+00:00",
   "counts": {
     "sheets_uploaded": 0,
     "sheets_validated": 0,
-    "proposals_created": 18,
-    "proposals_accepted": 1,
-    "proposals_rejected": 1,
-    "policies_promoted": 1,
+    "proposals_created": 16,
+    "proposals_accepted": 0,
+    "proposals_rejected": 0,
+    "policies_promoted": 0,
     "rollbacks": 0,
     "circuit_breaker_triggers": 0,
     "r98_cycles": 0,
     "qwen_sessions": 0,
     "shadow_runs": 0
   },
-  "active_policy_version": 366,
+  "active_policy_version": null,
   "last_r98_run_at": null,
   "last_qwen_session_at": null,
   "last_circuit_breaker_at": null
