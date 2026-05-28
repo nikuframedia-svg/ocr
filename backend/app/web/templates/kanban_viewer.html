@@ -37,10 +37,21 @@
                    pattern="\d{1,5}" placeholder="ex: 1481"
                    required class="kv-select" style="width:80px;">
           </label>
+          {# R131 — dropdown pré-selecciona o snap result vindo de
+             `header.operador` (snap_operador escreveu o canónico após
+             cross-check). 1 clique para validar. Edge case: snap propôs
+             nome NÃO presente em `valid_operadores` (colaborador removido
+             do SAP) → adiciona option extra marcada "(do snap)" para o
+             operador poder ainda validar sem perder a referência. #}
+          {% set _snap_name = (header.operador if header else '') or '' %}
           <select name="operador" required class="kv-select" style="min-width:180px;">
-            <option value="">Confirmar nome…</option>
+            <option value="" {% if not _snap_name %}selected{% endif %}>Confirmar nome…</option>
+            {% if _snap_name and _snap_name not in valid_operadores %}
+              <option value="{{ _snap_name }}" selected>{{ _snap_name }} (do snap)</option>
+            {% endif %}
             {% for op in valid_operadores %}
-              <option value="{{ op }}" {% if op == current_operador %}selected{% endif %}>{{ op }}</option>
+              <option value="{{ op }}"
+                {% if op == _snap_name or (not _snap_name and op == current_operador) %}selected{% endif %}>{{ op }}</option>
             {% endfor %}
           </select>
           <button class="btn primary" type="submit">Validar</button>

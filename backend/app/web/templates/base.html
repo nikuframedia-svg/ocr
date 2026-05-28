@@ -199,6 +199,17 @@
             <option value="VITOR CARVALHO">VITOR CARVALHO</option>
           </select>
         </label>
+        {# R130 — filtro de validação: só exporta folhas com status=validated #}
+        <label style="display:flex; align-items:center; gap:10px; cursor:pointer; padding:10px 12px; border:1px solid var(--rule-2); border-radius:6px; background:var(--surface-2);">
+          <input type="checkbox" name="validated_only" value="true"
+                 style="width:18px; height:18px; cursor:pointer; flex:none;">
+          <span>
+            <span style="font-weight:600;">Apenas folhas validadas</span>
+            <span class="muted tiny" style="display:block; margin-top:2px;">
+              Exclui rascunhos. Só inclui folhas onde o operador carregou em "Validar".
+            </span>
+          </span>
+        </label>
         <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:8px;">
           <button type="button" class="btn" @click="visible=false">Cancelar</button>
           <button type="submit" class="btn"

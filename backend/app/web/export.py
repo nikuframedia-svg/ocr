@@ -87,6 +87,7 @@ def _query_rows(
     date_to: str | None,
     operador: str | None,
     sector: str | None = None,
+    validated_only: bool = False,
 ) -> list[dict]:
     """Return all production_rows in [date_from, date_to] (inclusive),
     optionally filtered by operador and sector. Joined with sheets to get
@@ -94,6 +95,10 @@ def _query_rows(
 
     R69: dates may be None (= "sempre"); sector applied via post-filter
     using ``detect_template`` (canonical alias matching).
+
+    R130: ``validated_only=True`` restringe a folhas com ``sheets.status =
+    'validated'`` (operador carregou em "Validar"). Default False = inclui
+    rascunhos.
     """
     where: list[str] = []
     params: list = []
@@ -105,6 +110,8 @@ def _query_rows(
             "(UPPER(pr.operador) = UPPER(?) OR UPPER(s.operador) = UPPER(?))"
         )
         params.extend([operador, operador])
+    if validated_only:
+        where.append("s.status = 'validated'")
 
     sql = """
         SELECT pr.*,
@@ -335,13 +342,15 @@ def export_excel(
     date_to: str | None,
     operador: str | None = None,
     sector: str | None = None,
+    validated_only: bool = False,
 ) -> bytes:
     """Build and return the .xlsx file bytes for the given period.
 
     R69: dates may be None (= "sempre"); sector is one of
     ``PRODUCTION_SECTORS`` or None (= all sectors).
+    R130: ``validated_only=True`` exclui folhas em rascunho (status != 'validated').
     """
-    rows = _query_rows(date_from, date_to, operador, sector)
+    rows = _query_rows(date_from, date_to, operador, sector, validated_only)
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -371,8 +380,10 @@ def filename_for(
     date_to: str | None,
     operador: str | None = None,
     sector: str | None = None,
+    validated_only: bool = False,
 ) -> str:
-    """Slugged filename for the download. R69: supports "sempre" + sector."""
+    """Slugged filename for the download. R69: supports "sempre" + sector.
+    R130: sufixo `_validadas` quando o filtro de validação está activo."""
     period = (
         f"{date_from}_{date_to}"
         if (date_from and date_to)
@@ -384,7 +395,8 @@ def filename_for(
         slug = operador.upper().replace(" ", "")
         slug = "".join(ch for ch in slug if ch.isalnum())
         op_suffix = f"_{slug}"
-    return f"metalogalva_{period}{sector_suffix}{op_suffix}.xlsx"
+    validated_suffix = "_validadas" if validated_only else ""
+    return f"metalogalva_{period}{sector_suffix}{op_suffix}{validated_suffix}.xlsx"
 
 
 # ============================================================================
@@ -430,12 +442,16 @@ def _query_cpis_rows(
     date_to: str | None,
     operador: str | None,
     sector: str | None = None,
+    validated_only: bool = False,
 ) -> list[dict]:
     """Pull production_rows + header.n_operador joined from sheets.
 
     Mirrors `_query_rows` but adds `n_operador` (header field, not on
     production_rows). R69: dates may be None (= "sempre"); sector applied
     via post-filter using ``detect_template``.
+
+    R130: ``validated_only=True`` restringe a folhas com ``sheets.status =
+    'validated'``.
     """
     where: list[str] = []
     params: list = []
@@ -447,6 +463,8 @@ def _query_cpis_rows(
             "(UPPER(pr.operador) = UPPER(?) OR UPPER(s.operador) = UPPER(?))"
         )
         params.extend([operador, operador])
+    if validated_only:
+        where.append("s.status = 'validated'")
 
     sql = """
         SELECT pr.*,
@@ -692,6 +710,7 @@ def build_cpis_workbook(
     date_to: str | None,
     operador: str | None = None,
     sector: str | None = None,
+    validated_only: bool = False,
 ) -> bytes:
     """Return .xlsx bytes matching MigracaoNikufraCPIS.xlsx schema.
 
@@ -700,11 +719,12 @@ def build_cpis_workbook(
 
     R69: dates may be None (= "sempre"); sector filter via canonical
     ``detect_template`` post-fetch.
+    R130: ``validated_only=True`` exclui folhas em rascunho (status != 'validated').
 
     Empty-period: still returns a valid file with just the header row, so
     the user can confirm column layout.
     """
-    raw_rows = _query_cpis_rows(date_from, date_to, operador, sector)
+    raw_rows = _query_cpis_rows(date_from, date_to, operador, sector, validated_only)
     # R96 — load refs once so _build_cpis_row can derive OV from plan
     # when the row doesn't have it (Gemini templates).
     try:
@@ -759,8 +779,10 @@ def cpis_filename_for(
     date_to: str | None,
     operador: str | None = None,
     sector: str | None = None,
+    validated_only: bool = False,
 ) -> str:
-    """Slugged filename for the CPIS download. R69: "sempre" + sector."""
+    """Slugged filename for the CPIS download. R69: "sempre" + sector.
+    R130: sufixo `_validadas` quando o filtro de validação está activo."""
     period = (
         f"{date_from}_{date_to}"
         if (date_from and date_to)
@@ -771,4 +793,5 @@ def cpis_filename_for(
     if operador:
         slug = "".join(ch for ch in operador.upper().replace(" ", "") if ch.isalnum())
         op_suffix = f"_{slug}"
-    return f"MigracaoNikufraCPIS_{period}{sector_suffix}{op_suffix}.xlsx"
+    validated_suffix = "_validadas" if validated_only else ""
+    return f"MigracaoNikufraCPIS_{period}{sector_suffix}{op_suffix}{validated_suffix}.xlsx"

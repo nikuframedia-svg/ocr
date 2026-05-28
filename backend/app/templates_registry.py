@@ -331,7 +331,12 @@ _ACABAMENTO_MTG2 = TemplateSpec(
     name="acabamento_mtg2",
     tpl_code="TPL086",
     phase="Acabamento",
-    setor_aliases=("ACABAMENTO MTG2",),
+    # R130 — alargar aliases: Qwen pode ler parcial ("ACABAMENTO" só) e o
+    # alias original "ACABAMENTO MTG2" perde substring match em strings
+    # mais curtas. detect_template ordena por comprimento desc, pelo que
+    # "ACABAMENTO MTG2" continua a ganhar quando ambos estão presentes.
+    setor_aliases=("ACABAMENTO MTG2", "ACABAMENTO MTG 2", "ACAB MTG2",
+                   "ACABAMENTO"),
     row_fields=(
         "ov", "of", "modelo", "coni", "qtd",
     ),
@@ -346,6 +351,55 @@ _ACABAMENTO_MTG2 = TemplateSpec(
     csv_block_label="TABELA DE ACABAMENTO",
     field_labels={"coni": "FERR."},
     description="Acabamento MTG2. OV/OF/REFERÊNCIA/FERR/QTD; TURNO M/R/XM/T.",
+)
+
+
+# R132 — TPL103 MÁQUINA DE FUSTES (frente: produção colunas). Header com
+# TURNO (M/R/XM/T) tipo acabamento_mtg2. Tabela com QTD Colunas + QTD
+# Metros (qtd_metros já tem coluna em production_rows desde R97). Setor
+# já mapeia para cod M031 via maquinas.xlsx (codsec S004).
+_MAQUINA_FUSTES = TemplateSpec(
+    name="maq_fustes",
+    tpl_code="TPL103",
+    phase="Produção Fustes",
+    setor_aliases=("MÁQUINA DE FUSTES", "MAQUINA DE FUSTES",
+                   "MAQ DE FUSTES", "MAQ FUSTES"),
+    row_fields=(
+        "pri", "cliente", "ov", "of", "modelo", "qtd", "qtd_metros",
+    ),
+    cross_check_fields=("cliente", "ov", "of", "modelo"),
+    header_fields=(
+        "operador", "n_operador", "setor_maquina", "cod_maquina",
+        "data", "turno",
+    ),
+    footer_fields=("colunas_produzidas", "horas_trabalhadas"),
+    csv_block_label="TABELA DE PRODUÇÃO",
+    description="TPL103 frente — Máquina de Fustes, PRI/CLI/OV/OF/MOD/QTD/QTDm + TURNO.",
+)
+
+
+# R132 — TPL103 MÁQUINA DE FUSTES verso (paragens). Mesmo header da frente,
+# tabela motivo/inicio/fim/duracao/resolvido. Sem footer. `has_production_rows
+# = False` activa `_RULES_PARAGENS` no prompt_builder. `setor_aliases=()`
+# para garantir que `detect_template("MÁQUINA DE FUSTES")` devolve sempre
+# a FRENTE; o verso é escolhido apenas via side-detect Pass-1.5 em ocr_runner.
+_MAQUINA_FUSTES_PARAGENS = TemplateSpec(
+    name="maq_fustes_paragens",
+    tpl_code="TPL103",
+    phase="Paragens Fustes",
+    setor_aliases=(),
+    row_fields=(
+        "motivo", "inicio", "fim", "duracao", "resolvido",
+    ),
+    cross_check_fields=(),
+    header_fields=(
+        "operador", "n_operador", "setor_maquina", "cod_maquina",
+        "data", "turno",
+    ),
+    footer_fields=(),
+    has_production_rows=False,
+    csv_block_label="TABELA DE PARAGENS",
+    description="TPL103 verso — Máquina de Fustes paragens (motivo/início/fim/duração/resolvido).",
 )
 
 
@@ -420,6 +474,8 @@ TEMPLATES: dict[str, TemplateSpec] = {
         _ROBOT,
         _EXPEDICAO,
         _ACABAMENTO_MTG2,
+        _MAQUINA_FUSTES,
+        _MAQUINA_FUSTES_PARAGENS,
         _GASPARINI,
         _HPE32,
         _HD36,

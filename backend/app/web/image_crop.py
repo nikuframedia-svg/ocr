@@ -37,6 +37,17 @@ def _order_corners(pts: np.ndarray) -> np.ndarray:
 
 
 def _detect_paper(image: np.ndarray) -> np.ndarray | None:
+    """R46 / R130 — detector primário Canny + 4-corner approxPolyDP.
+
+    R130: relaxado para apanhar mais kanbas que antes caíam para o
+    fallback raw silencioso (Folha bug 1). Mudanças vs R46:
+      - tenta 2 conjuntos de thresholds Canny (50,150) e (30,100) para
+        cobrir baixo contraste.
+      - aceita approxPolyDP com 4-6 vértices (em vez de exigir 4 exactos).
+        Em folhas inclinadas ou com sombra, o approx pode dar 5-6 vértices
+        e descartá-los era over-rigoroso.
+      - threshold de área baixa para 0.15 (de 0.20) — papel longe na foto.
+    """
     h, w = image.shape[:2]
     scale = 1500 / max(h, w) if max(h, w) > 1500 else 1.0
     small = (cv2.resize(image, None, fx=scale, fy=scale,
@@ -44,22 +55,72 @@ def _detect_paper(image: np.ndarray) -> np.ndarray | None:
              if scale < 1.0 else image.copy())
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (5, 5), 0)
-    edged = cv2.Canny(gray, 50, 150)
-    edged = cv2.dilate(edged, np.ones((3, 3), np.uint8), iterations=1)
-    contours, _ = cv2.findContours(edged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    img_area = small.shape[0] * small.shape[1]
+
+    for canny_lo, canny_hi in ((50, 150), (30, 100)):
+        edged = cv2.Canny(gray, canny_lo, canny_hi)
+        edged = cv2.dilate(edged, np.ones((3, 3), np.uint8), iterations=1)
+        contours, _ = cv2.findContours(edged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            continue
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
+        for c in contours:
+            area = cv2.contourArea(c)
+            if area < img_area * 0.15:
+                continue
+            peri = cv2.arcLength(c, closed=True)
+            approx = cv2.approxPolyDP(c, 0.02 * peri, closed=True)
+            n = len(approx)
+            if 4 <= n <= 6:
+                # Se >4 vértices, reduzir a quadrilátero via minAreaRect
+                if n == 4:
+                    corners = approx.reshape(4, 2).astype(np.float32)
+                else:
+                    rect = cv2.minAreaRect(c)
+                    corners = cv2.boxPoints(rect).astype(np.float32)
+                return _order_corners(corners / scale)
+    return None
+
+
+def _detect_paper_v2(image: np.ndarray) -> np.ndarray | None:
+    """R130 — fallback adaptativo. Funciona em fotos onde Canny falha por
+    baixo contraste (papel branco em mesa clara, sombra forte) ou onde
+    o contorno do papel não é uma quadrilátero limpo.
+
+    Algoritmo:
+      1. adaptiveThreshold gaussian INV — segmenta o papel como branco
+         numa máscara binária, robusto a iluminação não-uniforme.
+      2. morphological close para fechar pequenos gaps.
+      3. minAreaRect do maior contorno conexo de área significativa.
+    """
+    h, w = image.shape[:2]
+    scale = 1500 / max(h, w) if max(h, w) > 1500 else 1.0
+    small = (cv2.resize(image, None, fx=scale, fy=scale,
+                        interpolation=cv2.INTER_AREA)
+             if scale < 1.0 else image.copy())
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+    # Adaptive threshold: papel = áreas com brilho local acima da
+    # vizinhança. INV porque o papel é mais brilhante que o fundo.
+    binary = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY, blockSize=51, C=15,
+    )
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return None
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:3]
     img_area = small.shape[0] * small.shape[1]
     for c in contours:
         area = cv2.contourArea(c)
-        if area < img_area * 0.20:
+        if area < img_area * 0.15:
             continue
-        peri = cv2.arcLength(c, closed=True)
-        approx = cv2.approxPolyDP(c, 0.02 * peri, closed=True)
-        if len(approx) == 4:
-            corners = approx.reshape(4, 2).astype(np.float32) / scale
-            return _order_corners(corners)
+        # Quadrilátero rotated do maior blob — robusto a contornos imperfeitos
+        rect = cv2.minAreaRect(c)
+        corners = cv2.boxPoints(rect).astype(np.float32)
+        return _order_corners(corners / scale)
     return None
 
 
@@ -130,7 +191,12 @@ def auto_crop(src_path: Path, out_path: Path | None = None) -> Path | None:
             arr = np.array(pil)
             image = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
 
+        # R130 — cascata: tenta detector primário Canny, depois fallback
+        # adaptiveThreshold para fotos onde Canny falha (baixo contraste,
+        # sombras fortes, papel branco em fundo claro).
         corners = _detect_paper(image)
+        if corners is None:
+            corners = _detect_paper_v2(image)
         if corners is None:
             return None
         warped = _warp_to_a4(image, corners)

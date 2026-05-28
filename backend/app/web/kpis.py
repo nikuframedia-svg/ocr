@@ -73,6 +73,14 @@ def _derive_cod_maquina(setor_maquina: str | None) -> str:
         "ACABAMENTO MTG2": "M001",
         "ACAB. MTG2": "M001",
         "MTG2": "M001",
+        # R132 — TPL103 MÁQUINA DE FUSTES (codsec S004 em maquinas.xlsx).
+        # Fallback defensivo — o caminho normal é via `maquinas_by_kanban`
+        # (`_apply_codmaq_fill`); este só aplica em CPIS export para folhas
+        # legacy sem header.cod_maquina preenchido.
+        "MÁQUINA DE FUSTES": "M031",
+        "MAQUINA DE FUSTES": "M031",
+        "MAQ DE FUSTES": "M031",
+        "MAQ FUSTES": "M031",
     }
     if s in table:
         return table[s]

@@ -55,8 +55,38 @@ _IMAGES_DIR = _DATA_DIR / "images"
 _DATA_DIR.mkdir(parents=True, exist_ok=True)
 _IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
-# Operadores conhecidos (dropdown na review). Keep in sync com ground_truth.
-OPERADORES = ("AUGUSTO MONTEIRO", "JÚLIO LIMA", "VITOR CARVALHO")
+# R70 — Operadores conhecidos para fallback defensivo. R131: a fonte de
+# verdade passou a ser ListaColaboradores.xlsx via `_get_operadores()`;
+# este tuplo só é usado quando refs ainda não foi carregado (boot frio
+# ou ficheiro ausente).
+_OPERADORES_FALLBACK = ("AUGUSTO MONTEIRO", "JÚLIO LIMA", "VITOR CARVALHO")
+
+
+def _get_operadores() -> tuple[str, ...]:
+    """R131 — Lista dinâmica de operadores conhecidos vinda da
+    ListaColaboradores.xlsx (`refs["colaboradores"]`). Ordenada A→Z.
+
+    Fonte: `_mine_colaboradores` em [ref_watcher.py](backend/app/cross_check/ref_watcher.py)
+    devolve `{cod: {sname (UPPER ASCII), pernr}}`. Aqui extraímos os
+    snames únicos para drive dos dropdowns de validação e filtros.
+
+    Fallback aos 3 hardcoded R70 (`_OPERADORES_FALLBACK`) quando refs
+    ainda não foi carregado ou está vazio — defensivo para boot frio.
+    """
+    try:
+        refs = get_watcher().get_refs()
+        colabs = refs.get("colaboradores") or {}
+        snames = sorted({
+            (c.get("sname") or "").strip()
+            for c in colabs.values()
+            if c.get("sname")
+        })
+        snames = tuple(s for s in snames if s)
+        if snames:
+            return snames
+    except Exception:  # noqa: BLE001 — boot order: get_watcher pode falhar
+        pass
+    return _OPERADORES_FALLBACK
 
 ROW_FIELDS = (
     "pri", "cliente", "ov", "of", "modelo", "qtd",
@@ -205,7 +235,7 @@ def capture_page(request: Request) -> Response:
     # folhas com cesta (Expedição).
     return templates.TemplateResponse(
         request, "capture.html",
-        {"operadores": OPERADORES},
+        {"operadores": _get_operadores()},
     )
 
 
@@ -292,20 +322,34 @@ async def upload(
 # Campos dimensionais — `very_different` aqui fica para revisão humana
 # (não auto-aplicado), porque o plan/SAP pode estar desactualizado e o
 # operador viu a peça real. `snapped` (delta pequena) é sempre aplicado.
-_DIM_FIELDS = ("comp_mm", "larg_mm", "lbase", "ltopo", "esp")
+# R130: dim `very_different` passa a auto-aplicar quando o winner tem
+# concordância forte (score >= 4 features), assumindo que o operador
+# escreveu mal e o plan tem razão.
+_DIM_FIELDS = ("comp_mm", "larg_mm", "lbase", "ltopo", "esp", "dbase", "dtopo")
+# R130 — identidade única do plan/SAP. Substituição nunca silenciosa: o
+# motor preserva OCR e marca very_different com `proposed` no tooltip,
+# mas o auto-overwrite não actua — operador decide se aceita o plano.
+_ID_FIELDS = ("of", "ov", "cliente")
+# R130 — threshold de score para auto-corrigir dim very_different.
+# score_entry conta até ~12 features (of+ov+cliente+modelo+lote+5/7 dims).
+# >=4 significa concordância em pelo menos 4 campos — forte o suficiente
+# para confiar que o plan tem razão. Ajustável em produção.
+_DIM_AUTO_APPLY_MIN_SCORE = 4
 
 
 def _maybe_apply_snap(sheet_id: int, field_path: str, cell: dict) -> bool:
-    """R124 — aplica o canonical proposto pelo motor para uma célula.
+    """R124 / R130 — aplica o canonical proposto pelo motor para uma célula.
 
     Política:
       - `snapped` (motor confiante, delta suave) → aplica sempre.
-      - `very_different` (motor confiante mas delta grande) → aplica
-        APENAS para campos não-dimensionais (modelo, cliente, of, ov,
-        operador, cod_maquina, etc.) e só quando o motor TEM proposta
-        concreta vinda de uma ref (`source` != "ocr_raw"). Dimensões
-        físicas ficam para revisão humana porque o plan/SAP pode estar
-        desactualizado e o operador viu a peça real.
+      - `very_different`:
+        - Campos de identidade (`of`/`ov`/`cliente` — R130): nunca
+          auto-aplicado. Operador decide se aceita o `proposed`.
+        - Campos dim (`comp_mm`/`larg_mm`/...): auto-aplica APENAS quando
+          winner score >= `_DIM_AUTO_APPLY_MIN_SCORE` (concordância forte
+          ⇒ confiar no plan). Senão fica vermelho para revisão.
+        - Outros campos não-dim (modelo, lote, etc.): aplica quando o
+          motor TEM proposta concreta vinda de uma ref (`source` != "ocr_raw").
       - Outros estados (`confirmed`, `NA`) → no-op.
 
     Retorna True quando aplicou um edit.
@@ -321,8 +365,13 @@ def _maybe_apply_snap(sheet_id: int, field_path: str, cell: dict) -> bool:
         pass
     elif engine_status == "very_different":
         field_name = field_path.rsplit(".", 1)[-1]
-        if field_name in _DIM_FIELDS:
+        # R130 — identidade única nunca auto-aplicada
+        if field_name in _ID_FIELDS:
             return False
+        if field_name in _DIM_FIELDS:
+            # R130 — dim só auto-corrige com winner forte
+            if (cell.get("score") or 0) < _DIM_AUTO_APPLY_MIN_SCORE:
+                return False
         if cell.get("source") in (None, "ocr_raw"):
             return False  # fallback do motor sem proposta concreta — no-op
     else:
@@ -365,6 +414,9 @@ def _apply_auto_overwrites(sheet_id: int, result: dict) -> int:
     return n_applied
 
 
+_LAST_OPERADOR_SNAP_WARN: str | None = None
+
+
 def _apply_operador_snap(sheet_id: int, sheet: dict, refs: dict) -> int:
     """R70 — resolve operator identity against ListaColaboradores.
 
@@ -378,8 +430,22 @@ def _apply_operador_snap(sheet_id: int, sheet: dict, refs: dict) -> int:
     Returns count of fields edited (0-3). Suspended cells (yellow flag)
     do not trigger edits; engine handles the visual flag separately.
     """
+    global _LAST_OPERADOR_SNAP_WARN
     colabs = refs.get("colaboradores") or {}
     if not colabs:
+        # R131 — log único por reload de refs (chave = loaded_at) para o
+        # utilizador perceber que o snap não está a correr por falta de
+        # ListaColaboradores. Causa frequente: ficheiro em path errado no
+        # PC da Metalogalva ou ainda não copiado para `kanban_refs/`.
+        loaded_at = str(refs.get("loaded_at") or "<no-refs>")
+        if loaded_at != _LAST_OPERADOR_SNAP_WARN:
+            print(
+                f"[operador_snap] colaboradores vazio (refs.loaded_at={loaded_at}) "
+                "— snap operador DESACTIVADO. Verificar "
+                "kanban_refs/ListaColaboradores.xlsx ou KANBAN_REFS_DIR no .env.",
+                file=sys.stderr,
+            )
+            _LAST_OPERADOR_SNAP_WARN = loaded_at
         return 0
     header = (sheet.get("sheet_data") or {}).get("header") or {}
     raw_name = (header.get("operador") or "").strip()
@@ -612,13 +678,15 @@ def sheet_page(
         # the post-snap values, not raw)
         src = sheet["raw_extraction"]
         (cc_status_by_path, cc_ref_by_path, cc_suspended_by_path,
-         cc_snapped_by_path, cc_obra_concluida_by_path) = (
-            {}, {}, {}, {}, {},
+         cc_snapped_by_path, cc_obra_concluida_by_path,
+         cc_auto_substituted_by_path) = (
+            {}, {}, {}, {}, {}, {},
         )
     else:
         src = sheet.get("sheet_data") or {}
         (cc_status_by_path, cc_ref_by_path, cc_suspended_by_path,
-         cc_snapped_by_path, cc_obra_concluida_by_path) = (
+         cc_snapped_by_path, cc_obra_concluida_by_path,
+         cc_auto_substituted_by_path) = (
             _build_cc_maps(sheet_id)
         )
 
@@ -655,7 +723,8 @@ def sheet_page(
             "cc_suspended_by_path": cc_suspended_by_path,
             "cc_snapped_by_path": cc_snapped_by_path,
             "cc_obra_concluida_by_path": cc_obra_concluida_by_path,
-            "operadores": OPERADORES,
+            "cc_auto_substituted_by_path": cc_auto_substituted_by_path,
+            "operadores": _get_operadores(),
             "flagged_count": flagged,
             "view_mode": view_mode,
             "back_url": back_url,
@@ -708,9 +777,43 @@ def _build_snapped_map_from_raw(sheet: dict) -> dict[str, bool]:
     return out
 
 
+def _build_auto_substituted_map(sheet_id: int) -> dict[str, bool]:
+    """R130 — mapa {field_path: True} para cells cujo valor ACTUAL foi
+    escrito pelo sistema (`edits.source='system'`) e não foi posteriormente
+    sobrescrito por um humano.
+
+    Distingue substituição automática (UI marca cc-warn amarelo) de edit
+    manual deliberado do operador (UI mantém cor original do cross-check).
+    Sem este mapa, o flow `cross_check → auto_overwrite → re-cross_check`
+    apaga o flag visual da substituição (re-cross-check vê OCR_now ==
+    proposed → MATCH verde silencioso).
+
+    Algoritmo: itera os edits por ordem cronológica (id ASC); o último
+    `source` por `field_path` ganha. Se for 'system', a cell continua
+    com auto-substituição. Se um humano editou depois, sai do mapa.
+    """
+    out: dict[str, bool] = {}
+    try:
+        with db.conn() as c:
+            rows = c.execute(
+                "SELECT field_path, source FROM edits "
+                "WHERE sheet_id = ? ORDER BY id ASC",
+                (sheet_id,),
+            ).fetchall()
+    except Exception:  # noqa: BLE001 — sem edits ou DB indisponível: mapa vazio
+        return out
+    last_source: dict[str, str] = {}
+    for r in rows:
+        last_source[r["field_path"]] = r["source"]
+    for fp, src in last_source.items():
+        if src == "system":
+            out[fp] = True
+    return out
+
+
 def _build_cc_maps(sheet_id: int) -> tuple[
     dict[str, str], dict[str, str], dict[str, bool], dict[str, bool],
-    dict[str, bool],
+    dict[str, bool], dict[str, bool],
 ]:
     """Round 33: load cross-check JSON for sheet, build {field_path: status}
     + {field_path: ref} maps for template rendering of green/red cell colors.
@@ -738,8 +841,12 @@ def _build_cc_maps(sheet_id: int) -> tuple[
         except Exception:  # noqa: BLE001
             pass
     snapped_map = _build_snapped_map_from_raw(db.get_sheet(sheet_id) or {})
+    # R130 — mapa de cells substituídas pelo sistema (auto-overwrite),
+    # usado pelo template para colorir amarelo mesmo quando o re-cross-check
+    # diz MATCH (substituição silenciosa).
+    auto_substituted_map = _build_auto_substituted_map(sheet_id)
     if not cc:
-        return {}, {}, {}, snapped_map, {}
+        return {}, {}, {}, snapped_map, {}, auto_substituted_map
     status_map: dict[str, str] = {}
     ref_map: dict[str, str] = {}
     suspended_map: dict[str, bool] = {}
@@ -770,7 +877,8 @@ def _build_cc_maps(sheet_id: int) -> tuple[
             ref = info.get("ref")
             if ref is not None:
                 ref_map[path] = str(ref)
-    return status_map, ref_map, suspended_map, snapped_map, obra_concluida_map
+    return (status_map, ref_map, suspended_map, snapped_map,
+            obra_concluida_map, auto_substituted_map)
 
 
 def _maybe_record_operador_alias(sheet_id: int) -> None:
@@ -891,7 +999,8 @@ async def sheet_edit(
         real_value = new
     cells_by_path = (sheet.get("dq_audit") or {}).get("cells", {})
     (cc_status_by_path, cc_ref_by_path, cc_suspended_by_path,
-     cc_snapped_by_path, cc_obra_concluida_by_path) = (
+     cc_snapped_by_path, cc_obra_concluida_by_path,
+     cc_auto_substituted_by_path) = (
         _build_cc_maps(sheet_id)
     )
     return templates.TemplateResponse(
@@ -908,6 +1017,7 @@ async def sheet_edit(
             "cc_suspended_by_path": cc_suspended_by_path,
             "cc_snapped_by_path": cc_snapped_by_path,
             "cc_obra_concluida_by_path": cc_obra_concluida_by_path,
+            "cc_auto_substituted_by_path": cc_auto_substituted_by_path,
             "sheet_status": sheet.get("status"),
         },
     )
@@ -2066,7 +2176,8 @@ def kanban_viewer(
                 "cc_status_by_path": {},
                 "cc_ref_by_path": {},
                 "cc_obra_concluida_by_path": {},
-                "valid_operadores": OPERADORES,
+                "cc_auto_substituted_by_path": {},
+                "valid_operadores": _get_operadores(),
                 **_template_ctx_for_sheet(None),  # bobine_formato defaults
             },
         )
@@ -2119,10 +2230,12 @@ def kanban_viewer(
 
     # Round 33: cross-check colors per cell
     (cc_status_by_path, cc_ref_by_path, cc_suspended_by_path,
-     cc_snapped_by_path, cc_obra_concluida_by_path) = ({}, {}, {}, {}, {})
+     cc_snapped_by_path, cc_obra_concluida_by_path,
+     cc_auto_substituted_by_path) = ({}, {}, {}, {}, {}, {})
     if sheet:
         (cc_status_by_path, cc_ref_by_path, cc_suspended_by_path,
-         cc_snapped_by_path, cc_obra_concluida_by_path) = (
+         cc_snapped_by_path, cc_obra_concluida_by_path,
+         cc_auto_substituted_by_path) = (
             _build_cc_maps(sheet["id"])
         )
 
@@ -2157,7 +2270,8 @@ def kanban_viewer(
             "cc_suspended_by_path": cc_suspended_by_path,
             "cc_snapped_by_path": cc_snapped_by_path,
             "cc_obra_concluida_by_path": cc_obra_concluida_by_path,
-            "valid_operadores": OPERADORES,
+            "cc_auto_substituted_by_path": cc_auto_substituted_by_path,
+            "valid_operadores": _get_operadores(),
             "data_iso_for_validate": data_iso_for_validate,
             "has_cropped": sheet_has_cropped,
             **_template_ctx_for_sheet(sheet),  # per-current-sheet template
@@ -2252,6 +2366,7 @@ def export_excel(
     date_to: str | None = None,
     operador: str | None = None,
     sector: str | None = None,
+    validated_only: bool = False,
 ) -> Response:
     """Round 29 Phase D — Excel multi-sheet bulk export.
 
@@ -2260,6 +2375,8 @@ def export_excel(
       omitted = "sempre" (no date filter).
     - ``operador``: optional filter (case-insensitive)
     - ``sector``: optional filter against one of ``PRODUCTION_SECTORS``
+    - ``validated_only`` (R130): se True, só inclui folhas com
+      ``sheets.status='validated'``. Default False = inclui rascunhos.
 
     Returns .xlsx with Resumo sheet + 1 sheet per day with sub-tables per
     operador. See export.py for structure.
@@ -2277,8 +2394,8 @@ def export_excel(
             raise HTTPException(400, "date_to must be >= date_from")
     if sec and sec not in PRODUCTION_SECTORS:
         raise HTTPException(400, f"sector must be one of {list(PRODUCTION_SECTORS)}")
-    xlsx_bytes = export.export_excel(df, dt_, operador, sec)
-    filename = export.filename_for(df, dt_, operador, sec)
+    xlsx_bytes = export.export_excel(df, dt_, operador, sec, validated_only)
+    filename = export.filename_for(df, dt_, operador, sec, validated_only)
     return Response(
         content=xlsx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -2364,6 +2481,7 @@ def export_cpis(
     date_to: str | None = None,
     operador: str | None = None,
     sector: str | None = None,
+    validated_only: bool = False,
 ) -> Response:
     """CPIS migration export — single-sheet .xlsx matching
     `MigracaoNikufraCPIS.xlsx` (17 columns, `Folha1`).
@@ -2373,6 +2491,7 @@ def export_cpis(
     g/cm³). `Cód. Máquina` derived from setor_maquina (BOBINE-FORMATO →
     M032, etc.). Query params identical to `/export` (R69: same date /
     sector semantics).
+    R130: ``validated_only`` exclui rascunhos quando True.
     """
     df = (date_from or "").strip() or None
     dt_ = (date_to or "").strip() or None
@@ -2386,8 +2505,8 @@ def export_cpis(
             raise HTTPException(400, "date_to must be >= date_from")
     if sec and sec not in PRODUCTION_SECTORS:
         raise HTTPException(400, f"sector must be one of {list(PRODUCTION_SECTORS)}")
-    xlsx_bytes = export.build_cpis_workbook(df, dt_, operador, sec)
-    filename = export.cpis_filename_for(df, dt_, operador, sec)
+    xlsx_bytes = export.build_cpis_workbook(df, dt_, operador, sec, validated_only)
+    filename = export.cpis_filename_for(df, dt_, operador, sec, validated_only)
     return Response(
         content=xlsx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

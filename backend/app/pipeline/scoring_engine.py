@@ -148,6 +148,13 @@ _NO_REF_FIELDS = frozenset({
     "pri", "coni", "qtd",
     "horas_trabalhadas", "colunas_produzidas",
     "n_operador", "data", "setor_maquina", "cod_maquina", "operador",
+    # R132 — turno (M/R/XM/T) é header próprio de acabamento_mtg2 e
+    # maq_fustes; sem ref no plan/SAP.
+    "turno",
+    # R132 — paragens (TPL103 verso MÁQUINA DE FUSTES): nunca cruzam plan.
+    "motivo", "inicio", "fim", "duracao", "resolvido",
+    # R132 — qtd_metros (soldline, laser, maq_fustes) é informativo, NA cinza.
+    "qtd_metros",
 })
 
 _ROW_FIELDS = (
@@ -189,7 +196,10 @@ _STATUS_LABELS = {
 
 # R123 — versão do motor. Gravada em cada cross-check JSON; o viewer
 # regenera on-demand qualquer folha cujo JSON seja de uma versão anterior.
-ENGINE_VERSION = "v7_R128"
+# R130 — cross-check rigoroso: of/ov/cliente nunca silenciosamente
+# substituídos; dim só auto-corrige com winner score>=4; UI marca cells
+# auto-substituídas com cor amarela (cc-warn) via `proposed` no tooltip.
+ENGINE_VERSION = "v8_R130"
 
 
 # Utilidades de distância ----------------------------------------------------
@@ -621,9 +631,43 @@ def _finish_cell(
     source: str,
     score: int | None,
 ) -> dict:
-    """Formata o valor proposto, decide o estado vs o OCR, devolve a célula."""
+    """Formata o valor proposto, decide o estado vs o OCR, devolve a célula.
+
+    R130 — campos de identidade única (of/ov/cliente) NUNCA são substituídos
+    silenciosamente. Se o OCR diverge do winner, preserva-se o valor do OCR e
+    marca-se `very_different` com `proposed` exposto para tooltip. Empty OCR
+    continua autofill (snapped). Match exacto (após 0/O swap em of/ov ou
+    upper/strip em cliente) continua confirmed.
+
+    Para os restantes campos (incl. modelo, dim, lote), comportamento R128
+    inalterado: confirmed se igual, snapped suave, very_different se delta
+    forte. Auto-aplicação fica a cargo de `_maybe_apply_snap` no main.
+    """
     proposed_fmt = _format_value(field, proposed)
     ocr_fmt = _format_value(field, ocr_value)
+
+    # R130 — identidade única: preserva OCR em disagreement, expõe proposed
+    if field in ("of", "ov", "cliente"):
+        if not ocr_value:
+            return _make_cell(proposed_fmt, "snapped", source=source, score=score)
+        # Match tolerante a 0/O em of/ov; upper/strip em cliente
+        if field == "of":
+            ocr_variants = _o_zero_variants(normalize_of(ocr_value))
+        elif field == "ov":
+            ocr_variants = _o_zero_variants(ocr_value)
+        else:  # cliente
+            ocr_variants = [ocr_value]
+        if proposed_fmt in ocr_variants or (
+            proposed_fmt and ocr_fmt and proposed_fmt.upper() == ocr_fmt.upper()
+        ):
+            return _make_cell(proposed_fmt, "confirmed", source=source, score=score)
+        # Disagreement — preserva OCR, expõe proposed para o tooltip via _to_legacy_cell
+        return _make_cell(
+            ocr_value, "very_different",
+            source=source, score=score, proposed=proposed_fmt,
+        )
+
+    # Demais campos (modelo, dim, lote): R128 inalterado
     if proposed_fmt and ocr_fmt and proposed_fmt.upper() == ocr_fmt.upper():
         status = "confirmed"
     elif not ocr_value:
@@ -951,6 +995,11 @@ def _to_legacy_cell(v5_cell: dict, ref_value: str | None = None) -> dict:
     R124: expõe também `source` ("plan", "sap", "lexicon", "ocr_raw") para
     `_apply_auto_overwrites` distinguir propostas concretas vindas de
     refs (auto-aplicáveis) do fallback OCR (no-op).
+
+    R130: propaga `score` (winner score, 0-12) para `_maybe_apply_snap`
+    decidir se auto-aplica dim very_different (apenas com winner forte).
+    Usa `proposed` como `ref` quando o motor preservou OCR (of/ov/cliente
+    em disagreement) — tooltip mostra "Plan diz: <proposed>".
     """
     v5_status = v5_cell.get("status", "NA")
     legacy_status = _V5_TO_LEGACY.get(v5_status, "NA")
@@ -961,9 +1010,17 @@ def _to_legacy_cell(v5_cell: dict, ref_value: str | None = None) -> dict:
         "snapped": v5_status == "snapped",
         "engine_status": v5_status,
         "source": v5_cell.get("source"),
+        "score": v5_cell.get("score"),
     }
-    if ref_value is not None:
+    # R130 — ref para tooltip "Plan diz: ...": prioriza `proposed` (motor
+    # preservou OCR em disagreement), depois `ref_value` legado, depois
+    # `value` (snapped/very_different antigo).
+    if "proposed" in v5_cell:
+        out["ref"] = v5_cell["proposed"]
+    elif ref_value is not None:
         out["ref"] = ref_value
+    elif v5_status in ("snapped", "very_different"):
+        out["ref"] = v5_cell.get("value", "")
     return out
 
 
@@ -989,11 +1046,9 @@ def cross_check_sheet(
         legacy_fields: dict[str, dict] = {}
         row_summary = {"match": 0, "no_match": 0, "na": 0}
         for field, cell in r.get("fields", {}).items():
-            ref_value = None
-            if cell.get("status") in ("snapped", "very_different"):
-                # ref é o valor proposto pelo motor (vem do plan)
-                ref_value = cell.get("value")
-            legacy_cell = _to_legacy_cell(cell, ref_value)
+            # R130 — ref é tratado dentro de _to_legacy_cell (prioriza
+            # `proposed` do motor, depois value para snapped/very_different).
+            legacy_cell = _to_legacy_cell(cell)
             legacy_fields[field] = legacy_cell
             st = legacy_cell["status"]
             if st == "MATCH":

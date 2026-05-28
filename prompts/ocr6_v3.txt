@@ -31,12 +31,18 @@ WATCH OUT FOR HANDWRITING CONFUSIONS:
 - 5 vs S, 6 vs G, 8 vs B — handwriting can blur these.
 - Ç in modelos like BRAÇOS — keep the cedilla, do not drop it.
 
+SETOR/MÁQUINA values seen on these kanbans (copy EXACTLY as written):
+  BOBINE-FORMATO, GUILHOTINA 3M, GUILHOTINA 6M, GUILHOTINA 9M, GUILHOTINA 10M,
+  LINHA DE CORTE, QUINADORA PAV.4, QUINADORA PAV.8, GUIFIL, SOLDLINE 4,
+  LASER, MANUAL, ROBOT, EXPEDIÇÃO, ACABAMENTO MTG2, MÁQUINA DE FUSTES,
+  GASPARINI, HPE32, HD36.
+
 Return this exact JSON structure:
 {
   "header": {
     "operador": "FULL NAME",
     "n_operador": "e.g. 0537",
-    "setor_maquina": "BOBINE-FORMATO",
+    "setor_maquina": "EXACT SETOR VALUE (one of the list above)",
     "data": "DD-MM-YYYY"
   },
   "rows": [

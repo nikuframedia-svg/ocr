@@ -1294,6 +1294,13 @@ def validate_sheet(sheet_id: int, operador: str) -> None:
     """Mark sheet validated. Dropdown ``operador`` overrides whatever
     OCR / manual edits put in production_rows — the dropdown is the
     KPI source of truth (``sheets.operador``).
+
+    R131: o dropdown passou a ser dinâmico (todos os snames da
+    ListaColaboradores.xlsx via `_get_operadores()`) e vem pré-seleccionado
+    com o resultado do `snap_operador` (header.operador canónico). O
+    "always overwrite" continua correcto — o operador pode SEMPRE corrigir
+    o nome pré-seleccionado se o snap errou, ficando essa escolha
+    autoritativa para KPI groupings.
     """
     with conn() as c:
         c.execute(

@@ -27,14 +27,29 @@ _REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO))
 sys.path.insert(0, str(_REPO / "backend"))
 
+import json  # R132 — parse Pass-1.5 side-detect response
+import sys  # R132 — side-detect failure log
+from typing import Final  # R132
+
 import ocr6  # type: ignore  # noqa: E402
 
-from app.pipeline.prompt_builder import build_prompt  # noqa: E402
+from app.pipeline.prompt_builder import (  # noqa: E402
+    build_prompt,
+    build_side_detect_prompt,
+)
 from app.templates_registry import (  # noqa: E402
     DEFAULT_TEMPLATE,
     detect_template,
     get_template,
 )
+
+# R132 — kanbans com 2 lados (frente/verso) que partilham `setor_maquina`.
+# Map: nome do template default (frente, devolvido por detect_template) →
+# nome do template do verso. `run_pipeline` corre um Pass-1.5 mini-OCR
+# (side-detect) para escolher qual usar.
+TWO_SIDED_TEMPLATES: Final[dict[str, str]] = {
+    "maq_fustes": "maq_fustes_paragens",  # TPL103 MÁQUINA DE FUSTES
+}
 
 _PROMPT_PATH = _REPO / "prompts" / "ocr6_v3.txt"
 _V3_PROMPT, _V3_PROMPT_HASH = ocr6.load_prompt(_PROMPT_PATH)
@@ -56,6 +71,43 @@ def _swap_prompt(prompt_text: str) -> tuple[str, str]:
     ocr6.PROMPT = prompt_text
     ocr6.PROMPT_HASH = hashlib.sha256(prompt_text.encode()).hexdigest()[:12]
     return prev
+
+
+def _detect_side(image_path: Path) -> str:
+    """R132 — Pass-1.5 mini OCR para kanbans 2-lados (TPL103 MÁQUINA DE
+    FUSTES). Devolve 'F' (frente, produção) ou 'V' (verso, paragens).
+
+    Strategy: swap o `ocr6.PROMPT` para o side-detect prompt (~3-5s output),
+    corre process_image, parse o `raw_response` JSON em busca da chave
+    `side`. Fallback silencioso a 'F' em qualquer erro (default frente é o
+    caso mais comum).
+
+    Custo: 1 chamada extra ao Ollama por upload MAQ_FUSTES (~5s).
+    """
+    prompt = build_side_detect_prompt()
+    with _PROMPT_LOCK:
+        prev = _swap_prompt(prompt)
+        try:
+            result = ocr6.process_image(image_path, idx=1, total=1)
+        finally:
+            ocr6.PROMPT, ocr6.PROMPT_HASH = prev
+    raw = getattr(result, "raw_response", "") or ""
+    if not raw:
+        return "F"
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        # Modelo devolveu texto com markdown ou prefix — tentar extrair {…}
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return "F"
+        try:
+            parsed = json.loads(raw[start:end + 1])
+        except json.JSONDecodeError:
+            return "F"
+    side = str(parsed.get("side", "F")).strip().upper()
+    return side if side in ("F", "V") else "F"
 
 
 def _run_ocr(image_path: Path, template: Any = None) -> dict:
@@ -109,10 +161,31 @@ def run_pipeline(image_path: Path) -> dict:
 
     A normalização (snap_cliente, snap_modelo, etc.) acontece no motor
     unificado via cross_check_sheet (chamado a seguir pelo main).
+
+    R132 — kanbans com 2 lados (TPL103 MÁQUINA DE FUSTES) partilham o
+    `setor_maquina` mas têm tabelas diferentes (frente=produção vs
+    verso=paragens). Para esses templates corre-se um Pass-1.5 mini-OCR
+    (`_detect_side`, ~5s) que inspecciona o cabeçalho da tabela na foto
+    e escolhe o template apropriado antes do Pass-2 completo.
     """
     pass1_raw = _run_ocr(image_path)
     setor = (pass1_raw.get("header", {}) or {}).get("setor_maquina", "")
     template = detect_template(setor)
+
+    # R132 — side-detect Pass-1.5 para kanbans 2-lados. Falha do detector
+    # é silenciosa (assume frente — caso mais comum); operador pode usar
+    # `rerun_pipeline_for_template` se o template wrongly detected.
+    if template.name in TWO_SIDED_TEMPLATES:
+        try:
+            side = _detect_side(image_path)
+            if side == "V":
+                template = get_template(TWO_SIDED_TEMPLATES[template.name])
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"[side_detect] {image_path.name}: {type(exc).__name__}: {exc} "
+                "— fallback to frente",
+                file=sys.stderr,
+            )
 
     if template.name == DEFAULT_TEMPLATE.name:
         raw_extraction = pass1_raw

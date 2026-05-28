@@ -103,6 +103,36 @@ def _canonical_setor(template: TemplateSpec) -> str:
     return template.setor_aliases[0] if template.setor_aliases else ""
 
 
+# R132 — Templates JSON-skeleton for each known header field. Used by
+# `_header_skel` to render the JSON shape dynamically from
+# `template.header_fields`, so per-template extras (turno, etc.) work.
+_HEADER_FIELD_TEMPLATES: dict[str, str] = {
+    "operador": '"operador": "FULL NAME"',
+    "n_operador": '"n_operador": "e.g. 0537"',
+    "setor_maquina": '"setor_maquina": "{setor}"',
+    "cod_maquina": '"cod_maquina": "e.g. M032 (machine code printed near sector name; empty if absent)"',
+    "data": '"data": "DD-MM-YYYY"',
+    "turno": '"turno": "M | R | XM | T (which checkbox is marked; empty if none)"',
+}
+
+
+def _header_skel(template: TemplateSpec, setor: str) -> str:
+    """R132 — Render the JSON header skeleton from `template.header_fields`.
+
+    Pre-R132 this was hardcoded to 5 fields, which silently dropped the
+    `turno` field defined in acabamento_mtg2 and maq_fustes. Now we
+    iterate the template's actual header_fields and emit the right line
+    for each. `pernr` is skipped (derived by snap_operador, not OCR).
+    """
+    lines: list[str] = []
+    for field in template.header_fields:
+        if field == "pernr":
+            continue
+        tpl = _HEADER_FIELD_TEMPLATES.get(field, f'"{field}": ""')
+        lines.append("    " + tpl.format(setor=setor))
+    return ",\n".join(lines)
+
+
 # ============================================================================
 #  Shared rules (verbatim from v3 — proven 87.9% field accuracy)
 # ============================================================================
@@ -240,16 +270,11 @@ def build_prompt(template: TemplateSpec) -> str:
     # the template has no learned examples, keeping the prompt unchanged.
     fewshot = _fewshot_block(template.name)
 
-    # Header skeleton (identical for all templates)
-    # cod_maquina is the printed machine code (e.g. M032 for BOBINE-FORMATO).
-    # Empty string when not visible — derivation table fills it later.
-    header_skel = (
-        '    "operador": "FULL NAME",\n'
-        '    "n_operador": "e.g. 0537",\n'
-        f'    "setor_maquina": "{setor}",\n'
-        '    "cod_maquina": "e.g. M032 (machine code printed near sector name; empty if absent)",\n'
-        '    "data": "DD-MM-YYYY"'
-    )
+    # R132 — header_skel agora é gerado dinamicamente de
+    # `template.header_fields` (pré-R132 estava hardcoded a 5 campos e o
+    # `turno` definido em acabamento_mtg2/maq_fustes nunca era pedido ao
+    # Qwen). Ver `_header_skel` abaixo.
+    header_skel = _header_skel(template, setor)
 
     # Footer block: paragens has no footer
     if has_footer:
@@ -313,9 +338,29 @@ Return a JSON object with exactly one key:
 
 Common values include: BOBINE-FORMATO, GUILHOTINA, LINHA DE CORTE,
 QUINADORA PAV.4, QUINADORA PAV.8, GUIFIL, SOLDLINE 4, LASER, MANUAL,
-ROBOT, EXPEDIÇÃO, GASPARINI, HPE32, HD36.
+ROBOT, EXPEDIÇÃO, ACABAMENTO MTG2, MÁQUINA DE FUSTES, GASPARINI, HPE32, HD36.
 
 No markdown. No explanation. No <think> blocks."""
 
 
-__all__ = ["build_prompt", "build_setor_only_prompt"]
+def build_side_detect_prompt() -> str:
+    """R132 — Pass-1.5 mini OCR para kanbans 2-lados (TPL103 MÁQUINA DE
+    FUSTES). Olha SÓ ao cabeçalho da tabela e decide se é frente (PRI/
+    CLIENTE/OV/OF/MODELO) ou verso (MOTIVO DA PARAGEM/INÍCIO/FIM/...).
+
+    Output minimal {"side": "F"} ou {"side": "V"} → latência ~3-5s vs
+    ~22s de um full extraction. Usado por `_detect_side` em ocr_runner.
+    """
+    return """Look at the table header row of this industrial Kanban sheet.
+
+Is the leftmost column header "PRI" (with CLIENTE, OV, OF, MODELO following)
+OR "MOTIVO DA PARAGEM" (with INÍCIO, FIM, DURAÇÃO, RESOLVIDO following)?
+
+Return ONLY a JSON object with one key:
+{"side": "F"}   ← if the table is PRI/CLIENTE/OV/OF/MODELO (front, production)
+{"side": "V"}   ← if the table is MOTIVO DA PARAGEM (back, downtimes)
+
+No markdown, no <think>, no explanation."""
+
+
+__all__ = ["build_prompt", "build_setor_only_prompt", "build_side_detect_prompt"]

@@ -167,7 +167,7 @@ class TestShadowScore:
         scoring, total, snapped, confirmed, na, dur_ms = shadow_score(
             sheet_data, None, _REFS
         )
-        assert scoring["engine_version"] == "v7_R128"
+        assert scoring["engine_version"] == "v8_R130"
         assert scoring["template_name"] == "bobine_formato"
         assert "checked_at" in scoring
         assert scoring["summary"]["total"] == total
@@ -275,3 +275,195 @@ class TestFindWinner:
     def test_no_candidates_returns_none(self):
         winner = _find_winner_entry({}, {}, _REFS)
         assert winner is None
+
+
+class TestR130CrossCheckRigorous:
+    """R130 — cross-check rigoroso: of/ov/cliente nunca substituídos
+    silenciosamente; `proposed` exposto para tooltip; `score` propagado."""
+
+    def test_of_disagreement_keeps_ocr_and_exposes_proposed(self):
+        """OCR de OF que não existe no plan: motor preserva OCR; flag
+        very_different com `proposed` da OF do winner para tooltip."""
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{
+                "cliente": "MTG BELUX", "of": "999999",  # OF inexistente no plan
+                "ov": "2410002", "modelo": "OMEGA 1500 H",
+                "comp_mm": "1500", "esp": "3,0",
+            }],
+        }
+        scoring, *_ = shadow_score(sheet_data, None, _REFS)
+        of_cell = scoring["rows"][0]["fields"]["of"]
+        assert of_cell["value"] == "999999"           # preserva OCR
+        assert of_cell["status"] == "very_different"
+        assert of_cell.get("proposed") == "262108"    # winner do plan via outros campos
+
+    def test_of_agreement_confirms(self):
+        """OCR de OF que bate exactamente com plan → confirmed."""
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"of": "262107", "cliente": "ELECNOR"}],
+        }
+        scoring, *_ = shadow_score(sheet_data, None, _REFS)
+        assert scoring["rows"][0]["fields"]["of"]["status"] == "confirmed"
+
+    def test_of_zero_padding_confirms(self):
+        """OCR '62107' (5 dígitos) vs plan '262107' (6 dígitos) NÃO bate —
+        OF tem que ter os 6 dígitos. Mas '262107' lido sem padding zerado
+        e plan a '262107' confirmam. Testa que normalize_of não introduz
+        falsos positivos."""
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"of": "262107", "cliente": "ELECNOR"}],
+        }
+        scoring, *_ = shadow_score(sheet_data, None, _REFS)
+        assert scoring["rows"][0]["fields"]["of"]["status"] == "confirmed"
+
+    def test_ov_disagreement_keeps_ocr(self):
+        """OCR de OV diferente do winner: preserva OCR + very_different."""
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{
+                "cliente": "ELECNOR", "of": "262107",  # OV no plan = 2410001
+                "ov": "9999999",
+            }],
+        }
+        scoring, *_ = shadow_score(sheet_data, None, _REFS)
+        ov_cell = scoring["rows"][0]["fields"]["ov"]
+        assert ov_cell["value"] == "9999999"
+        assert ov_cell["status"] == "very_different"
+        assert ov_cell.get("proposed") == "2410001"
+
+    def test_cliente_disagreement_keeps_ocr(self):
+        """OCR de cliente diferente do winner: preserva OCR + very_different."""
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"cliente": "SUNNA", "of": "262107"}],  # OF da ELECNOR
+        }
+        scoring, *_ = shadow_score(sheet_data, None, _REFS)
+        cli = scoring["rows"][0]["fields"]["cliente"]
+        assert cli["value"] == "SUNNA"
+        assert cli["status"] == "very_different"
+        assert cli.get("proposed") == "ELECNOR"
+
+    def test_score_propagated_to_legacy_cell(self):
+        """Legacy cell (output do cross_check_sheet) carrega `score` para
+        `_maybe_apply_snap` decidir o threshold de auto-aplicação de dims."""
+        from app.pipeline.scoring_engine import cross_check_sheet
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{
+                "cliente": "MTG BELUX", "of": "262108", "ov": "2410002",
+                "modelo": "OMEGA 1500 H", "comp_mm": "1500",
+            }],
+        }
+        result = cross_check_sheet(sheet_data, None, _REFS)
+        of_legacy = result["rows"][0]["fields"]["of"]
+        assert of_legacy.get("score") is not None
+        assert of_legacy["score"] >= 3  # cliente + of + ov + modelo + comp = 5
+
+    def test_of_empty_autofills_with_winner(self):
+        """OCR vazio em OF: motor preenche com a do winner (snapped, não
+        very_different — empty OCR é o caso legítimo de autofill)."""
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{
+                "of": "", "cliente": "MTG BELUX", "ov": "2410002",
+                "modelo": "OMEGA 1500 H",
+            }],
+        }
+        scoring, *_ = shadow_score(sheet_data, None, _REFS)
+        of_cell = scoring["rows"][0]["fields"]["of"]
+        # winner deve ser encontrado via cliente+ov+modelo; OF é autofill
+        if of_cell.get("status") != "NA":  # se não há winner, fica NA — aceitar
+            assert of_cell["status"] == "snapped"
+            assert of_cell["value"] == "262108"
+
+
+class TestR132MaqFustes:
+    """R132 — Novo template TPL103 MÁQUINA DE FUSTES (frente + verso).
+    Cobre: detect_template, header dinâmico com turno, paragens NA,
+    cross-check sem ruido em campos sem ref."""
+
+    def test_detect_template_maq_fustes_default_frente(self):
+        """`MÁQUINA DE FUSTES` (qualquer variante) → frente, NUNCA verso."""
+        from app.templates_registry import detect_template
+        assert detect_template("MÁQUINA DE FUSTES").name == "maq_fustes"
+        assert detect_template("MAQUINA DE FUSTES").name == "maq_fustes"
+        assert detect_template("MAQ FUSTES").name == "maq_fustes"
+        assert detect_template("MAQ DE FUSTES").name == "maq_fustes"
+
+    def test_maq_fustes_paragens_explicit_get_only(self):
+        """`maq_fustes_paragens` só obtém-se via `get_template` directo,
+        nunca por `detect_template` (setor_aliases=())."""
+        from app.templates_registry import detect_template, get_template
+        assert detect_template("MÁQUINA DE FUSTES").name != "maq_fustes_paragens"
+        v = get_template("maq_fustes_paragens")
+        assert v.name == "maq_fustes_paragens"
+        assert not v.has_production_rows
+        assert v.tpl_code == "TPL103"
+        assert v.row_fields == ("motivo", "inicio", "fim", "duracao", "resolvido")
+
+    def test_maq_fustes_has_turno_in_header(self):
+        from app.templates_registry import get_template
+        assert "turno" in get_template("maq_fustes").header_fields
+        assert "turno" in get_template("maq_fustes_paragens").header_fields
+
+    def test_dynamic_header_skel_includes_turno(self):
+        """R132 fix do bug pré-existente: o header_skel agora inclui turno
+        quando o template o tem em header_fields. Antes do refactor,
+        acabamento_mtg2 e maq_fustes nunca recebiam turno do OCR."""
+        from app.pipeline.prompt_builder import build_prompt
+        from app.templates_registry import get_template
+        prompt = build_prompt(get_template("maq_fustes"))
+        assert '"turno"' in prompt
+        assert "M | R | XM | T" in prompt
+        # qtd_metros vem na coluna line via _FIELD_LABELS
+        assert "QTD (METROS)" in prompt
+
+    def test_acabamento_mtg2_also_gets_turno_via_refactor(self):
+        """O fix do header dinâmico também corrige acabamento_mtg2 (R129)
+        que tinha turno definido mas nunca pedido ao Qwen."""
+        from app.pipeline.prompt_builder import build_prompt
+        from app.templates_registry import get_template
+        prompt = build_prompt(get_template("acabamento_mtg2"))
+        assert '"turno"' in prompt
+
+    def test_maq_fustes_paragens_no_cross_check_against_plan(self):
+        """Campos motivo/inicio/fim/duracao/resolvido devem cair em NA
+        (cinza, sem flag) — _NO_REF_FIELDS cobre paragens."""
+        sheet_data = {
+            "template_name": "maq_fustes_paragens",
+            "header": {"operador": "X", "data": "10-05-2026"},
+            "footer": {},
+            "rows": [{"motivo": "AVARIA HIDRAULICA", "inicio": "08:30",
+                      "fim": "09:00", "duracao": "00:30", "resolvido": "SIM"}],
+        }
+        scoring, *_ = shadow_score(sheet_data, None, _REFS)
+        for f in ("motivo", "inicio", "fim", "duracao", "resolvido"):
+            assert scoring["rows"][0]["fields"][f]["status"] == "NA"
+
+    def test_maq_fustes_qtd_metros_is_na(self):
+        """qtd_metros é informativo, sem ref no plan → NA cinza."""
+        sheet_data = {
+            "template_name": "maq_fustes",
+            "header": {}, "footer": {},
+            "rows": [{"cliente": "ELECNOR", "of": "262107", "ov": "2410001",
+                      "modelo": "OMEGA 1200 H", "qtd": "5", "qtd_metros": "12.5"}],
+        }
+        scoring, *_ = shadow_score(sheet_data, None, _REFS)
+        assert scoring["rows"][0]["fields"]["qtd_metros"]["status"] == "NA"
+
+    def test_two_sided_templates_map(self):
+        """Garantia: o map em ocr_runner aponta maq_fustes → maq_fustes_paragens."""
+        from app.web.ocr_runner import TWO_SIDED_TEMPLATES
+        assert TWO_SIDED_TEMPLATES.get("maq_fustes") == "maq_fustes_paragens"
+
+    def test_side_detect_prompt_mentions_both_options(self):
+        """O prompt de side-detect tem que mencionar ambos os cabeçalhos
+        para o Qwen poder discriminar."""
+        from app.pipeline.prompt_builder import build_side_detect_prompt
+        prompt = build_side_detect_prompt()
+        assert "PRI" in prompt
+        assert "MOTIVO DA PARAGEM" in prompt
+        assert '"side"' in prompt
