@@ -337,7 +337,38 @@ _ID_FIELDS = ("of", "ov", "cliente")
 _DIM_AUTO_APPLY_MIN_SCORE = 4
 
 
-def _maybe_apply_snap(sheet_id: int, field_path: str, cell: dict) -> bool:
+def _human_edited_paths(sheet_id: int) -> frozenset[str]:
+    """R133 — field_paths cuja ÚLTIMA edição foi feita por um humano
+    (`edits.source='human'`). Estes campos são AUTORITATIVOS: o
+    auto-overwrite do cross-check (snap/operador/codmaq, source='system')
+    NÃO os deve reverter.
+
+    Sem isto, o operador edita uma célula e o re-cross-check disparado pelo
+    `sheet_edit` reescreve logo o valor canónico do plan → o sintoma
+    "escrevo mas não guarda". Última edição por path = MAX(id) (itera por
+    id ASC, o último source ganha).
+    """
+    try:
+        with db.conn() as c:
+            rows = c.execute(
+                "SELECT field_path, source FROM edits "
+                "WHERE sheet_id = ? ORDER BY id ASC",
+                (sheet_id,),
+            ).fetchall()
+    except Exception:  # noqa: BLE001 — sem edits / DB indisponível: nada protegido
+        return frozenset()
+    last: dict[str, str] = {}
+    for r in rows:
+        last[r["field_path"]] = r["source"]
+    return frozenset(fp for fp, src in last.items() if src == "human")
+
+
+def _maybe_apply_snap(
+    sheet_id: int,
+    field_path: str,
+    cell: dict,
+    protected: frozenset[str] = frozenset(),
+) -> bool:
     """R124 / R130 — aplica o canonical proposto pelo motor para uma célula.
 
     Política:
@@ -354,6 +385,11 @@ def _maybe_apply_snap(sheet_id: int, field_path: str, cell: dict) -> bool:
 
     Retorna True quando aplicou um edit.
     """
+    # R133 — campo com última edição humana é autoritativo: nunca
+    # auto-substituir (senão o re-cross-check reverte a correcção do
+    # operador → "escrevo mas não guarda").
+    if field_path in protected:
+        return False
     # R125 — quando a linha do plan está totalmente concluída na etapa
     # actual, o motor marca cada cell com source="obra_concluida". Não
     # auto-substituir: o operador tem de investigar (kanban a tentar
@@ -386,7 +422,9 @@ def _maybe_apply_snap(sheet_id: int, field_path: str, cell: dict) -> bool:
         return False
 
 
-def _apply_auto_overwrites(sheet_id: int, result: dict) -> int:
+def _apply_auto_overwrites(
+    sheet_id: int, result: dict, protected: frozenset[str] = frozenset()
+) -> int:
     """R109/R124 — aplica snaps em rows + header + footer.
 
     R109 introduziu o ciclo sobre `result["rows"]` e `snapped=True`.
@@ -397,7 +435,8 @@ def _apply_auto_overwrites(sheet_id: int, result: dict) -> int:
         motor tem proposta concreta (modelo/cliente/of/ov, cod_maquina,
         etc. que antes ficavam vermelhos sem auto-correcção).
 
-    Ver `_maybe_apply_snap` para a regra por célula.
+    R133 — `protected` (field_paths com última edição humana) salta o
+    auto-overwrite desses campos. Ver `_maybe_apply_snap`.
     """
     n_applied = 0
     for row_r in result.get("rows", []):
@@ -405,11 +444,11 @@ def _apply_auto_overwrites(sheet_id: int, result: dict) -> int:
         if i is None:
             continue
         for fn, cell in row_r.get("fields", {}).items():
-            if _maybe_apply_snap(sheet_id, f"rows[{i}].{fn}", cell):
+            if _maybe_apply_snap(sheet_id, f"rows[{i}].{fn}", cell, protected):
                 n_applied += 1
     for section in ("header", "footer"):
         for fn, cell in (result.get(section) or {}).items():
-            if _maybe_apply_snap(sheet_id, f"{section}.{fn}", cell):
+            if _maybe_apply_snap(sheet_id, f"{section}.{fn}", cell, protected):
                 n_applied += 1
     return n_applied
 
@@ -417,7 +456,9 @@ def _apply_auto_overwrites(sheet_id: int, result: dict) -> int:
 _LAST_OPERADOR_SNAP_WARN: str | None = None
 
 
-def _apply_operador_snap(sheet_id: int, sheet: dict, refs: dict) -> int:
+def _apply_operador_snap(
+    sheet_id: int, sheet: dict, refs: dict, protected: frozenset[str] = frozenset()
+) -> int:
     """R70 — resolve operator identity against ListaColaboradores.
 
     Reads ``header.operador`` + ``header.n_operador`` from sheet_data,
@@ -429,6 +470,9 @@ def _apply_operador_snap(sheet_id: int, sheet: dict, refs: dict) -> int:
 
     Returns count of fields edited (0-3). Suspended cells (yellow flag)
     do not trigger edits; engine handles the visual flag separately.
+
+    R133 — `protected` (paths com última edição humana) salta o snap de
+    header.operador / header.n_operador editados manualmente.
     """
     global _LAST_OPERADOR_SNAP_WARN
     colabs = refs.get("colaboradores") or {}
@@ -471,16 +515,18 @@ def _apply_operador_snap(sheet_id: int, sheet: dict, refs: dict) -> int:
         except Exception:  # noqa: BLE001
             pass
 
-    # Snap name when changed
-    if sr.applied and sr.snapped_name and sr.snapped_name != raw_name:
+    # Snap name when changed (R133 — salta se o operador editou à mão)
+    if (sr.applied and sr.snapped_name and sr.snapped_name != raw_name
+            and "header.operador" not in protected):
         try:
             db.apply_edit(sheet_id, "header.operador", sr.snapped_name, source="system")
             n_applied += 1
         except Exception:  # noqa: BLE001
             pass
 
-    # Snap cod when changed (Condition C — Lev-1)
-    if sr.applied and sr.snapped_cod and sr.snapped_cod != raw_cod:
+    # Snap cod when changed (Condition C — Lev-1; R133 — salta se editado à mão)
+    if (sr.applied and sr.snapped_cod and sr.snapped_cod != raw_cod
+            and "header.n_operador" not in protected):
         try:
             db.apply_edit(sheet_id, "header.n_operador", sr.snapped_cod, source="system")
             n_applied += 1
@@ -490,7 +536,9 @@ def _apply_operador_snap(sheet_id: int, sheet: dict, refs: dict) -> int:
     return n_applied
 
 
-def _apply_codmaq_fill(sheet_id: int, sheet: dict, refs: dict) -> int:
+def _apply_codmaq_fill(
+    sheet_id: int, sheet: dict, refs: dict, protected: frozenset[str] = frozenset()
+) -> int:
     """R85/R124 — fill OR correct header.cod_maquina from setor_maquina.
 
     Looks up ``header.setor_maquina`` (e.g. "HPE32", "GUIFIL", "LASER")
@@ -503,8 +551,12 @@ def _apply_codmaq_fill(sheet_id: int, sheet: dict, refs: dict) -> int:
     Skipped quando o setor não mapeia unambiguamente (ex: "GUILHOTINA"
     sem largura — registry tem GUILHOTINA 3M/6M/9M/10M).
 
+    R133 — salta se header.cod_maquina foi editado à mão (protected).
+
     Returns 1 if applied, 0 otherwise.
     """
+    if "header.cod_maquina" in protected:
+        return 0
     header = (sheet.get("sheet_data") or {}).get("header") or {}
     setor = (header.get("setor_maquina") or "").strip().upper()
     if not setor:
@@ -548,16 +600,20 @@ def _run_and_store_cross_check(sheet_id: int) -> dict | None:
 
     result = cross_check_sheet(sheet["sheet_data"], sheet.get("dq_audit"), refs)
 
+    # R133 — campos com última edição humana são autoritativos: o
+    # auto-overwrite abaixo salta-os, senão o re-cross-check disparado por
+    # `sheet_edit` reverte a correcção do operador ("escrevo mas não guarda").
+    protected = _human_edited_paths(sheet_id)
     # R61 — auto-overwrite modelo/cliente when MATCH but value diverges
-    n_overwritten = _apply_auto_overwrites(sheet_id, result)
+    n_overwritten = _apply_auto_overwrites(sheet_id, result, protected)
     # R70 — operator snap against ListaColaboradores (SAP employee list).
     # Resolves OCR name/cod against canonical sname/cod/pernr and applies
     # auto-substitution when there's strong identity signal (cod + token
     # overlap). See backend/app/dq/operador_snap.py for the 5 rules.
-    n_op_snapped = _apply_operador_snap(sheet_id, sheet, refs)
+    n_op_snapped = _apply_operador_snap(sheet_id, sheet, refs, protected)
     # R85 — auto-fill cod_maquina from setor_maquina via maquinas.xlsx
     # lookup. Fills empty cod_maquina when setor maps to a known machine.
-    n_codmaq_filled = _apply_codmaq_fill(sheet_id, sheet, refs)
+    n_codmaq_filled = _apply_codmaq_fill(sheet_id, sheet, refs, protected)
     if n_overwritten > 0 or n_op_snapped > 0 or n_codmaq_filled > 0:
         # Re-fetch sheet (sheet_data was modified by apply_edit) and
         # re-run cross-check to refresh statuses against new values.
@@ -678,15 +734,13 @@ def sheet_page(
         # the post-snap values, not raw)
         src = sheet["raw_extraction"]
         (cc_status_by_path, cc_ref_by_path, cc_suspended_by_path,
-         cc_snapped_by_path, cc_obra_concluida_by_path,
-         cc_auto_substituted_by_path) = (
-            {}, {}, {}, {}, {}, {},
+         cc_snapped_by_path, cc_obra_concluida_by_path) = (
+            {}, {}, {}, {}, {},
         )
     else:
         src = sheet.get("sheet_data") or {}
         (cc_status_by_path, cc_ref_by_path, cc_suspended_by_path,
-         cc_snapped_by_path, cc_obra_concluida_by_path,
-         cc_auto_substituted_by_path) = (
+         cc_snapped_by_path, cc_obra_concluida_by_path) = (
             _build_cc_maps(sheet_id)
         )
 
@@ -723,7 +777,6 @@ def sheet_page(
             "cc_suspended_by_path": cc_suspended_by_path,
             "cc_snapped_by_path": cc_snapped_by_path,
             "cc_obra_concluida_by_path": cc_obra_concluida_by_path,
-            "cc_auto_substituted_by_path": cc_auto_substituted_by_path,
             "operadores": _get_operadores(),
             "flagged_count": flagged,
             "view_mode": view_mode,
@@ -777,43 +830,9 @@ def _build_snapped_map_from_raw(sheet: dict) -> dict[str, bool]:
     return out
 
 
-def _build_auto_substituted_map(sheet_id: int) -> dict[str, bool]:
-    """R130 — mapa {field_path: True} para cells cujo valor ACTUAL foi
-    escrito pelo sistema (`edits.source='system'`) e não foi posteriormente
-    sobrescrito por um humano.
-
-    Distingue substituição automática (UI marca cc-warn amarelo) de edit
-    manual deliberado do operador (UI mantém cor original do cross-check).
-    Sem este mapa, o flow `cross_check → auto_overwrite → re-cross_check`
-    apaga o flag visual da substituição (re-cross-check vê OCR_now ==
-    proposed → MATCH verde silencioso).
-
-    Algoritmo: itera os edits por ordem cronológica (id ASC); o último
-    `source` por `field_path` ganha. Se for 'system', a cell continua
-    com auto-substituição. Se um humano editou depois, sai do mapa.
-    """
-    out: dict[str, bool] = {}
-    try:
-        with db.conn() as c:
-            rows = c.execute(
-                "SELECT field_path, source FROM edits "
-                "WHERE sheet_id = ? ORDER BY id ASC",
-                (sheet_id,),
-            ).fetchall()
-    except Exception:  # noqa: BLE001 — sem edits ou DB indisponível: mapa vazio
-        return out
-    last_source: dict[str, str] = {}
-    for r in rows:
-        last_source[r["field_path"]] = r["source"]
-    for fp, src in last_source.items():
-        if src == "system":
-            out[fp] = True
-    return out
-
-
 def _build_cc_maps(sheet_id: int) -> tuple[
     dict[str, str], dict[str, str], dict[str, bool], dict[str, bool],
-    dict[str, bool], dict[str, bool],
+    dict[str, bool],
 ]:
     """Round 33: load cross-check JSON for sheet, build {field_path: status}
     + {field_path: ref} maps for template rendering of green/red cell colors.
@@ -841,12 +860,8 @@ def _build_cc_maps(sheet_id: int) -> tuple[
         except Exception:  # noqa: BLE001
             pass
     snapped_map = _build_snapped_map_from_raw(db.get_sheet(sheet_id) or {})
-    # R130 — mapa de cells substituídas pelo sistema (auto-overwrite),
-    # usado pelo template para colorir amarelo mesmo quando o re-cross-check
-    # diz MATCH (substituição silenciosa).
-    auto_substituted_map = _build_auto_substituted_map(sheet_id)
     if not cc:
-        return {}, {}, {}, snapped_map, {}, auto_substituted_map
+        return {}, {}, {}, snapped_map, {}
     status_map: dict[str, str] = {}
     ref_map: dict[str, str] = {}
     suspended_map: dict[str, bool] = {}
@@ -878,7 +893,7 @@ def _build_cc_maps(sheet_id: int) -> tuple[
             if ref is not None:
                 ref_map[path] = str(ref)
     return (status_map, ref_map, suspended_map, snapped_map,
-            obra_concluida_map, auto_substituted_map)
+            obra_concluida_map)
 
 
 def _maybe_record_operador_alias(sheet_id: int) -> None:
@@ -999,8 +1014,7 @@ async def sheet_edit(
         real_value = new
     cells_by_path = (sheet.get("dq_audit") or {}).get("cells", {})
     (cc_status_by_path, cc_ref_by_path, cc_suspended_by_path,
-     cc_snapped_by_path, cc_obra_concluida_by_path,
-     cc_auto_substituted_by_path) = (
+     cc_snapped_by_path, cc_obra_concluida_by_path) = (
         _build_cc_maps(sheet_id)
     )
     return templates.TemplateResponse(
@@ -1017,7 +1031,6 @@ async def sheet_edit(
             "cc_suspended_by_path": cc_suspended_by_path,
             "cc_snapped_by_path": cc_snapped_by_path,
             "cc_obra_concluida_by_path": cc_obra_concluida_by_path,
-            "cc_auto_substituted_by_path": cc_auto_substituted_by_path,
             "sheet_status": sheet.get("status"),
         },
     )
@@ -2176,7 +2189,6 @@ def kanban_viewer(
                 "cc_status_by_path": {},
                 "cc_ref_by_path": {},
                 "cc_obra_concluida_by_path": {},
-                "cc_auto_substituted_by_path": {},
                 "valid_operadores": _get_operadores(),
                 **_template_ctx_for_sheet(None),  # bobine_formato defaults
             },
@@ -2230,12 +2242,10 @@ def kanban_viewer(
 
     # Round 33: cross-check colors per cell
     (cc_status_by_path, cc_ref_by_path, cc_suspended_by_path,
-     cc_snapped_by_path, cc_obra_concluida_by_path,
-     cc_auto_substituted_by_path) = ({}, {}, {}, {}, {}, {})
+     cc_snapped_by_path, cc_obra_concluida_by_path) = ({}, {}, {}, {}, {})
     if sheet:
         (cc_status_by_path, cc_ref_by_path, cc_suspended_by_path,
-         cc_snapped_by_path, cc_obra_concluida_by_path,
-         cc_auto_substituted_by_path) = (
+         cc_snapped_by_path, cc_obra_concluida_by_path) = (
             _build_cc_maps(sheet["id"])
         )
 
@@ -2270,7 +2280,6 @@ def kanban_viewer(
             "cc_suspended_by_path": cc_suspended_by_path,
             "cc_snapped_by_path": cc_snapped_by_path,
             "cc_obra_concluida_by_path": cc_obra_concluida_by_path,
-            "cc_auto_substituted_by_path": cc_auto_substituted_by_path,
             "valid_operadores": _get_operadores(),
             "data_iso_for_validate": data_iso_for_validate,
             "has_cropped": sheet_has_cropped,

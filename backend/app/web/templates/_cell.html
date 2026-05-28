@@ -23,25 +23,22 @@
    to distinguish from NA sem-ref (qtd/coni/pri/etc — cinza neutro). #}
 {% set _is_suspended = cc_suspended_by_path is defined and cc_suspended_by_path.get(field_path) %}
 {# R130: identidade única (of/ov/cliente). NO_MATCH passa a amarelo
-   (cc-warn) em vez de vermelho — semântica "review me, não erro hard". #}
+   (cc-warn) em vez de vermelho — semântica "review me, não erro hard".
+   R133: removido o override `_was_auto_substituted → cc-warn` (era
+   demasiado abrangente — pintava de amarelo cells auto-corrigidas que
+   ficaram CERTAS: operador snap, cod_maquina fill, modelo, dim). O fix
+   real do bug #512 vive no engine (`_finish_cell` preserva OCR em
+   disagreement de of/ov/cliente → very_different → cc-warn aqui). O
+   asterisco `*` (cc_snapped_by_path) continua a marcar auto-correcções
+   sem fundo amarelo. #}
 {% set _is_id_field = field_path.endswith('.of')
                       or field_path.endswith('.ov')
                       or field_path.endswith('.cliente') %}
-{# R130: cell auto-substituída pelo sistema (edits.source='system' e não
-   foi re-editada por humano). Usada para forçar amarelo quando o
-   re-cross-check apaga o flag (OCR_now == proposed → confirmed silencioso). #}
-{% set _was_auto_substituted = cc_auto_substituted_by_path is defined
-                                and cc_auto_substituted_by_path.get(field_path) %}
 {% if cc_status == 'MATCH' %}{% set cc_class = 'cc-match' %}
 {% elif cc_status == 'NO_MATCH' and (_is_dim_field or _is_id_field) %}{% set cc_class = 'cc-warn' %}
 {% elif cc_status == 'NO_MATCH' %}{% set cc_class = 'cc-no-match' %}
 {% elif cc_status == 'NA' and _is_suspended %}{% set cc_class = 'cc-na-suspended' %}
 {% else %}{% set cc_class = 'cc-na' %}
-{% endif %}
-{# R130: override final — se a célula foi auto-substituída e o cross-check
-   pós-overwrite a marcou MATCH (verde silencioso), forçar amarelo. #}
-{% if _was_auto_substituted and cc_class == 'cc-match' %}
-  {% set cc_class = 'cc-warn' %}
 {% endif %}
 {% set cell_id = 'cell-' ~ field_path|replace('.','-')|replace('[','-')|replace(']','') %}
 {# Build human label from full path: "rows[3].cliente" -> "L4 · cliente"
@@ -64,8 +61,8 @@
 {% set _obra_concluida = cc_obra_concluida_by_path is defined and cc_obra_concluida_by_path.get(field_path) %}
 <td class="{{ cell_class }} {{ cc_class }} {% if edited %}cell-edited{% endif %} {% if _is_validated %}cell-locked{% endif %}"
     {% if _obra_concluida %}title="Obra já concluída no plan — verificar"
-    {% elif (cc_status == 'NO_MATCH' or _was_auto_substituted) and cc_ref_by_path is defined and cc_ref_by_path.get(field_path) %}title="Plan diz: {{ cc_ref_by_path.get(field_path, '') }}"{% endif %}
-    style="padding:6px 8px; font-family:var(--font-mono); font-size:12px; {% if _is_validated %}cursor:default;{% else %}cursor:text;{% endif %} min-width:110px; vertical-align:top;"
+    {% elif cc_status == 'NO_MATCH' and cc_ref_by_path is defined and cc_ref_by_path.get(field_path) %}title="Plan diz: {{ cc_ref_by_path.get(field_path, '') }}"{% endif %}
+    style="padding:6px 8px; font-family:var(--font-mono); font-size:12px; {% if _is_validated %}cursor:default;{% else %}cursor:text;{% endif %} min-width:60px; position:relative;"
     {% if not _is_validated %}
     x-data='{
       editing: false,
@@ -116,11 +113,18 @@
     {%- if value -%}{{ value }}{%- else -%}&nbsp;{%- endif -%}
     {% if _was_snapped %}<span class="cc-snapped-mark" aria-hidden="true">*</span>{% endif %}
   </div>
+  {# R133 — form de edição FLUTUANTE (position:absolute): aparece sobre as
+     células vizinhas, largo o suficiente para mostrar o valor inteiro, mas
+     a coluna em modo leitura mantém-se estreita (min-width:60px) → a foto
+     do kanban não encolhe (não regride o R133 da foto). #}
   <form x-show="editing" x-cloak
         hx-post="/sheet/{{ sheet_id }}/edit"
         hx-target="#{{ cell_id }}"
         hx-swap="outerHTML"
-        @submit="editing = false">
+        @submit="editing = false"
+        style="position:absolute; left:0; top:0; z-index:30; min-width:280px;
+               background:var(--paper); padding:5px; border-radius:5px;
+               box-shadow:0 3px 12px rgba(0,0,0,0.20);">
     <input type="hidden" name="field_path" value="{{ field_path }}">
     {# R123 — botões ✓/✕ visíveis (antes só blur/Enter, save escondido).
        O blur só guarda quando o foco sai do form: clicar em ✓ ou ✕ tem
@@ -129,7 +133,7 @@
       <input type="text" name="new_value" value="{{ value }}" x-ref="input"
              @blur="if (!$el.form.contains($event.relatedTarget)) $el.form.requestSubmit()"
              @keydown.escape="editing = false; $el.value = original"
-             style="width:100%; min-width:140px; font-family:var(--font-mono); font-size:14px; padding:7px 10px; border:1px solid var(--ink); border-radius:3px;">
+             style="width:100%; min-width:200px; font-family:var(--font-mono); font-size:14px; padding:7px 10px; border:1px solid var(--ink); border-radius:3px;">
       <button type="submit" title="Guardar"
               style="flex:none; padding:7px 11px; font-size:14px; line-height:1.4; border:1px solid var(--ink); border-radius:3px; background:var(--ink); color:var(--paper); cursor:pointer;">✓</button>
       <button type="button" title="Cancelar"
