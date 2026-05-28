@@ -319,22 +319,12 @@ async def upload(
 # `source`. As constantes R61/R66 anteriores (campos hard-coded) saíram
 # por dead code; R109 substituiu-as pela flag `snapped` por célula.
 
-# Campos dimensionais — `very_different` aqui fica para revisão humana
-# (não auto-aplicado), porque o plan/SAP pode estar desactualizado e o
-# operador viu a peça real. `snapped` (delta pequena) é sempre aplicado.
-# R130: dim `very_different` passa a auto-aplicar quando o winner tem
-# concordância forte (score >= 4 features), assumindo que o operador
-# escreveu mal e o plan tem razão.
-_DIM_FIELDS = ("comp_mm", "larg_mm", "lbase", "ltopo", "esp", "dbase", "dtopo")
-# R130 — identidade única do plan/SAP. Substituição nunca silenciosa: o
-# motor preserva OCR e marca very_different com `proposed` no tooltip,
-# mas o auto-overwrite não actua — operador decide se aceita o plano.
-_ID_FIELDS = ("of", "ov", "cliente")
-# R130 — threshold de score para auto-corrigir dim very_different.
-# score_entry conta até ~12 features (of+ov+cliente+modelo+lote+5/7 dims).
-# >=4 significa concordância em pelo menos 4 campos — forte o suficiente
-# para confiar que o plan tem razão. Ajustável em produção.
-_DIM_AUTO_APPLY_MIN_SCORE = 4
+# R134 — substitute-everything (filosofia R108): a entry vencedora
+# holística (score_entry: +1 por campo, peso igual; _find_winner_entry
+# escolhe o máximo de campos iguais) substitui TODOS os campos. As guardas
+# R124/R130 (dims só com score≥4, of/ov/cliente nunca substituídos) foram
+# removidas por decisão do utilizador — a folha fica igual ao plan. Único
+# travão: edições humanas (R133) e obra_concluida (R125).
 
 
 def _human_edited_paths(sheet_id: int) -> frozenset[str]:
@@ -369,47 +359,36 @@ def _maybe_apply_snap(
     cell: dict,
     protected: frozenset[str] = frozenset(),
 ) -> bool:
-    """R124 / R130 — aplica o canonical proposto pelo motor para uma célula.
+    """R134 — aplica o canonical da entry vencedora a TODOS os campos
+    (substitute-everything, filosofia R108).
 
     Política:
-      - `snapped` (motor confiante, delta suave) → aplica sempre.
-      - `very_different`:
-        - Campos de identidade (`of`/`ov`/`cliente` — R130): nunca
-          auto-aplicado. Operador decide se aceita o `proposed`.
-        - Campos dim (`comp_mm`/`larg_mm`/...): auto-aplica APENAS quando
-          winner score >= `_DIM_AUTO_APPLY_MIN_SCORE` (concordância forte
-          ⇒ confiar no plan). Senão fica vermelho para revisão.
-        - Outros campos não-dim (modelo, lote, etc.): aplica quando o
-          motor TEM proposta concreta vinda de uma ref (`source` != "ocr_raw").
-      - Outros estados (`confirmed`, `NA`) → no-op.
+      - `snapped` (delta suave / autofill) → aplica.
+      - `very_different` → aplica (a folha fica igual ao plan), desde que o
+        motor tenha proposta concreta vinda de uma ref (`source` != "ocr_raw").
+      - `confirmed` / `NA` → no-op.
+
+    Travões (apenas estes):
+      - R133: campo com última edição humana (`protected`) — autoritativo,
+        nunca revertido (senão "escrevo mas não guarda").
+      - R125: `source == "obra_concluida"` — operador tem de investigar.
 
     Retorna True quando aplicou um edit.
     """
-    # R133 — campo com última edição humana é autoritativo: nunca
-    # auto-substituir (senão o re-cross-check reverte a correcção do
-    # operador → "escrevo mas não guarda").
+    # R133 — edição humana é autoritativa: nunca auto-substituir.
     if field_path in protected:
         return False
-    # R125 — quando a linha do plan está totalmente concluída na etapa
-    # actual, o motor marca cada cell com source="obra_concluida". Não
-    # auto-substituir: o operador tem de investigar (kanban a tentar
-    # registar produção numa obra fechada).
+    # R125 — obra concluída no plan: operador investiga, não auto-substituir.
     if cell.get("source") == "obra_concluida":
         return False
     engine_status = cell.get("engine_status")
     if engine_status == "snapped":
         pass
     elif engine_status == "very_different":
-        field_name = field_path.rsplit(".", 1)[-1]
-        # R130 — identidade única nunca auto-aplicada
-        if field_name in _ID_FIELDS:
-            return False
-        if field_name in _DIM_FIELDS:
-            # R130 — dim só auto-corrige com winner forte
-            if (cell.get("score") or 0) < _DIM_AUTO_APPLY_MIN_SCORE:
-                return False
+        # R134 — substitui tudo pela entry vencedora. Só não aplica quando
+        # não há proposta concreta de uma ref (fallback do motor).
         if cell.get("source") in (None, "ocr_raw"):
-            return False  # fallback do motor sem proposta concreta — no-op
+            return False
     else:
         return False
     canonical = (cell.get("value") or "").strip()

@@ -633,41 +633,24 @@ def _finish_cell(
 ) -> dict:
     """Formata o valor proposto, decide o estado vs o OCR, devolve a célula.
 
-    R130 — campos de identidade única (of/ov/cliente) NUNCA são substituídos
-    silenciosamente. Se o OCR diverge do winner, preserva-se o valor do OCR e
-    marca-se `very_different` com `proposed` exposto para tooltip. Empty OCR
-    continua autofill (snapped). Match exacto (após 0/O swap em of/ov ou
-    upper/strip em cliente) continua confirmed.
-
-    Para os restantes campos (incl. modelo, dim, lote), comportamento R128
-    inalterado: confirmed se igual, snapped suave, very_different se delta
-    forte. Auto-aplicação fica a cargo de `_maybe_apply_snap` no main.
+    R134 — TODOS os campos seguem a mesma regra (substitute-everything,
+    filosofia R108): o valor da célula passa a ser o `proposed` (valor da
+    entry vencedora). Estado: `confirmed` se igual ao OCR; `snapped` se o
+    OCR estava vazio (autofill) ou diferente mas suave; `very_different` se
+    delta forte (estes são depois auto-aplicados por `_maybe_apply_snap`,
+    ficando MATCH/verde no re-cross-check). O R130 (preservar OCR + amarelo
+    em of/ov/cliente) foi revertido — ver comentário no corpo.
     """
     proposed_fmt = _format_value(field, proposed)
     ocr_fmt = _format_value(field, ocr_value)
 
-    # R130 — identidade única: preserva OCR em disagreement, expõe proposed
-    if field in ("of", "ov", "cliente"):
-        if not ocr_value:
-            return _make_cell(proposed_fmt, "snapped", source=source, score=score)
-        # Match tolerante a 0/O em of/ov; upper/strip em cliente
-        if field == "of":
-            ocr_variants = _o_zero_variants(normalize_of(ocr_value))
-        elif field == "ov":
-            ocr_variants = _o_zero_variants(ocr_value)
-        else:  # cliente
-            ocr_variants = [ocr_value]
-        if proposed_fmt in ocr_variants or (
-            proposed_fmt and ocr_fmt and proposed_fmt.upper() == ocr_fmt.upper()
-        ):
-            return _make_cell(proposed_fmt, "confirmed", source=source, score=score)
-        # Disagreement — preserva OCR, expõe proposed para o tooltip via _to_legacy_cell
-        return _make_cell(
-            ocr_value, "very_different",
-            source=source, score=score, proposed=proposed_fmt,
-        )
-
-    # Demais campos (modelo, dim, lote): R128 inalterado
+    # R134 — restaurado o substitute-everything (filosofia R108): TODOS os
+    # campos (incl. of/ov/cliente) são substituídos pelo valor da entry
+    # vencedora holística (máximo de campos iguais, peso igual por campo —
+    # ver score_entry/_find_winner_entry). O R130 (preservar OCR + amarelo
+    # para of/ov/cliente) foi revertido por decisão do utilizador: o
+    # objetivo é a folha ficar igual ao plan. O raw_extraction mantém o OCR
+    # original (audit trail); o asterisco `*` marca o que foi substituído.
     if proposed_fmt and ocr_fmt and proposed_fmt.upper() == ocr_fmt.upper():
         status = "confirmed"
     elif not ocr_value:

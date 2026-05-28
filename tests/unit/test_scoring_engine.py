@@ -277,13 +277,16 @@ class TestFindWinner:
         assert winner is None
 
 
-class TestR130CrossCheckRigorous:
-    """R130 — cross-check rigoroso: of/ov/cliente nunca substituídos
-    silenciosamente; `proposed` exposto para tooltip; `score` propagado."""
+class TestR134SubstituteEverything:
+    """R134 — substitute-everything (filosofia R108, R130 revertido): a
+    entry vencedora holística (máximo de campos iguais, peso igual por
+    campo) substitui TODOS os campos, incl. of/ov/cliente. O valor da
+    célula passa a ser o do winner; após auto-apply + re-cross-check fica
+    MATCH/verde."""
 
-    def test_of_disagreement_keeps_ocr_and_exposes_proposed(self):
-        """OCR de OF que não existe no plan: motor preserva OCR; flag
-        very_different com `proposed` da OF do winner para tooltip."""
+    def test_of_substituted_by_winner(self):
+        """OCR de OF que não existe no plan mas a linha bate uma entry pelos
+        outros campos → OF substituída pelo valor do winner (não preserva OCR)."""
         sheet_data = {
             "template_name": "bobine_formato", "header": {}, "footer": {},
             "rows": [{
@@ -294,33 +297,21 @@ class TestR130CrossCheckRigorous:
         }
         scoring, *_ = shadow_score(sheet_data, None, _REFS)
         of_cell = scoring["rows"][0]["fields"]["of"]
-        assert of_cell["value"] == "999999"           # preserva OCR
-        assert of_cell["status"] == "very_different"
-        assert of_cell.get("proposed") == "262108"    # winner do plan via outros campos
+        # R134 — valor passa a ser o do winner (substituído), NÃO "999999".
+        assert of_cell["value"] == "262108"
 
     def test_of_agreement_confirms(self):
-        """OCR de OF que bate exactamente com plan → confirmed."""
+        """OCR de OF que bate exactamente com plan → confirmed (verde)."""
         sheet_data = {
             "template_name": "bobine_formato", "header": {}, "footer": {},
             "rows": [{"of": "262107", "cliente": "ELECNOR"}],
         }
         scoring, *_ = shadow_score(sheet_data, None, _REFS)
         assert scoring["rows"][0]["fields"]["of"]["status"] == "confirmed"
+        assert scoring["rows"][0]["fields"]["of"]["value"] == "262107"
 
-    def test_of_zero_padding_confirms(self):
-        """OCR '62107' (5 dígitos) vs plan '262107' (6 dígitos) NÃO bate —
-        OF tem que ter os 6 dígitos. Mas '262107' lido sem padding zerado
-        e plan a '262107' confirmam. Testa que normalize_of não introduz
-        falsos positivos."""
-        sheet_data = {
-            "template_name": "bobine_formato", "header": {}, "footer": {},
-            "rows": [{"of": "262107", "cliente": "ELECNOR"}],
-        }
-        scoring, *_ = shadow_score(sheet_data, None, _REFS)
-        assert scoring["rows"][0]["fields"]["of"]["status"] == "confirmed"
-
-    def test_ov_disagreement_keeps_ocr(self):
-        """OCR de OV diferente do winner: preserva OCR + very_different."""
+    def test_ov_substituted_by_winner(self):
+        """OV diferente do winner → substituída pelo valor do winner."""
         sheet_data = {
             "template_name": "bobine_formato", "header": {}, "footer": {},
             "rows": [{
@@ -330,25 +321,40 @@ class TestR130CrossCheckRigorous:
         }
         scoring, *_ = shadow_score(sheet_data, None, _REFS)
         ov_cell = scoring["rows"][0]["fields"]["ov"]
-        assert ov_cell["value"] == "9999999"
-        assert ov_cell["status"] == "very_different"
-        assert ov_cell.get("proposed") == "2410001"
+        assert ov_cell["value"] == "2410001"   # substituído pelo winner
 
-    def test_cliente_disagreement_keeps_ocr(self):
-        """OCR de cliente diferente do winner: preserva OCR + very_different."""
+    def test_cliente_substituted_by_winner(self):
+        """Cliente diferente do winner → substituído pelo valor do winner."""
         sheet_data = {
             "template_name": "bobine_formato", "header": {}, "footer": {},
             "rows": [{"cliente": "SUNNA", "of": "262107"}],  # OF da ELECNOR
         }
         scoring, *_ = shadow_score(sheet_data, None, _REFS)
         cli = scoring["rows"][0]["fields"]["cliente"]
-        assert cli["value"] == "SUNNA"
-        assert cli["status"] == "very_different"
-        assert cli.get("proposed") == "ELECNOR"
+        assert cli["value"] == "ELECNOR"   # substituído pelo winner
+
+    def test_512_dimensional_only_winner_substitutes_all(self):
+        """Caso #512 (decisão do utilizador): OCR of/ov/cliente/modelo não
+        batem nenhuma entry; o winner é escolhido pelo máximo de campos
+        iguais (aqui as medidas) → substitui tudo por essa entry."""
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{
+                # nada disto bate o plan por identidade; só as medidas da 262108
+                "cliente": "DESCONHECIDO", "of": "111111", "ov": "8888888",
+                "modelo": "ZZZ", "comp_mm": "1500", "larg_mm": "250",
+                "lbase": "60", "ltopo": "40", "esp": "3,0",
+            }],
+        }
+        scoring, *_ = shadow_score(sheet_data, None, _REFS)
+        fields = scoring["rows"][0]["fields"]
+        # winner = entry 262108 (bate as 5 medidas) → substitui of/ov/cliente.
+        assert fields["of"]["value"] == "262108"
+        assert fields["ov"]["value"] == "2410002"
+        assert fields["cliente"]["value"] == "MTG BELUX"
 
     def test_score_propagated_to_legacy_cell(self):
-        """Legacy cell (output do cross_check_sheet) carrega `score` para
-        `_maybe_apply_snap` decidir o threshold de auto-aplicação de dims."""
+        """Legacy cell carrega `score` (winner score) — usado no audit."""
         from app.pipeline.scoring_engine import cross_check_sheet
         sheet_data = {
             "template_name": "bobine_formato", "header": {}, "footer": {},
@@ -360,11 +366,10 @@ class TestR130CrossCheckRigorous:
         result = cross_check_sheet(sheet_data, None, _REFS)
         of_legacy = result["rows"][0]["fields"]["of"]
         assert of_legacy.get("score") is not None
-        assert of_legacy["score"] >= 3  # cliente + of + ov + modelo + comp = 5
+        assert of_legacy["score"] >= 3
 
     def test_of_empty_autofills_with_winner(self):
-        """OCR vazio em OF: motor preenche com a do winner (snapped, não
-        very_different — empty OCR é o caso legítimo de autofill)."""
+        """OCR vazio em OF: motor preenche com a do winner (snapped autofill)."""
         sheet_data = {
             "template_name": "bobine_formato", "header": {}, "footer": {},
             "rows": [{
@@ -374,8 +379,7 @@ class TestR130CrossCheckRigorous:
         }
         scoring, *_ = shadow_score(sheet_data, None, _REFS)
         of_cell = scoring["rows"][0]["fields"]["of"]
-        # winner deve ser encontrado via cliente+ov+modelo; OF é autofill
-        if of_cell.get("status") != "NA":  # se não há winner, fica NA — aceitar
+        if of_cell.get("status") != "NA":
             assert of_cell["status"] == "snapped"
             assert of_cell["value"] == "262108"
 
