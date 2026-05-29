@@ -36,7 +36,8 @@ class TestRemaining:
         assert of_consumption.remaining(entry, consumption={}) == 0.0
 
     def test_basic_remaining(self):
-        # quanttrp=10, max phase=3, kanban=2 → falta 5
+        # R138 — "produzido" = fase a JUSANTE (última na ordem das fases),
+        # não o max. quanttrp=10, downstream (soldadura)=2, kanban=2 → faltam 6.
         entry = {
             "quanttrp": 10,
             "fases": {"corte": 3, "soldadura": 2},
@@ -45,7 +46,7 @@ class TestRemaining:
             "_of": "262107",
         }
         consumption = {("262107", "OMEGA"): 2.0}
-        assert of_consumption.remaining(entry, consumption) == 5.0
+        assert of_consumption.remaining(entry, consumption) == 6.0
 
     def test_remaining_can_be_negative(self):
         """Quando consumption + fases excede quanttrp — possível em práticas
@@ -61,8 +62,12 @@ class TestRemaining:
         # 10 - 8 - 5 = -3
         assert of_consumption.remaining(entry, consumption) == -3.0
 
-    def test_max_phase_not_sum(self):
-        """Verificar que usamos max(fases), não sum(fases)."""
+    def test_uses_downstream_phase_not_max_nor_sum(self):
+        """R138 — usa a fase mais a JUSANTE (última), não max nem sum.
+
+        As fases iniciais sobre-produzem (margem de sucata), por isso o max
+        marcava ~92% das linhas como fechadas. A medida correcta é o estágio
+        a jusante (ou a fase do setor, quando dada)."""
         entry = {
             "quanttrp": 100,
             "fases": {"corte": 50, "soldadura": 30, "acabamento": 20},
@@ -70,9 +75,11 @@ class TestRemaining:
             "designacao": "X",
             "_of": "100",
         }
-        # max=50 (não sum=100)
-        # 100 - 50 - 0 = 50
-        assert of_consumption.remaining(entry, consumption={}) == 50.0
+        # downstream (acabamento)=20 → 100 - 20 - 0 = 80
+        # (o antigo max daria 50; sum daria 0)
+        assert of_consumption.remaining(entry, consumption={}) == 80.0
+        # fase do setor explícita: corte=50 → 100 - 50 = 50
+        assert of_consumption.remaining(entry, consumption={}, phase="corte") == 50.0
 
     def test_fases_with_none_values(self):
         entry = {

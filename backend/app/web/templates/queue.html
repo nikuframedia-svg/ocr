@@ -2,6 +2,27 @@
 {% set live = true %}
 {% block title %}Histórico — Metalogalva OCR{% endblock %}
 {% block content %}
+{# R137 — filtros "sticky": o Histórico perdia os filtros ao abrir um kanban e
+   voltar (browser back, "← Voltar à lista", menu lateral ou redirect pós-validação
+   caem em /queue sem querystring). Guardamos os filtros activos em sessionStorage
+   e re-aplicamo-los sempre que se aterra em /queue sem filtros no URL. FORA do
+   #dash-data (que o HTMX troca a cada 30s) para não re-correr no poll. #}
+<script>
+(function () {
+  var KEY = 'queue_filters';
+  var FILTER_KEYS = ['status', 'of', 'operador', 'data', 'captured', 'setor'];
+  var p = new URLSearchParams(location.search);
+  var present = FILTER_KEYS.filter(function (k) { return p.get(k); });
+  if (present.length) {                       // URL tem filtros → memoriza-os
+    var qs = new URLSearchParams();
+    present.forEach(function (k) { qs.set(k, p.get(k)); });
+    sessionStorage.setItem(KEY, qs.toString());
+  } else {                                     // sem filtros → restaura o último set
+    var saved = sessionStorage.getItem(KEY);
+    if (saved) { location.replace(location.pathname + '?' + saved); }
+  }
+})();
+</script>
 <div class="page-h">
   <div>
     <div class="page-eyebrow">Chão de Fábrica · Histórico</div>
@@ -21,6 +42,7 @@
     {%- if of_filter %}&of={{ of_filter|urlencode }}{% endif -%}
     {%- if operador_filter %}&operador={{ operador_filter|urlencode }}{% endif -%}
     {%- if data_filter %}&data={{ data_filter|urlencode }}{% endif -%}
+    {%- if captured_filter %}&captured={{ captured_filter|urlencode }}{% endif -%}
     {%- if setor_filter %}&setor={{ setor_filter|urlencode }}{% endif -%}
   {%- endset -%}
   {# R88: URL de origem completa para passar ao /sheet via ?back=. Permite
@@ -99,7 +121,10 @@
     </label>
 
     {% if operador_filter or data_filter or captured_filter or setor_filter or of_filter %}
+      {# R137 — limpar tem de apagar o sessionStorage, senão o script sticky
+         volta a aplicar os filtros que acabámos de limpar. #}
       <a class="btn ghost" style="font-size:12px;"
+         onclick="sessionStorage.removeItem('queue_filters')"
          href="/queue{% if status_filter and status_filter != 'all' %}?status={{ status_filter }}{% endif %}">✕ Limpar filtros</a>
     {% endif %}
   </form>

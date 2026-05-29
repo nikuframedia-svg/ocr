@@ -1290,6 +1290,83 @@ def apply_edit(
     return old, new_value
 
 
+def add_row(sheet_id: int, *, source: str = "human") -> int:
+    """R136 — append an empty row to ``sheet_data["rows"]``. Returns the new
+    row index.
+
+    Mirrors ``apply_edit``: one transaction that persists ``sheet_data``,
+    logs an audit row (EN 1090 / ISO 9001) and re-syncs ``production_rows``
+    (the blank row is filtered out of aggregates until the operator fills it).
+
+    Appends at the END deliberately — that never shifts the index of any
+    existing ``rows[i].field`` edit path.
+    """
+    with conn() as c:
+        row = c.execute(
+            "SELECT sheet_data FROM sheets WHERE id = ?", (sheet_id,)
+        ).fetchone()
+        if row is None or not row["sheet_data"]:
+            raise ValueError(f"Sheet {sheet_id} has no extraction yet")
+        data = json.loads(row["sheet_data"])
+        rows = data.setdefault("rows", [])
+        if len(rows) > _MAX_ROW_INDEX:
+            raise ValueError(f"sheet already has the maximum {_MAX_ROW_INDEX} rows")
+        rows.append({})
+        new_idx = len(rows) - 1
+        c.execute(
+            "UPDATE sheets SET sheet_data = ? WHERE id = ?",
+            (json.dumps(data, ensure_ascii=False), sheet_id),
+        )
+        c.execute(
+            "INSERT INTO edits (sheet_id, field_path, old_value, new_value, source) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (sheet_id, f"rows[{new_idx}]", "", "(linha adicionada)", source),
+        )
+        _sync_production_rows(c, sheet_id, data)
+    return new_idx
+
+
+def delete_row(sheet_id: int, row_index: int, *, source: str = "human") -> dict:
+    """R136 — remove ``sheet_data["rows"][row_index]``. Returns the removed
+    row dict.
+
+    Shifts the indices of subsequent rows. The removed content is stored
+    verbatim in the ``edits`` audit row so it stays recoverable. Re-syncs
+    ``production_rows``.
+    """
+    with conn() as c:
+        row = c.execute(
+            "SELECT sheet_data FROM sheets WHERE id = ?", (sheet_id,)
+        ).fetchone()
+        if row is None or not row["sheet_data"]:
+            raise ValueError(f"Sheet {sheet_id} has no extraction yet")
+        data = json.loads(row["sheet_data"])
+        rows = data.get("rows", []) or []
+        if row_index < 0 or row_index >= len(rows):
+            raise ValueError(
+                f"row index {row_index} out of range [0, {len(rows) - 1}]"
+            )
+        removed = rows.pop(row_index)
+        data["rows"] = rows
+        c.execute(
+            "UPDATE sheets SET sheet_data = ? WHERE id = ?",
+            (json.dumps(data, ensure_ascii=False), sheet_id),
+        )
+        c.execute(
+            "INSERT INTO edits (sheet_id, field_path, old_value, new_value, source) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                sheet_id,
+                f"rows[{row_index}]",
+                json.dumps(removed, ensure_ascii=False),
+                "(linha removida)",
+                source,
+            ),
+        )
+        _sync_production_rows(c, sheet_id, data)
+    return removed
+
+
 def validate_sheet(sheet_id: int, operador: str) -> None:
     """Mark sheet validated. Dropdown ``operador`` overrides whatever
     OCR / manual edits put in production_rows — the dropdown is the

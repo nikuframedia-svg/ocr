@@ -543,7 +543,8 @@ def _find_winner_entry(
         if score < 1:
             continue
         phase_full = 1 if (current_phase and _phase_is_full(e, current_phase)) else 0
-        rem = _remaining(e)
+        # R138 — remaining consciente do setor (mesma medida do wizard).
+        rem = _remaining(e, phase=current_phase)
         rem_sort = 9e9 if rem == float("inf") else rem
         eligible.append((-float(score), phase_full, rem_sort, k, e))
 

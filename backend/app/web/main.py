@@ -130,6 +130,11 @@ templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 from app.web.kpis import PRODUCTION_SECTORS  # noqa: E402
 templates.env.globals["production_sectors"] = PRODUCTION_SECTORS  # type: ignore[assignment]
 
+# R136 — filtro Jinja: o date-picker do cabeçalho (célula header.data) é a
+# ÚNICA forma de editar a data (a barra "Validar" deixou de ter input próprio).
+# header.data guarda-se em DD-MM-YYYY; o <input type="date"> precisa de ISO.
+templates.env.filters["pt_to_iso"] = db._normalize_data_pt_to_iso  # type: ignore[assignment]
+
 
 def _process_sheet_ocr(sheet_id: int) -> None:
     """R71 — worker callback. Runs OCR + DQ + cross-check + CSV deposit
@@ -738,10 +743,9 @@ def sheet_page(
 
     tpl_ctx = _template_ctx_for_sheet(sheet)
 
-    # R94 — pre-fill ISO date for the validation form's <input type="date">.
-    # header.data is DD-MM-YYYY (and variations); normalize defensively.
-    from app.web.db import _normalize_data_pt_to_iso  # local import to avoid cycle
-    data_iso_for_validate = _normalize_data_pt_to_iso(header.get("data"))
+    # R136 — a barra "Validar" deixou de ter date-picker próprio; a data
+    # edita-se na célula header.data (date-picker via filtro `pt_to_iso`).
+    # Já não é preciso pré-calcular `data_iso_for_validate` aqui.
 
     # R111 — flag para a UI saber se a imagem servida em /image/<id> é cropped
     # (paper detectado) ou raw (fallback silencioso). Quando False, sheet.html
@@ -763,11 +767,9 @@ def sheet_page(
             "cc_suspended_by_path": cc_suspended_by_path,
             "cc_snapped_by_path": cc_snapped_by_path,
             "cc_obra_concluida_by_path": cc_obra_concluida_by_path,
-            "operadores": _get_operadores(),
             "flagged_count": flagged,
             "view_mode": view_mode,
             "back_url": back_url,
-            "data_iso_for_validate": data_iso_for_validate,
             "has_cropped": sheet_has_cropped,
             **tpl_ctx,  # template, template_name, row/footer/header_fields
         },
@@ -966,6 +968,17 @@ async def sheet_edit(
         raise HTTPException(404, f"sheet {sheet_id} not found")
     if sheet_pre.get("status") == "validated":
         raise HTTPException(409, "Folha já validada — edits bloqueados")
+    # R136 — snapshot do cabeçalho ANTES do edit. Comparado com o estado
+    # pós cross-check para devolver swaps out-of-band das células que mudaram
+    # em consequência (ex: header.operador quando se edita header.n_operador).
+    header_before = dict((sheet_pre.get("sheet_data") or {}).get("header") or {})
+    # R136 — a célula header.data edita-se com <input type="date"> (ISO). O
+    # armazenamento canónico continua DD-MM-YYYY (CSV, date_iso, filenames),
+    # por isso converte-se aqui antes de persistir.
+    if field_path == "header.data":
+        _v = new_value.strip()
+        if _ISO_DATE_RE.match(_v):
+            new_value = f"{_v[8:10]}-{_v[5:7]}-{_v[0:4]}"
     try:
         old, new = db.apply_edit(sheet_id, field_path, new_value)
     except ValueError as e:
@@ -1003,23 +1016,44 @@ async def sheet_edit(
      cc_snapped_by_path, cc_obra_concluida_by_path) = (
         _build_cc_maps(sheet_id)
     )
-    return templates.TemplateResponse(
-        request,
-        "_cell.html",
-        {
-            "sheet_id": sheet_id,
-            "field_path": field_path,
-            "value": real_value,
-            "audit": cells_by_path.get(field_path, {}),
-            "edited": old != real_value,
-            "cc_status_by_path": cc_status_by_path,
-            "cc_ref_by_path": cc_ref_by_path,
-            "cc_suspended_by_path": cc_suspended_by_path,
-            "cc_snapped_by_path": cc_snapped_by_path,
-            "cc_obra_concluida_by_path": cc_obra_concluida_by_path,
-            "sheet_status": sheet.get("status"),
-        },
-    )
+
+    def _render_cell(fp: str, val: object, *, edited: bool, oob: bool) -> str:
+        """Render a single _cell.html fragment. ``oob=True`` adds
+        hx-swap-oob so HTMX updates that cell by id without it being the
+        request's swap target."""
+        return templates.env.get_template("_cell.html").render(
+            sheet_id=sheet_id,
+            field_path=fp,
+            value=val,
+            audit=cells_by_path.get(fp, {}),
+            edited=edited,
+            cc_status_by_path=cc_status_by_path,
+            cc_ref_by_path=cc_ref_by_path,
+            cc_suspended_by_path=cc_suspended_by_path,
+            cc_snapped_by_path=cc_snapped_by_path,
+            cc_obra_concluida_by_path=cc_obra_concluida_by_path,
+            sheet_status=sheet.get("status"),
+            oob=oob,
+        )
+
+    # Primary cell — swapped into the edit target (hx-target=#cell-...).
+    parts = [_render_cell(field_path, real_value, edited=(old != real_value), oob=False)]
+
+    # R136 — out-of-band swaps. Qualquer célula do CABEÇALHO que tenha mudado
+    # como efeito secundário do cross-check (ex: header.operador resolvido a
+    # partir do novo header.n_operador via _apply_operador_snap; header.cod_maquina
+    # via _apply_codmaq_fill) é re-renderada com hx-swap-oob para actualizar no
+    # ecrã sem reload. Resolve o "mudo o nº do operador mas o nome não muda".
+    header_after = (sheet.get("sheet_data") or {}).get("header") or {}
+    header_fields = _template_ctx_for_sheet(sheet).get("header_fields", ()) or ()
+    for f in header_fields:
+        fp = f"header.{f}"
+        if fp == field_path:
+            continue  # já é a célula primária
+        if str(header_before.get(f) or "") != str(header_after.get(f) or ""):
+            parts.append(_render_cell(fp, header_after.get(f, ""), edited=True, oob=True))
+
+    return HTMLResponse("".join(parts))
 
 
 # Factory deposit: CSVs go here automatically when a sheet is validated.
@@ -1078,18 +1112,13 @@ def _deposit_csv_to_factory(sheet_id: int) -> Path | None:
 async def sheet_validate(
     sheet_id: int,
     request: Request,
-    operador: str = Form(...),
-    data: str = Form(...),
-    n_operador: str = Form(...),
+    operador: str | None = Form(None),
+    data: str | None = Form(None),
+    n_operador: str | None = Form(None),
 ) -> RedirectResponse:
     # Round 34 — mobile cannot validate (server-side enforcement)
     if _is_mobile_request(request):
         raise HTTPException(403, "Validação só pode ser feita em desktop")
-    # R122 — o operador vem do cabeçalho já cruzado contra o
-    # ListaColaboradores (_apply_operador_snap). Já não há dropdown de
-    # 3 nomes hardcoded; só rejeitamos se vier mesmo vazio.
-    if not operador.strip():
-        raise HTTPException(400, "operador em falta — corrige o cabeçalho antes de validar")
     # Round 50 — re-validate bloqueada; folha validada é final.
     sheet_pre = db.get_sheet(sheet_id)
     if sheet_pre is None:
@@ -1097,36 +1126,62 @@ async def sheet_validate(
     if sheet_pre.get("status") == "validated":
         raise HTTPException(409, "Folha já validada — não é possível re-validar")
 
-    # R94 — confirm date + n_operador before locking validation.
-    data_iso = data.strip()
-    if not _ISO_DATE_RE.match(data_iso):
-        raise HTTPException(400, f"data must be YYYY-MM-DD, got {data!r}")
-    n_op_clean = n_operador.strip()
-    if not n_op_clean.isdigit() or len(n_op_clean) > 5:
-        raise HTTPException(400, f"n_operador must be 1-5 digits, got {n_operador!r}")
-    # Convert ISO → DD-MM-YYYY for storage compatibility with existing format
-    data_pt = f"{data_iso[8:10]}-{data_iso[5:7]}-{data_iso[0:4]}"
-    cur_header = (sheet_pre.get("sheet_data") or {}).get("header") or {}
-    # Apply edits before validation lock — uses standard apply_edit path so
-    # production_rows + cross-check stay in sync.
-    if (cur_header.get("data") or "").strip() != data_pt:
-        try:
-            db.apply_edit(sheet_id, "header.data", data_pt)
-        except Exception:  # noqa: BLE001
-            pass
-    if (cur_header.get("n_operador") or "").strip() != n_op_clean:
-        try:
-            db.apply_edit(sheet_id, "header.n_operador", n_op_clean)
-        except Exception:  # noqa: BLE001
-            pass
+    header = (sheet_pre.get("sheet_data") or {}).get("header") or {}
+    # R136 — dois fluxos partilham este endpoint:
+    #   • sheet.html (Folha): a barra "Validar" deixou de ter inputs próprios
+    #     (eram duplicados das células do cabeçalho e, por ficarem stale,
+    #     revertiam a edição ao validar). NÃO envia campos → lê-se do CABEÇALHO,
+    #     a única fonte de verdade. Não reescreve nada.
+    #   • kanban_viewer.html: continua a confirmar data + nº + operador (dropdown)
+    #     no próprio form → caminho clássico (R94): valida e aplica os valores.
+    from_form = operador is not None or data is not None or n_operador is not None
+    if from_form:
+        operador_final = (operador or "").strip()
+        if not operador_final:
+            raise HTTPException(400, "operador em falta — corrige o cabeçalho antes de validar")
+        data_iso = (data or "").strip()
+        if not _ISO_DATE_RE.match(data_iso):
+            raise HTTPException(400, f"data must be YYYY-MM-DD, got {data!r}")
+        n_op_clean = (n_operador or "").strip()
+        if not n_op_clean.isdigit() or len(n_op_clean) > 5:
+            raise HTTPException(400, f"n_operador must be 1-5 digits, got {n_operador!r}")
+        # Convert ISO → DD-MM-YYYY for storage compatibility. Apply edits before
+        # the validation lock — standard apply_edit path keeps production_rows +
+        # cross-check in sync.
+        data_pt = f"{data_iso[8:10]}-{data_iso[5:7]}-{data_iso[0:4]}"
+        if (header.get("data") or "").strip() != data_pt:
+            try:
+                db.apply_edit(sheet_id, "header.data", data_pt)
+            except Exception:  # noqa: BLE001
+                pass
+        if (header.get("n_operador") or "").strip() != n_op_clean:
+            try:
+                db.apply_edit(sheet_id, "header.n_operador", n_op_clean)
+            except Exception:  # noqa: BLE001
+                pass
+    else:
+        operador_final = (header.get("operador") or "").strip()
+        if not operador_final:
+            raise HTTPException(
+                400, "Operador em falta — corrige o cabeçalho antes de validar."
+            )
+        n_op_clean = (header.get("n_operador") or "").strip()
+        if not n_op_clean.isdigit() or len(n_op_clean) > 5:
+            raise HTTPException(
+                400, "Nº operador inválido — corrige o cabeçalho (1-5 dígitos) antes de validar."
+            )
+        if db._normalize_data_pt_to_iso(header.get("data")) is None:
+            raise HTTPException(
+                400, "Data inválida — corrige a data no cabeçalho (dd-mm-aaaa) antes de validar."
+            )
 
     # R126 — edição de cesta_n foi removida do sheet.html (validate desktop).
     # A cesta entra exclusivamente pelo fluxo mobile (capture.html → /mobile/qtds-batch).
 
-    db.validate_sheet(sheet_id, operador)
+    db.validate_sheet(sheet_id, operador_final)
     # R117 — kernel event: folha validada (lock confirmado pelo operador).
     try:
-        kernel.emit_event("sheet_validated", {"sheet_id": sheet_id, "operador": operador})
+        kernel.emit_event("sheet_validated", {"sheet_id": sheet_id, "operador": operador_final})
     except Exception:  # noqa: BLE001
         pass
     # R113 — folha acabada de validar entra no cálculo de consumption.
@@ -1781,10 +1836,15 @@ def sheet_of_lookup(
             "found": False, "mode": "none", "q": "", "of": "", "entries": [],
         })
 
-    from app.pipeline.scoring_engine import normalize_of
+    from app.pipeline.scoring_engine import normalize_of, _current_phase
     from app.pipeline.of_consumption import sort_entries_by_remaining
 
     refs = get_watcher().get_refs() or {}
+    # R138 — etapa do kanban (setor→colunaexcel) para o "done"/remaining ser
+    # consciente do setor: uma linha só está fechada quando ESTA fase atingiu
+    # quanttrp. Sem este phase, o remaining usava max(fases) e a fase inicial
+    # sobre-produzida marcava ~92% das linhas como fechadas.
+    phase = _current_phase(sheet.get("sheet_data") or {}, refs)
     of_to_entries = refs.get("of_to_entries") or {}
     plan_by_ov = refs.get("plan_by_ov") or {}
     plan_by_modelo_ft = refs.get("plan_by_modelo_ft") or {}
@@ -1880,7 +1940,7 @@ def sheet_of_lookup(
         })
 
     sorted_entries = sort_entries_by_remaining(
-        pooled, include_done=bool(include_done),
+        pooled, include_done=bool(include_done), phase=phase,
     )
 
     if len(sorted_entries) > LIMIT:
@@ -1995,6 +2055,73 @@ async def sheet_apply_of_entry(sheet_id: int, request: Request) -> JSONResponse:
         "skipped": skipped,
         "of_used": of_norm,
     })
+
+
+@app.post("/sheet/{sheet_id}/add-row")
+async def sheet_add_row(sheet_id: int, request: Request) -> JSONResponse:
+    """R136 — adiciona uma linha em branco à tabela de produção (no fim).
+
+    O operador pode então preenchê-la à mão ou via o wizard "Corrigir via OF".
+    Só antes da validação. Re-corre o cross-check para a nova linha (células
+    vazias ficam NA/cinza) e devolve o índice da nova linha.
+    """
+    if _is_mobile_request(request):
+        raise HTTPException(403, "Edição só pode ser feita em desktop")
+    sheet = db.get_sheet(sheet_id)
+    if sheet is None:
+        raise HTTPException(404, f"sheet {sheet_id} not found")
+    if sheet.get("status") == "validated":
+        raise HTTPException(409, "Folha já validada — edits bloqueados")
+    try:
+        new_idx = db.add_row(sheet_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    try:
+        _run_and_store_cross_check(sheet_id)
+    except Exception as cc_err:  # noqa: BLE001
+        print(f"[cross-check] sheet {sheet_id} add-row: {cc_err}", file=sys.stderr)
+    return JSONResponse({"ok": True, "row_index": new_idx})
+
+
+@app.post("/sheet/{sheet_id}/remove-row")
+async def sheet_remove_row(sheet_id: int, request: Request) -> JSONResponse:
+    """R136 — remove uma linha (errada/inventada pelo OCR) da tabela de
+    produção. Body JSON: {row_index}. Só antes da validação.
+
+    O conteúdo removido fica no audit trail (edits). Re-corre o cross-check
+    (re-indexado) e invalida a cache de consumption — remover uma linha muda
+    as quantidades produzidas.
+    """
+    if _is_mobile_request(request):
+        raise HTTPException(403, "Edição só pode ser feita em desktop")
+    sheet = db.get_sheet(sheet_id)
+    if sheet is None:
+        raise HTTPException(404, f"sheet {sheet_id} not found")
+    if sheet.get("status") == "validated":
+        raise HTTPException(409, "Folha já validada — edits bloqueados")
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        raise HTTPException(400, "Body JSON inválido")
+    try:
+        row_index = int(body.get("row_index", -1))
+    except (ValueError, TypeError):
+        raise HTTPException(400, "row_index tem de ser inteiro")
+    try:
+        db.delete_row(sheet_id, row_index)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    try:
+        _run_and_store_cross_check(sheet_id)
+    except Exception as cc_err:  # noqa: BLE001
+        print(f"[cross-check] sheet {sheet_id} remove-row: {cc_err}", file=sys.stderr)
+    # R113 — remover uma linha muda a qtd produzida → invalida a cache.
+    try:
+        from app.pipeline.of_consumption import invalidate_cache
+        invalidate_cache()
+    except Exception:  # noqa: BLE001
+        pass
+    return JSONResponse({"ok": True})
 
 
 @app.post("/sheet/{sheet_id}/recrop")

@@ -312,7 +312,14 @@ _QUINADORA_PAV4 = TemplateSpec(
     name="quinadora_pav4",
     tpl_code="TPL103",
     phase="Quinadora",
-    setor_aliases=("QUINADORA PAV.4", "QUINADORA PAV 4", "QUINADORA PAV4"),
+    # R138 — labels do maquinas.xlsx que carregam "P4" (Pavilhão 4). As que
+    # não têm Pavilhão explícito caem no fallback genérico de detect_template
+    # (→ pav8). pav4/pav8 partilham schema, por isso a escolha só afecta o badge.
+    setor_aliases=(
+        "QUINADORA PAV.4", "QUINADORA PAV 4", "QUINADORA PAV4",
+        "QUINADORA P4", "QUINADORA ADIRA 14M P4",
+        "QUINADORA PUMA", "QUINADORA PUMA P4",
+    ),
     row_fields=(
         "pri", "cliente", "ov", "of", "modelo",
         "qtd", "coni", "esp", "lbase", "ltopo",
@@ -562,6 +569,15 @@ def detect_template(
     # Step 3 — TPL102 hint fallback (3 Gemini share schema)
     if tpl_code and tpl_code.upper() == "TPL102":
         return TEMPLATES["gasparini"]
+
+    # Step 3b — R138 fallback genérico de quinadora. O maquinas.xlsx tem
+    # várias quinadoras (P8 / CÓNICA P8 / ADIRA MTG4 / ADIRA 3M / MTG3 …) cujos
+    # labels não estão todos enumerados como aliases; todas partilham o schema
+    # do PAV.8. Qualquer setor com "QUINADORA" que não tenha batido acima →
+    # quinadora_pav8 (em vez do bobine_formato errado). GUIFIL e os labels P4
+    # já bateram nos Steps 1/2.
+    if "QUINADORA" in norm:
+        return TEMPLATES["quinadora_pav8"]
 
     # Step 4 — fallback (legacy / unknown sheet)
     return DEFAULT_TEMPLATE

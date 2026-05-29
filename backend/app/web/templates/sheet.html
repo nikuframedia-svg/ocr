@@ -82,32 +82,14 @@
       <span class="pill ok">✓ Validada · {{ sheet.operador }}</span>
       <a class="btn" href="/sheet/{{ sheet.id }}/csv">Baixar CSV</a>
     {% else %}
-      {# R94: validação pede explícita confirmação de data + nº operador
-         (não só do nome). Pré-preenchidos com valores actuais — operador
-         só altera se OCR errou. #}
+      {# R136 — a data, o nº de operador e o nome editam-se nas CÉLULAS do
+         cabeçalho (única fonte de verdade, gravam logo). A barra "Validar"
+         deixou de ter inputs próprios: eram duplicados que, por ficarem
+         stale, revertiam a edição do cabeçalho ao validar. Agora só confirma
+         e tranca — o servidor valida data/nº/operador a partir do cabeçalho. #}
       <form id="validate-form" method="post" action="/sheet/{{ sheet.id }}/validate"
             style="display:inline-flex; gap:8px; align-items:center; flex-wrap:wrap;">
-        <label style="display:inline-flex; align-items:center; gap:4px;">
-          <span class="lbl" style="margin:0; font-size:10px;">DATA</span>
-          <input type="date" name="data"
-                 value="{{ data_iso_for_validate or '' }}"
-                 min="2024-01-01" max="2030-12-31"
-                 required class="kv-select" style="width:140px;">
-        </label>
-        <label style="display:inline-flex; align-items:center; gap:4px;">
-          <span class="lbl" style="margin:0; font-size:10px;">Nº OP</span>
-          <input type="text" name="n_operador" inputmode="numeric"
-                 value="{{ header.n_operador or '' }}"
-                 pattern="\d{1,5}" placeholder="ex: 1481"
-                 required class="kv-select" style="width:80px;">
-        </label>
-        {# R122 — operador vem do cabeçalho já cruzado com o ListaColaboradores
-           (_apply_operador_snap). Sem dropdown de 3 nomes hardcoded. #}
-        <span style="display:inline-flex; align-items:center; gap:6px;">
-          <span class="lbl" style="margin:0; font-size:10px;">OPERADOR</span>
-          <span class="mono" style="font-size:13px;">{{ header.operador or '—' }}</span>
-        </span>
-        <input type="hidden" name="operador" value="{{ header.operador or '' }}">
+        <span class="muted tiny">Confirma data, nº e operador no cabeçalho →</span>
         <button class="btn primary" type="submit">Validar</button>
       </form>
     {% endif %}
@@ -214,7 +196,23 @@
     <div class="card">
       <div class="card-h">
         <div class="card-h-title">Tabela de produção</div>
-        <div class="card-h-sub">{{ rows|length }} linhas</div>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <div class="card-h-sub">{{ rows|length }} linhas</div>
+          {# R136 — adicionar uma linha em branco (no fim) que o OCR não
+             apanhou. Só antes de validar. Não destrutivo → sem confirm. #}
+          {% if sheet.status != 'validated' %}
+          <button type="button" class="btn" style="font-size:11px; padding:3px 10px;"
+                  title="Adicionar uma linha em branco no fim da tabela"
+                  onclick="fetch('/sheet/{{ sheet.id }}/add-row', {method:'POST'})
+                             .then(r => r.json()).then(j => {
+                               if (j.ok) { location.reload(); }
+                               else { alert('Falhou: ' + (j.error || j.detail || 'erro desconhecido')); }
+                             })
+                             .catch(e => alert('Erro de rede: ' + e.message));">
+            + Adicionar linha
+          </button>
+          {% endif %}
+        </div>
       </div>
       <div class="scroll-x">
         <table class="tbl" style="font-size:11px;">
@@ -238,6 +236,22 @@
                         title="Corrigir via OF (escreve OF correcto e auto-fill cliente, modelo, dims)">
                   🪄
                 </button>
+                {# R136 — remover uma linha errada/inventada pelo OCR. Confirm
+                   porque é irreversível (o conteúdo fica no audit trail). #}
+                <button type="button" class="btn ghost row-remove-btn"
+                        title="Remover esta linha (irreversível)"
+                        onclick="if (confirm('Remover a linha {{ loop.index }}? Acção irreversível.')) {
+                                   fetch('/sheet/{{ sheet.id }}/remove-row', {
+                                     method:'POST',
+                                     headers:{'Content-Type':'application/json'},
+                                     body: JSON.stringify({row_index: {{ loop.index0 }}})
+                                   })
+                                   .then(r => r.json()).then(j => {
+                                     if (j.ok) { location.reload(); }
+                                     else { alert('Falhou: ' + (j.error || j.detail || 'erro desconhecido')); }
+                                   })
+                                   .catch(e => alert('Erro de rede: ' + e.message));
+                                 }">🗑</button>
                 {% endif %}
                 {{ loop.index }}
               </td>
@@ -523,6 +537,20 @@ function ofWizard(sheetId) {
   background: transparent;
 }
 .row-of-wand-btn:hover { background: #faf6ed; }
+
+/* R136 — botão "remover linha", mesmo tamanho compacto do wand, hover vermelho */
+.row-remove-btn {
+  padding: 2px 6px !important;
+  font-size: 13px !important;
+  line-height: 1 !important;
+  margin-right: 4px;
+  border-color: rgba(22,20,15,0.1);
+  background: transparent;
+}
+.row-remove-btn:hover {
+  background: var(--crit-soft);
+  border-color: var(--crit);
+}
 
 .of-wizard-modal {
   max-width: 880px !important;

@@ -42,12 +42,48 @@ def _max_phase(fases: dict | None) -> float:
     (corte, soldadura, acabamento, etc.); cada fase reporta quantas
     peças já passaram. Pegamos no max porque a fase mais avançada é a
     que está mais perto da conclusão. NÃO somar.
+
+    R138 — NOTA: para o cálculo de `remaining` (wizard) deixou de se usar
+    o MAX. As fases iniciais (bf/corte) sobre-produzem (margem de sucata),
+    pelo que o max ≥ quanttrp em ~92% das linhas e marcava quase tudo como
+    fechado. Usar `_produced` (fase do setor / expedição). `_max_phase`
+    permanece porque `obras_status.py` ainda o usa.
     """
     if not fases:
         return 0.0
     vals = [_to_num(v) for v in fases.values()]
     vals = [v for v in vals if v is not None]
     return max(vals) if vals else 0.0
+
+
+def _produced(fases: dict | None, phase: str | None) -> float:
+    """R138 — qtd produzida relevante para "quanto falta".
+
+    As fases do plan (`bf, c, q, s, r, a, exp`) são estágios SEQUENCIAIS;
+    as peças fluem da esquerda (corte/formato, que sobre-produz) para a
+    direita (expedição). O MAX pega no estágio a montante sobre-produzido
+    → marca a linha como concluída cedo demais.
+
+    - `phase` dado (etapa do kanban, via setor→colunaexcel) e presente nas
+      fases → usa essa fase: "concluída" só quando o setor do operador
+      atingiu a quantidade.
+    - Sem `phase` (setor sem mapeamento) → cai na fase mais a JUSANTE
+      (último valor de `fases`, tipicamente `exp`/expedição), que é a
+      medida conservadora de "já saiu da fábrica".
+    """
+    if not fases:
+        return 0.0
+    if phase and phase in fases:
+        v = _to_num(fases.get(phase))
+        return v if v is not None else 0.0
+    # Fallback: fase mais a jusante (último valor; `fases` vem em ordem de
+    # folha, esquerda→direita, por isso o último é o mais avançado).
+    vals = list(fases.values())
+    for v in reversed(vals):
+        n = _to_num(v)
+        if n is not None:
+            return n
+    return 0.0
 
 
 def _kanban_consumption() -> dict[tuple[str, str], float]:
@@ -96,38 +132,50 @@ def invalidate_cache() -> None:
         _cache_at = 0.0
 
 
-def remaining(entry: dict, consumption: dict | None = None) -> float:
+def remaining(
+    entry: dict, consumption: dict | None = None, phase: str | None = None
+) -> float:
     """Quanto falta produzir desta entry. ≤ 0 = já cumprida; inf = não
-    rastreável (sem quanttrp)."""
+    rastreável (sem quanttrp).
+
+    R138 — `phase` é a etapa do kanban (setor→colunaexcel). Quando dada,
+    "produzido" = a fase desse setor; sem ela, cai na fase mais a jusante
+    (expedição). Substitui o antigo `_max_phase`, que sobre-contava as
+    fases iniciais e marcava ~92% das linhas como fechadas.
+    """
     if str(entry.get("fechado") or "0") in ("1", "True", "true"):
         return 0.0
     quanttrp = _to_num(entry.get("quanttrp"))
     if quanttrp is None or quanttrp <= 0:
         return float("inf")
-    phase_max = _max_phase(entry.get("fases"))
+    produced = _produced(entry.get("fases"), phase)
     consumption = consumption if consumption is not None else get_consumption()
     key = (
         str(entry.get("_of") or entry.get("of") or "").strip(),
         str(entry.get("designacao") or "").strip().upper(),
     )
     kanban_qty = consumption.get(key, 0.0)
-    return float(quanttrp) - phase_max - kanban_qty
+    return float(quanttrp) - produced - kanban_qty
 
 
 def sort_entries_by_remaining(
     entries: list[dict],
     include_done: bool = False,
+    phase: str | None = None,
 ) -> list[dict]:
     """Devolve cópias das entries enriquecidas com `_remaining`,
     `_quanttrp`, `_done` + ordenadas ascendente por remaining.
 
     include_done=False filtra entries com remaining ≤ 0.
     Entries com remaining=inf (sem quanttrp) vão para o fim.
+
+    R138 — `phase` (etapa do kanban) torna o "done" consciente do setor:
+    uma linha só está concluída quando a fase desse setor atingiu quanttrp.
     """
     consumption = get_consumption()
     enriched: list[dict] = []
     for e in entries:
-        rem = remaining(e, consumption)
+        rem = remaining(e, consumption, phase)
         e2 = dict(e)
         e2["_remaining"] = None if rem == float("inf") else rem
         e2["_quanttrp"] = _to_num(e.get("quanttrp"))

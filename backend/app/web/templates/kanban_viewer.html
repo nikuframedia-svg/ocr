@@ -1,6 +1,26 @@
 {% extends "base.html" %}
 {% block title %}Kanban Viewer — Metalogalva OCR{% endblock %}
 {% block content %}
+{# R137 — filtros "sticky" (igual ao /queue). Guarda os filtros activos em
+   sessionStorage e re-aplica-os ao aterrar em /kanbans sem filtros no URL
+   (menu lateral, voltar atrás, etc.). `sheet_id` NÃO é filtro — escolhe a folha
+   a mostrar — por isso fica de fora. #}
+<script>
+(function () {
+  var KEY = 'kanbans_filters';
+  var FILTER_KEYS = ['operador', 'data', 'setor', 'of', 'status'];
+  var p = new URLSearchParams(location.search);
+  var present = FILTER_KEYS.filter(function (k) { return p.get(k); });
+  if (present.length) {
+    var qs = new URLSearchParams();
+    present.forEach(function (k) { qs.set(k, p.get(k)); });
+    sessionStorage.setItem(KEY, qs.toString());
+  } else {
+    var saved = sessionStorage.getItem(KEY);
+    if (saved) { location.replace(location.pathname + '?' + saved); }
+  }
+})();
+</script>
 
 <div class="page-h">
   <div>
@@ -114,7 +134,9 @@
     </label>
 
     {% if current_operador or current_data or current_setor or current_of or current_status %}
-      <a class="btn ghost" href="/kanbans" style="font-size:12px;">✕ Limpar filtros</a>
+      {# R137 — limpar apaga o sessionStorage, senão o sticky reaplica-os. #}
+      <a class="btn ghost" href="/kanbans" style="font-size:12px;"
+         onclick="sessionStorage.removeItem('kanbans_filters')">✕ Limpar filtros</a>
     {% endif %}
 
     {# Kanban nav within filtered set (Round 34: keyboard ←/→ work) #}
