@@ -308,6 +308,11 @@ def build_prompt(template: TemplateSpec) -> str:
     template's family (production / paragens / gemini).
     """
     setor = _canonical_setor(template)
+    if template.name == "acabamento":
+        # R139 — o template `acabamento` cobre MTG2/3/4/5: não fixar um sub-setor
+        # no prompt (a regressão do Codex fixava "ACABAMENTO MTG4"). O setor real
+        # é a leitura do Pass-1 (ver _merge_pass2_into_pass1).
+        setor = "ACABAMENTO"
     cols_line = _columns_line(template)
     row_skel = _row_skeleton(template)
     footer_skel = _footer_skeleton(template)
@@ -399,7 +404,7 @@ Return a JSON object with exactly one key:
 
 Common values include: BOBINE-FORMATO, GUILHOTINA, LINHA DE CORTE,
 QUINADORA PAV.4, QUINADORA PAV.8, GUIFIL, SOLDLINE 4, LASER, MANUAL,
-ROBOT, EXPEDIÇÃO, ACABAMENTO MTG4, MÁQUINA DE FUSTES, GASPARINI, HPE32, HD36.
+ROBOT, EXPEDIÇÃO, ACABAMENTO MTG2, MÁQUINA DE FUSTES, GASPARINI, HPE32, HD36.
 
 No markdown. No explanation. No <think> blocks."""
 

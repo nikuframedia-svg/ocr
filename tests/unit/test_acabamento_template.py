@@ -76,3 +76,48 @@ def test_pass2_merge_preserves_acabamento_turno():
     )
 
     assert merged["header"]["turno"] == "XM"
+
+
+def test_merge_preserves_real_setor_mtg2_over_pass2():
+    """R139 — o setor real (Pass-1, leitura do papel) ganha ao Pass-1/Pass-2 merge:
+    ACABAMENTO MTG2 não pode virar ACABAMENTO MTG4."""
+    from app.web.ocr_runner import _merge_pass2_into_pass1
+
+    merged = _merge_pass2_into_pass1(
+        {"header": {"setor_maquina": "ACABAMENTO MTG2"}},
+        {"header": {"setor_maquina": "ACABAMENTO MTG4"}, "rows": [], "footer": {}},
+    )
+
+    assert merged["header"]["setor_maquina"] == "ACABAMENTO MTG2"
+
+
+def test_merge_preserves_real_setor_mtg4():
+    """R139 — ACABAMENTO MTG4 continua ACABAMENTO MTG4."""
+    from app.web.ocr_runner import _merge_pass2_into_pass1
+
+    merged = _merge_pass2_into_pass1(
+        {"header": {"setor_maquina": "ACABAMENTO MTG4"}},
+        {"header": {"setor_maquina": "ACABAMENTO MTG4"}, "rows": [], "footer": {}},
+    )
+
+    assert merged["header"]["setor_maquina"] == "ACABAMENTO MTG4"
+
+
+def test_acabamento_mtg2_alias_resolves_to_acabamento():
+    """Compatibilidade: folhas persistidas como `acabamento_mtg2` resolvem para
+    o template consolidado `acabamento`."""
+    from app.templates_registry import get_template
+
+    assert get_template("acabamento_mtg2").name == "acabamento"
+
+
+def test_acabamento_prompt_columns_and_no_forced_mtg4():
+    """Acabamento mantém colunas OF / REFERÊNCIA / PEÇA / QTD e o prompt não
+    força ACABAMENTO MTG4 (R139)."""
+    from app.pipeline.prompt_builder import build_prompt
+    from app.templates_registry import get_template
+
+    prompt = build_prompt(get_template("acabamento"))
+
+    assert "OF | REFERÊNCIA / PEÇA | QTD" in prompt
+    assert "ACABAMENTO MTG4" not in prompt

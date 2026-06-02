@@ -674,6 +674,7 @@ def _apply_winner_to_field(
     candidates: list[dict],
     refs: dict,
     row: dict,
+    template_name: str | None = None,
 ) -> dict:
     if field in _NO_REF_FIELDS:
         return _make_cell(ocr_value, "NA", "ocr_raw")
@@ -743,6 +744,20 @@ def _apply_winner_to_field(
     if not proposed:
         return _make_cell(ocr_value, "NA", "ocr_raw")
 
+    # R139 — Acabamento: of/modelo são a leitura do operador (papel) e NUNCA são
+    # substituídos pelo plan (regressão do Codex: o substitute-everything de R134
+    # aplicava o valor da entry vencedora). Valida mas preserva o OCR; o
+    # source="ocr_raw" impede o auto-apply em _maybe_apply_snap (main.py). Os
+    # restantes templates mantêm o R134 inalterado.
+    if template_name == "acabamento" and field in ("of", "modelo") and ocr_value:
+        matches = (
+            _format_value(field, proposed).upper()
+            == _format_value(field, ocr_value).upper()
+        )
+        return _make_cell(
+            ocr_value, "confirmed" if matches else "very_different", "ocr_raw"
+        )
+
     return _finish_cell(
         field, ocr_value, proposed,
         source="plan" if winner else "lexicon",
@@ -759,6 +774,7 @@ def _score_row(
     idx: dict,
     row_fields: tuple[str, ...],
     current_phase: str | None = None,
+    template_name: str | None = None,
 ) -> tuple[dict, int, int, int, int, int]:
     """R123 / R125 — itera os `row_fields` do template (não os 10 fixos
     do bobine).
@@ -807,6 +823,7 @@ def _score_row(
             result = _apply_winner_to_field(
                 field, ocr_value, winner,
                 candidates_by_field.get(field, []), refs, row,
+                template_name=template_name,
             )
         elif field in _NO_REF_FIELDS:
             result = _make_cell(ocr_value, "NA", "ocr_raw")
@@ -917,7 +934,7 @@ def shadow_score(
     snapped = confirmed = na = very_diff = 0
     for i, row in enumerate(rows):
         row_out, s, c, n, vd, _t = _score_row(
-            i, row, refs, idx, row_fields, current_phase
+            i, row, refs, idx, row_fields, current_phase, template_name
         )
         out_rows.append(row_out)
         snapped += s

@@ -384,6 +384,43 @@ class TestR134SubstituteEverything:
             assert of_cell["value"] == "262108"
 
 
+class TestR139AcabamentoNoSubstitute:
+    """R139 — no template `acabamento` o cross-check NÃO substitui of/modelo OCR
+    não vazios pelo valor do plan (regressão do Codex revertida só para Acabamento;
+    os outros templates mantêm o substitute-everything do R134 — ver
+    TestR134SubstituteEverything)."""
+
+    def test_acabamento_keeps_ocr_of_and_modelo(self):
+        sheet_data = {
+            "template_name": "acabamento", "header": {}, "footer": {},
+            "rows": [{
+                # of existe no plan (262108 → designacao "OMEGA 1500 H"); o modelo
+                # OCR diverge da designacao do plan de propósito.
+                "of": "262108", "modelo": "PEÇA-X", "qtd": "4",
+            }],
+        }
+        scoring, *_ = shadow_score(sheet_data, None, _REFS)
+        fields = scoring["rows"][0]["fields"]
+
+        # of OCR preservado (não substituído), e como bate o plan → confirmed.
+        assert fields["of"]["value"] == "262108"
+        assert fields["of"]["source"] == "ocr_raw"
+
+        # modelo OCR preservado — NÃO o "OMEGA 1500 H" do plan.
+        assert fields["modelo"]["value"] == "PEÇA-X"
+        assert fields["modelo"]["source"] == "ocr_raw"
+
+    def test_bobine_still_substitutes(self):
+        """Sanidade: o mesmo of divergente num template não-Acabamento continua
+        a ser substituído (R134 intacto)."""
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"of": "999999", "cliente": "MTG BELUX", "modelo": "OMEGA 1500 H"}],
+        }
+        scoring, *_ = shadow_score(sheet_data, None, _REFS)
+        assert scoring["rows"][0]["fields"]["of"]["value"] == "262108"
+
+
 class TestR132MaqFustes:
     """R132 — Novo template TPL103 MÁQUINA DE FUSTES (frente + verso).
     Cobre: detect_template, header dinâmico com turno, paragens NA,

@@ -146,7 +146,13 @@ def _merge_pass2_into_pass1(pass1: dict, pass2: dict) -> dict:
     for k in header_keys:
         v2 = (h2.get(k) or "").strip()
         v1 = (h1.get(k) or "").strip()
-        merged_header[k] = v2 or v1
+        if k == "setor_maquina":
+            # R139 — Pass-1 é a leitura real do papel (OCR genérico, sem o prompt
+            # do template a fixar um setor canónico); preserva ACABAMENTO MTG2/MTG4
+            # em vez de deixar o Pass-2 enviesado ganhar.
+            merged_header[k] = v1 or v2
+        else:
+            merged_header[k] = v2 or v1
     return {
         "header": merged_header,
         "rows": pass2.get("rows", []) or [],
