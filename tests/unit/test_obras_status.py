@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import pytest
-
 from app.pipeline import obras_status, of_consumption
 
 
@@ -67,10 +66,10 @@ class TestAggregateOv:
         assert agg["ov"] == "OV1"
         assert agg["cliente"] == "ACME"
         assert agg["planned"] == 10
-        assert agg["produced"] == 10  # max(fases) = 10
-        assert agg["remaining"] == 0  # planned - produced
-        assert agg["pct_complete"] == 100.0
-        assert agg["all_closed"] is True
+        assert agg["produced"] == 5
+        assert agg["remaining"] == 5
+        assert agg["pct_complete"] == 50.0
+        assert agg["all_closed"] is False
         assert agg["fase_totals"] == {"bf": 10.0, "c": 8.0, "q": 5.0}
         assert agg["last_kanban"] is None
         assert len(agg["entries"]) == 1
@@ -86,8 +85,27 @@ class TestAggregateOv:
         assert agg["ofs"] == ["100", "200"]
         assert "MOD-A" in agg["modelos"] and "MOD-B" in agg["modelos"]
         assert agg["planned"] == 8
-        assert agg["produced"] == 6  # max(5,2)=5 + max(1)=1
-        assert agg["remaining"] == 2
+        assert agg["produced"] == 3
+        assert agg["remaining"] == 5
+
+    def test_downstream_phase_prevents_acabamento_from_closing_early(self):
+        entry = {
+            **_e(
+                "300",
+                "ACME",
+                "OV1",
+                "MOD-C",
+                20,
+                fases={"bf": 20, "c": 20, "q": 20, "s": 10, "r": 10, "a": 10},
+            ),
+            "_of": "300",
+        }
+        agg = obras_status.aggregate_ov("OV1", [entry], kanbans=[], consumption={})
+        assert agg["produced"] == 10
+        assert agg["remaining"] == 10
+        assert agg["pct_complete"] == 50.0
+        assert agg["all_closed"] is False
+        assert agg["entries"][0]["done"] is False
 
     def test_last_kanban_picked_from_first(self):
         e = {**_e("100", "ACME", "OV1", "X", 10), "_of": "100"}

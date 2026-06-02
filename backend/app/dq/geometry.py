@@ -12,6 +12,7 @@ Formulas:
     Slices needed           = ceil(qtd / npecas)
     Total consumed area     = slices × bobine slice area
     Waste                   = consumed − produced (kg or mm²)
+    Waste %                 = waste ÷ consumed
 """
 from __future__ import annotations
 
@@ -141,7 +142,7 @@ def row_waste(
     peso_produzido = area_teorica_total * esp * DENSITY_KG_PER_MM3
     peso_consumido = area_real_total * esp * DENSITY_KG_PER_MM3
     peso_waste = max(0.0, peso_consumido - peso_produzido)
-    desp_pct = (peso_waste / peso_produzido * 100) if peso_produzido > 0 else 0.0
+    desp_pct = (peso_waste / peso_consumido * 100) if peso_consumido > 0 else 0.0
 
     return {
         "valid": True,

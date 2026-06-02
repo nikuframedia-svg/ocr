@@ -219,7 +219,9 @@
           <thead>
             <tr>
               <th>#</th>
-              {% for f in row_fields %}<th>{{ f }}</th>{% endfor %}
+              {% for f in row_fields %}
+                <th>{{ field_labels.get(f, f.upper().replace('_', ' ')) }}</th>
+              {% endfor %}
             </tr>
           </thead>
           <tbody>
@@ -280,7 +282,9 @@
           <tbody>
             {% for f in footer_fields %}
             <tr>
-              <td class="lbl" style="width:200px; padding:6px 8px;">{{ f }}</td>
+              <td class="lbl" style="width:200px; padding:6px 8px;">
+                {{ field_labels.get(f, f.upper().replace('_', ' ')) }}
+              </td>
               {% set path = 'footer.' + f %}
               {% set audit = cells_by_path.get(path, {}) %}
               {% with field_path=path, value=footer.get(f, ''), audit=audit, edited=False, sheet_id=sheet.id, sheet_status=sheet.status %}

@@ -416,7 +416,7 @@ class TestR132MaqFustes:
     def test_dynamic_header_skel_includes_turno(self):
         """R132 fix do bug pré-existente: o header_skel agora inclui turno
         quando o template o tem em header_fields. Antes do refactor,
-        acabamento_mtg2 e maq_fustes nunca recebiam turno do OCR."""
+        acabamento e maq_fustes nunca recebiam turno do OCR."""
         from app.pipeline.prompt_builder import build_prompt
         from app.templates_registry import get_template
         prompt = build_prompt(get_template("maq_fustes"))
@@ -425,13 +425,23 @@ class TestR132MaqFustes:
         # qtd_metros vem na coluna line via _FIELD_LABELS
         assert "QTD (METROS)" in prompt
 
-    def test_acabamento_mtg2_also_gets_turno_via_refactor(self):
-        """O fix do header dinâmico também corrige acabamento_mtg2 (R129)
-        que tinha turno definido mas nunca pedido ao Qwen."""
+    def test_acabamento_prompt_uses_tpl086_contract(self):
+        """Acabamento usa o formato TPL086: OF/REFERÊNCIA-PEÇA/QTD."""
         from app.pipeline.prompt_builder import build_prompt
         from app.templates_registry import get_template
-        prompt = build_prompt(get_template("acabamento_mtg2"))
+
+        tpl = get_template("acabamento_mtg2")
+        prompt = build_prompt(tpl)
+
+        assert tpl.name == "acabamento"
+        assert tpl.row_fields == ("of", "modelo", "qtd")
+        assert tpl.footer_fields == ("colunas_produzidas",)
         assert '"turno"' in prompt
+        assert "OF | REFERÊNCIA / PEÇA | QTD" in prompt
+        assert "TOTAL QTD" in prompt
+        assert '"modelo":""' in prompt
+        assert "FERR." not in prompt
+        assert '"coni"' not in prompt
 
     def test_maq_fustes_paragens_no_cross_check_against_plan(self):
         """Campos motivo/inicio/fim/duracao/resolvido devem cair em NA

@@ -25,7 +25,7 @@ merged into "Abertura Portinholas".
 | Quinadora              | quinadora_pav4, quinadora_pav8, guifil     |
 | Soldadura              | soldline, laser                            |
 | Abertura Portinholas   | manual, robot                              |
-| Acabamento             | (template TBD — aguarda foto real, R69+)   |
+| Acabamento             | acabamento                                 |
 | Expedição              | expedicao                                  |
 
 Public API:
@@ -114,10 +114,10 @@ class TemplateSpec:
     # Free-form description shown in UI tooltips / queue badges.
     description: str = ""
 
-    # R129 — per-template override do label de uma coluna (no prompt, CSV).
+    # Per-template override do label de uma coluna (no prompt, CSV, UI).
     # Default `{}` mantém o comportamento global (_FIELD_LABELS em
-    # prompt_builder.py). Acabamento MTG2 usa para mostrar "FERR." no
-    # kanban sobre o campo interno `coni`.
+    # prompt_builder.py). Acabamento TPL086 usa para mostrar
+    # "REFERÊNCIA / PEÇA" sobre o campo interno `modelo`.
     field_labels: dict[str, str] = dc_field(default_factory=dict)
 
 
@@ -331,24 +331,25 @@ _QUINADORA_PAV4 = TemplateSpec(
     description="Quinadora PAV.4 (produção de colunas).",
 )
 
-# Acabamento MTG2 — kanban TPL086 (R129). Campos do operador: OV/OF/
-# REFERÊNCIA-PEÇA (modelo) / FERR. (reutiliza `coni` com label override) /
-# QTD. Header tem TURNO (M/R/XM/T) próprio deste kanban.
-_ACABAMENTO_MTG2 = TemplateSpec(
-    name="acabamento_mtg2",
+# Acabamento — kanban TPL086, formato MTG4 rev01. O mesmo layout passa a
+# aplicar-se a todos os acabamentos (MTG2/3/4/5): cabeçalho com TURNO,
+# tabela OF / REFERÊNCIA-PEÇA / QTD e rodapé TOTAL QTD.
+_ACABAMENTO = TemplateSpec(
+    name="acabamento",
     tpl_code="TPL086",
     phase="Acabamento",
-    # R130 — alargar aliases: Qwen pode ler parcial ("ACABAMENTO" só) e o
-    # alias original "ACABAMENTO MTG2" perde substring match em strings
-    # mais curtas. detect_template ordena por comprimento desc, pelo que
-    # "ACABAMENTO MTG2" continua a ganhar quando ambos estão presentes.
-    setor_aliases=("ACABAMENTO MTG2", "ACABAMENTO MTG 2", "ACAB MTG2",
-                   "ACABAMENTO"),
+    setor_aliases=(
+        "ACABAMENTO MTG4", "ACABAMENTO MTG 4", "ACAB. MTG4", "ACAB MTG4",
+        "ACABAMENTO MTG2", "ACABAMENTO MTG 2", "ACAB. MTG2", "ACAB MTG2",
+        "ACABAMENTO MTG3", "ACABAMENTO MTG 3", "ACAB. MTG3", "ACAB MTG3",
+        "ACABAMENTO MTG5", "ACABAMENTO MTG 5", "ACAB. MTG5", "ACAB MTG5",
+        "ACABAMENTO",
+    ),
     row_fields=(
-        "ov", "of", "modelo", "coni", "qtd",
+        "of", "modelo", "qtd",
     ),
     cross_check_fields=(
-        "ov", "of", "modelo",
+        "of", "modelo",
     ),
     header_fields=(
         "operador", "n_operador", "setor_maquina", "cod_maquina",
@@ -356,13 +357,16 @@ _ACABAMENTO_MTG2 = TemplateSpec(
     ),
     footer_fields=("colunas_produzidas",),
     csv_block_label="TABELA DE ACABAMENTO",
-    field_labels={"coni": "FERR."},
-    description="Acabamento MTG2. OV/OF/REFERÊNCIA/FERR/QTD; TURNO M/R/XM/T.",
+    field_labels={
+        "modelo": "REFERÊNCIA / PEÇA",
+        "colunas_produzidas": "TOTAL QTD",
+    },
+    description="Acabamento. OF/REFERÊNCIA-PEÇA/QTD; TURNO M/R/XM/T.",
 )
 
 
 # R132 — TPL103 MÁQUINA DE FUSTES (frente: produção colunas). Header com
-# TURNO (M/R/XM/T) tipo acabamento_mtg2. Tabela com QTD Colunas + QTD
+# TURNO (M/R/XM/T), como Acabamento. Tabela com QTD Colunas + QTD
 # Metros (qtd_metros já tem coluna em production_rows desde R97). Setor
 # já mapeia para cod M031 via maquinas.xlsx (codsec S004).
 _MAQUINA_FUSTES = TemplateSpec(
@@ -480,7 +484,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         _MANUAL,
         _ROBOT,
         _EXPEDICAO,
-        _ACABAMENTO_MTG2,
+        _ACABAMENTO,
         _MAQUINA_FUSTES,
         _MAQUINA_FUSTES_PARAGENS,
         _GASPARINI,
@@ -492,6 +496,14 @@ TEMPLATES: dict[str, TemplateSpec] = {
 # Default template — used for legacy sheets that don't have template_name
 # in sheet_data, and as fallback when detect_template() can't match.
 DEFAULT_TEMPLATE: TemplateSpec = _BOBINE_FORMATO
+
+_TEMPLATE_ALIASES = {
+    # Compatibilidade com folhas já persistidas antes do novo formato MTG4.
+    "acabamento_mtg2": "acabamento",
+    "acabamento_mtg3": "acabamento",
+    "acabamento_mtg4": "acabamento",
+    "acabamento_mtg5": "acabamento",
+}
 
 
 # ============================================================================
@@ -579,6 +591,9 @@ def detect_template(
     if "QUINADORA" in norm:
         return TEMPLATES["quinadora_pav8"]
 
+    if "ACABAMENTO" in norm or "ACAB." in norm:
+        return TEMPLATES["acabamento"]
+
     # Step 4 — fallback (legacy / unknown sheet)
     return DEFAULT_TEMPLATE
 
@@ -592,7 +607,8 @@ def get_template(name: str | None) -> TemplateSpec:
     """
     if not name:
         return DEFAULT_TEMPLATE
-    return TEMPLATES.get(name, DEFAULT_TEMPLATE)
+    canonical = _TEMPLATE_ALIASES.get(name, name)
+    return TEMPLATES.get(canonical, DEFAULT_TEMPLATE)
 
 
 def all_phases() -> tuple[str, ...]:

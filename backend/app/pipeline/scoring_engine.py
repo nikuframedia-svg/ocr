@@ -148,7 +148,7 @@ _NO_REF_FIELDS = frozenset({
     "pri", "coni", "qtd",
     "horas_trabalhadas", "colunas_produzidas",
     "n_operador", "data", "setor_maquina", "cod_maquina", "operador",
-    # R132 — turno (M/R/XM/T) é header próprio de acabamento_mtg2 e
+    # R132 — turno (M/R/XM/T) é header próprio de acabamento e
     # maq_fustes; sem ref no plan/SAP.
     "turno",
     # R132 — paragens (TPL103 verso MÁQUINA DE FUSTES): nunca cruzam plan.

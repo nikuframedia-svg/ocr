@@ -310,6 +310,8 @@ def _mine_from_excel(
                 # R128 — kanban LASER: campos próprios (diâmetro base/topo).
                 "dbase": r[hdrs["dbase"]] if "dbase" in hdrs else None,
                 "dtopo": r[hdrs["dtopo"]] if "dtopo" in hdrs else None,
+                # CPIS weights — official produced unit weight from plan.
+                "pesounit": r[hdrs["pesounit"]] if "pesounit" in hdrs else None,
                 # Round 38: load npecas (canonical pieces-per-bobine count)
                 # + material for weight + material consistency checks.
                 "npecas": r[hdrs["npecas"]] if "npecas" in hdrs else None,

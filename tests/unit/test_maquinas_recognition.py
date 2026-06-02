@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.templates_registry import detect_template, DEFAULT_TEMPLATE
+from app.templates_registry import DEFAULT_TEMPLATE, detect_template, get_template
 
 # Todos os labels de quinadora vindos do maquinas.xlsx (desigkanban + desmaq).
 QUINADORA_LABELS = [
@@ -51,7 +51,12 @@ def test_quinadora_specific_mapping(label, expected):
     ("GUILHOTINA 9M", "guilhotina"),
     ("LASER MTG2", "laser"),
     ("LINHA DE CORTE", "linha_corte"),
-    ("ACABAMENTO MTG2", "acabamento_mtg2"),
+    ("ACABAMENTO MTG2", "acabamento"),
+    ("ACABAMENTO MTG3", "acabamento"),
+    ("ACABAMENTO MTG4", "acabamento"),
+    ("ACABAMENTO MTG5", "acabamento"),
+    ("ACAB. MTG4", "acabamento"),
+    ("ACABAMENTO", "acabamento"),
     ("ROBOT MTG2", "robot"),
     ("SOLDLINE 4", "soldline"),
     # Soldadura sem template (confirmado: não digitalizadas) → fallback ok.
@@ -67,3 +72,9 @@ def test_quinadora_substring_in_longer_setor():
     # O operador pode escrever o cod junto: "QUINADORA P4 M044".
     assert detect_template("QUINADORA P4 M044").name == "quinadora_pav4"
     assert detect_template("QUINADORA MTG3 M081").name == "quinadora_pav8"
+
+
+def test_acabamento_legacy_template_aliases_resolve_to_canonical():
+    assert get_template("acabamento_mtg2").name == "acabamento"
+    assert get_template("acabamento_mtg4").name == "acabamento"
+    assert get_template("acabamento").name == "acabamento"

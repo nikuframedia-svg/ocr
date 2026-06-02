@@ -57,7 +57,7 @@ def _string(pattern: str) -> dict[str, Any]:
     return {"type": "string", "pattern": pattern}
 
 
-_TURNO = r"^(M|R|XM|T)?$"  # R129 — só no kanban Acabamento MTG2
+_TURNO = r"^(M|R|XM|T)?$"  # R129 — kanbans com checkbox de turno
 
 _HEADER_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -72,7 +72,7 @@ _HEADER_SCHEMA: dict[str, Any] = {
         # allowed for kanbans where the code isn't printed.
         "cod_maquina": {"type": "string", "pattern": r"^M\d{3}$|^$"},
         "data": _string(_DATE),
-        # R129 — turno: M/R/XM/T (Acabamento MTG2). Não em `required` —
+        # R129 — turno: M/R/XM/T. Não em `required` —
         # vazio para todos os outros templates.
         "turno": _string(_TURNO),
     },

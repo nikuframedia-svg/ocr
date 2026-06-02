@@ -119,6 +119,7 @@ def _template_ctx_for_sheet(sheet: dict | None) -> dict:
         "row_fields": tpl.row_fields,
         "footer_fields": tpl.footer_fields,
         "header_fields": tpl.header_fields,
+        "field_labels": tpl.field_labels or {},
     }
 
 app = FastAPI(title="Metalogalva OCR — MVP")
@@ -2534,7 +2535,7 @@ def excel_page(
 ) -> Response:
     """Continuous Excel-style view of every registered production row.
 
-    Mirrors the 17-column CPIS schema (the same shape as the
+    Mirrors the current CPIS schema (the same shape as the
     `MigracaoNikufraCPIS.xlsx` export). Read-only; clicking "Exportar"
     in the top bar produces the downloadable .xlsx with a period
     selector (1 dia / 1 semana / 1 mês / 3 / 6 meses / 1 ano).
@@ -2569,7 +2570,11 @@ def excel_page(
     with conn() as c:
         raw_rows = [dict(r) for r in c.execute(sql, params).fetchall()]
 
-    cpis_rows = [export._build_cpis_row(r) for r in raw_rows]
+    try:
+        refs = get_watcher().get_refs()
+    except Exception:
+        refs = None
+    cpis_rows = [export._build_cpis_row(r, refs=refs) for r in raw_rows]
 
     # Distinct operators for the filter dropdown (reuse db helper)
     operadores = db.list_distinct_operadores()
@@ -2606,13 +2611,12 @@ def export_cpis(
     validated_only: bool = False,
 ) -> Response:
     """CPIS migration export — single-sheet .xlsx matching
-    `MigracaoNikufraCPIS.xlsx` (17 columns, `Folha1`).
+    `MigracaoNikufraCPIS.xlsx` (`Folha1`).
 
-    One row per kanban production row in the period. Peso/Desperdício
-    computed via `geometry.row_waste()` (trapezoidal column, steel ρ=7.85
-    g/cm³). `Cód. Máquina` derived from setor_maquina (BOBINE-FORMATO →
-    M032, etc.). Query params identical to `/export` (R69: same date /
-    sector semantics).
+    One row per kanban production row in the period. Weight metrics are
+    resolved via app.production.weights using plan/SAP before OCR.
+    `Cód. Máquina` derived from setor_maquina (BOBINE-FORMATO → M032, etc.).
+    Query params identical to `/export` (R69: same date / sector semantics).
     R130: ``validated_only`` exclui rascunhos quando True.
     """
     df = (date_from or "").strip() or None
@@ -3222,6 +3226,10 @@ def _to_3block_csv(filename: str, data: dict) -> str:
     w = csv.writer(buf, delimiter=";", lineterminator="\r\n")
     h = data.get("header", {}) or {}
     f_ = data.get("footer", {}) or {}
+    field_labels = template.field_labels or {}
+
+    def _csv_label(field: str) -> str:
+        return field_labels.get(field, field.upper())
 
     # --- Block 1: CABEÇALHO (identical for all templates) ---
     w.writerow(["### CABEÇALHO"])
@@ -3236,7 +3244,7 @@ def _to_3block_csv(filename: str, data: dict) -> str:
     w.writerow([f"### {template.csv_block_label}"])
     # Column header — common prefix (FICHEIRO/DATA/OPERADOR) + template fields
     column_header = ["FICHEIRO", "DATA", "OPERADOR"] + [
-        f.upper() for f in template.row_fields
+        _csv_label(f) for f in template.row_fields
     ]
     w.writerow(column_header)
     for row in data.get("rows", []) or []:
@@ -3249,7 +3257,7 @@ def _to_3block_csv(filename: str, data: dict) -> str:
     if template.footer_fields:
         w.writerow(["### RODAPÉ"])
         footer_header = ["FICHEIRO", "DATA", "OPERADOR"] + [
-            f.upper() for f in template.footer_fields
+            _csv_label(f) for f in template.footer_fields
         ]
         w.writerow(footer_header)
         footer_row = [filename, h.get("data", ""), h.get("operador", "")]

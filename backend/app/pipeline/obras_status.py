@@ -24,7 +24,6 @@ from typing import Any
 
 from app.cross_check.ref_watcher import get_watcher
 from app.pipeline.of_consumption import (
-    _max_phase,
     _to_num,
     get_consumption,
     remaining,
@@ -59,13 +58,16 @@ def _phase_keys(entries: list[dict]) -> list[str]:
     return list(seen.keys())
 
 
-def _entry_done(entry: dict) -> bool:
+def _produced_from_remaining(quanttrp: float, rem: float) -> float:
+    if rem == float("inf") or quanttrp <= 0:
+        return 0.0
+    return min(quanttrp, max(quanttrp - rem, 0.0))
+
+
+def _entry_done(entry: dict, consumption: dict | None = None) -> bool:
     if str(entry.get("fechado") or "0") in ("1", "True", "true"):
         return True
-    q = _to_num(entry.get("quanttrp"))
-    if q is None or q <= 0:
-        return False
-    return _max_phase(entry.get("fases")) >= q
+    return remaining(entry, consumption) <= 0
 
 
 # ---------------------------------------------------------------- indexes
@@ -151,7 +153,7 @@ def aggregate_ov(
     ofs: set[str] = set()
     modelos: set[str] = set()
     planned = 0.0
-    produced = 0.0  # max(fases) por entry — não conta kanbans (evita dupla contagem)
+    produced = 0.0
     fase_keys = _phase_keys(entries)
     fase_totals: OrderedDict[str, float] = OrderedDict((k, 0.0) for k in fase_keys)
 
@@ -169,15 +171,18 @@ def aggregate_ov(
             modelos.add(str(e["designacao"]))
 
         q = _to_num(e.get("quanttrp")) or 0.0
-        max_phase = _max_phase(e.get("fases"))
+        # Use the same downstream/phase-aware remaining semantics as
+        # of_consumption. This avoids marking Acabamento as complete just
+        # because an upstream phase over-produced.
+        rem = remaining(e, consumption)
+        produced_entry = _produced_from_remaining(q, rem)
         planned += q
-        produced += max_phase
+        produced += produced_entry
         for k in fase_keys:
             fase_totals[k] += _to_num((e.get("fases") or {}).get(k)) or 0.0
 
-        rem = remaining(e, consumption)
         rem_out = None if rem == float("inf") else rem
-        done = _entry_done(e) or rem <= 0
+        done = _entry_done(e, consumption)
         if done:
             closed_entries += 1
         else:
@@ -192,7 +197,7 @@ def aggregate_ov(
             "esp": e.get("esp"),
             "material": e.get("material"),
             "quanttrp": q if q > 0 else None,
-            "produced": max_phase,
+            "produced": produced_entry,
             "remaining": rem_out,
             "done": done,
             "fases": dict(e.get("fases") or {}),

@@ -10,7 +10,7 @@ Output structure:
 Reads from `production_rows` (denormalized) for fast iteration.
 
 CPIS migration export — see `build_cpis_workbook()`. Produces a single
-flat sheet matching the 17-column `MigracaoNikufraCPIS.xlsx` template.
+flat sheet matching the current `MigracaoNikufraCPIS.xlsx` template.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from app.dq.geometry import row_waste
+from app.production.weights import calculate_row_weights, find_plan_entry
 from app.templates_registry import detect_template
 
 from .db import conn
@@ -595,54 +595,46 @@ def _derive_ov_from_plan(row: dict, refs: dict | None) -> str:
     ov_val = (row.get("ov") or "").strip()
     if ov_val:
         return ov_val
-    if not refs:
+    entry = find_plan_entry(row, refs)
+    if not entry:
         return ""
-    of_val = (row.get("of") or "").strip()
-    if not of_val:
+    return str(entry.get("ov") or "").strip()
+
+
+def _derive_cliente_from_plan(row: dict, refs: dict | None) -> str:
+    """Return row cliente, falling back to the same plan match used for OV."""
+    cliente_val = (row.get("cliente") or "").strip()
+    if cliente_val:
+        return cliente_val
+    entry = find_plan_entry(row, refs)
+    if not entry:
         return ""
-    entries = (refs.get("of_to_entries") or {}).get(of_val, [])
-    if not entries:
-        return ""
-    return str(entries[0].get("ov") or "").strip()
+    return str(entry.get("cliente") or "").strip()
 
 
 def _build_cpis_row(row: dict, refs: dict | None = None) -> dict:
-    """Project a production_rows dict into the 19-column CPIS schema (R72).
+    """Project a production_rows dict into the current CPIS schema.
 
-    R72: exposes both peso_consumido (chapa rectangular saída do stock,
-    fórmula explícita do user) and peso_produzido (coluna trapezoidal,
-    R38) em TONELADAS + n_chapas integer. User pediu "mostrar ambos
-    lado-a-lado".
+    Weight metrics come from ``app.production.weights`` so CPIS, dashboards
+    and previews share the same source-priority rules.
 
-    R96: ``refs`` (optional) lets us derive missing OV from the plan when
-    the kanban didn't capture it. Gemini templates (HPE32, GASPARINI) don't
-    have OV in their row schema — we pull it from ``plan_colunas`` via OF
-    lookup so the CPIS export still has the OV column populated.
+    R96/R139: ``refs`` lets us derive missing OV/Cliente from the plan when
+    the kanban doesn't capture those fields (Gemini/Acabamento TPL086).
     """
     qtd = _to_int(row.get("qtd"))
-    larg = _to_float(row.get("larg_mm"))
-    comp = _to_float(row.get("comp_mm"))
-    lbase = _to_float(row.get("lbase"))
-    ltopo = _to_float(row.get("ltopo"))
-    esp = _to_float(row.get("esp"))
-
-    # Geometric waste — mirrors kpis.py (uses comp as both comp_a_cortar
-    # and comp_teorico — pure-geometry interpretation).
-    waste = row_waste(qtd, larg, comp, lbase, ltopo, comp, esp)
-    if waste.get("valid"):
-        # R72: 4 derived fields — n_chapas = ciclos = ceil(qtd/npecas),
-        # pesos em toneladas (kg/1000).
-        n_chapas = waste.get("ciclos")
-        peso_consumido_t = waste["peso_consumido_kg"] / 1000.0
-        peso_produzido_t = waste["peso_produzido_kg"] / 1000.0
-        desperdicio_t = waste["peso_desperdicio_kg"] / 1000.0
-        desp_pct = waste["desperdicio_pct"]
-    else:
-        n_chapas = None
-        peso_consumido_t = None
-        peso_produzido_t = None
-        desperdicio_t = None
-        desp_pct = None
+    weights = calculate_row_weights(row, refs=refs)
+    peso_consumido_t = (
+        weights.peso_consumido_kg / 1000.0
+        if weights.peso_consumido_kg is not None else None
+    )
+    peso_produzido_t = (
+        weights.peso_produzido_kg / 1000.0
+        if weights.peso_produzido_kg is not None else None
+    )
+    desperdicio_t = (
+        weights.desperdicio_kg / 1000.0
+        if weights.desperdicio_kg is not None else None
+    )
 
     setor_maquina = row.get("setor_maquina") or ""
     # Prefer OCR-extracted cod_maquina if the header has it (future kanbans).
@@ -678,10 +670,10 @@ def _build_cpis_row(row: dict, refs: dict | None = None) -> dict:
         "setor_maquina_desc": setor_maquina,
         "cod_maquina": cod_maquina,
         "of": row.get("of") or "",
-        # R96 — derive OV from plan when row's OV is empty (Gemini
-        # templates don't capture OV; plan_colunas has it per-OF).
+        # R96/R139 — derive OV/Cliente from plan when the sheet schema
+        # does not capture them (Gemini/Acabamento TPL086).
         "ov": _derive_ov_from_plan(row, refs),
-        "cliente": row.get("cliente") or "",
+        "cliente": _derive_cliente_from_plan(row, refs),
         "modelo": row.get("modelo") or "",
         "qtd": qtd,
         # R97 — qtd_metros (Soldline/Laser). NULL/0 para outros templates.
@@ -692,16 +684,27 @@ def _build_cpis_row(row: dict, refs: dict | None = None) -> dict:
         # R97 — cesta_n (Expedição); duracao calc fim-inicio (Gemini/Paragens).
         "cesta_n": row.get("cesta_n") or "",
         "duracao": _compute_duracao(row.get("inicio"), row.get("fim")),
-        "comp_mm": _to_int(row.get("comp_mm")),
-        "larg_mm": _to_int(row.get("larg_mm")),
-        "esp_mm": esp,
+        "comp_mm": _to_int(
+            weights.comp_mm if weights.comp_mm is not None else row.get("comp_mm")
+        ),
+        "larg_mm": _to_int(
+            weights.larg_mm if weights.larg_mm is not None else row.get("larg_mm")
+        ),
+        "esp_mm": weights.esp_mm if weights.esp_mm is not None else _to_float(row.get("esp")),
         "coni": row.get("coni") or "",
         # R72 — 4 weight-related fields (vs old peso_kg/desperdicio_kg)
-        "n_chapas": n_chapas,
-        "peso_consumido_t": round(peso_consumido_t, 3) if peso_consumido_t is not None else None,
-        "peso_produzido_t": round(peso_produzido_t, 3) if peso_produzido_t is not None else None,
+        "n_chapas": weights.n_chapas,
+        "peso_consumido_t": (
+            round(peso_consumido_t, 3) if peso_consumido_t is not None else None
+        ),
+        "peso_produzido_t": (
+            round(peso_produzido_t, 3) if peso_produzido_t is not None else None
+        ),
         "desperdicio_t": round(desperdicio_t, 3) if desperdicio_t is not None else None,
-        "desperdicio_pct": round(desp_pct, 2) if desp_pct is not None else None,
+        "desperdicio_pct": (
+            round(weights.desperdicio_pct, 2)
+            if weights.desperdicio_pct is not None else None
+        ),
     }
 
 
@@ -714,8 +717,9 @@ def build_cpis_workbook(
 ) -> bytes:
     """Return .xlsx bytes matching MigracaoNikufraCPIS.xlsx schema.
 
-    Single sheet (`Folha1`) with 17 columns. One row per kanban row in the
-    period. Excel-native types: dates as date objects, numerics as numbers.
+    Single sheet (`Folha1`) with the CPIS column layout. One row per kanban
+    row in the period. Excel-native types: dates as date objects, numerics
+    as numbers.
 
     R69: dates may be None (= "sempre"); sector filter via canonical
     ``detect_template`` post-fetch.
@@ -730,7 +734,7 @@ def build_cpis_workbook(
     try:
         from app.cross_check import get_watcher
         refs = get_watcher().get_refs()
-    except Exception:  # noqa: BLE001
+    except Exception:
         refs = None
     cpis_rows = [_build_cpis_row(r, refs=refs) for r in raw_rows]
 
@@ -761,8 +765,11 @@ def build_cpis_workbook(
             elif key == "n_chapas":
                 cell.number_format = "0"       # integer
 
-    # Column widths — 19 entries (R72 added 2 new columns: n_chapas + peso_produzido)
-    widths = [12, 10, 22, 22, 11, 10, 10, 18, 18, 7, 14, 12, 12, 8, 10, 16, 16, 14, 13]
+    # Column widths — one entry per CPIS column.
+    widths = [
+        12, 16, 24, 24, 12, 10, 10, 20, 24, 8, 12, 10,
+        14, 10, 10, 16, 14, 12, 10, 10, 16, 16, 14, 12,
+    ]
     for ci, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(ci)].width = w
 

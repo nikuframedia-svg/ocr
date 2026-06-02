@@ -77,8 +77,8 @@ _FIELD_LABELS: dict[str, str] = {
 def _columns_line(template: TemplateSpec) -> str:
     """Build the `COL1 | COL2 | COL3` line for the prompt.
 
-    R129 — per-template overrides via `template.field_labels` (acabamento_mtg2
-    usa para mostrar "FERR." sobre o campo `coni`).
+    R129+ — per-template overrides via `template.field_labels` (e.g.
+    Acabamento stores "REFERÊNCIA / PEÇA" internally as `modelo`).
     """
     labels = {**_FIELD_LABELS, **(template.field_labels or {})}
     return " | ".join(labels.get(f, f.upper()) for f in template.row_fields)
@@ -96,6 +96,31 @@ def _footer_skeleton(template: TemplateSpec) -> str:
         return ""
     pairs = ",\n    ".join(f'"{f}": ""' for f in template.footer_fields)
     return pairs
+
+
+def _field_label(template: TemplateSpec, field: str) -> str:
+    labels = {**_FIELD_LABELS, **(template.field_labels or {})}
+    return labels.get(field, field.upper())
+
+
+_HEADER_LABELS: dict[str, str] = {
+    "operador": "Operador (full name)",
+    "n_operador": "N° (operator number)",
+    "setor_maquina": "Setor/Maquina",
+    "cod_maquina": (
+        'Cód. Máquina (M0xx code printed near the sector — leave "" if absent)'
+    ),
+    "data": "Data",
+    "turno": "Turno",
+}
+
+
+def _header_desc(template: TemplateSpec) -> str:
+    return ", ".join(
+        _HEADER_LABELS.get(field, field.upper())
+        for field in template.header_fields
+        if field != "pernr"
+    )
 
 
 def _canonical_setor(template: TemplateSpec) -> str:
@@ -120,7 +145,7 @@ def _header_skel(template: TemplateSpec, setor: str) -> str:
     """R132 — Render the JSON header skeleton from `template.header_fields`.
 
     Pre-R132 this was hardcoded to 5 fields, which silently dropped the
-    `turno` field defined in acabamento_mtg2 and maq_fustes. Now we
+    `turno` field defined in acabamento and maq_fustes. Now we
     iterate the template's actual header_fields and emit the right line
     for each. `pernr` is skipped (derived by snap_operador, not OCR).
     """
@@ -154,10 +179,8 @@ _RULES_PRODUCTION = """IMPORTANT RULES:
 - PRI values can be: numbers (1, 2, 5), codes (c7, C16, C24, P2, P4), or combinations (REP. C9).
 - CLIENTE may have no spaces (MTGBELUX) or have spaces (MTG GMBH, DAV NORDIC, LE HAVRE).
 - CONI can be a number (10, 12, 14) or text (T, OCT, TORRES).
-- FERR. (in ACABAMENTO MTG2 kanbans only — same column as CONI) is one of:
-  OCT, CIL, CIQ, CIB, TORRES, CONI. Treat as the CONI field internally.
-- TURNO (header field, only in ACABAMENTO MTG2 kanbans) is one of: M, R,
-  XM, T (the operator marks which shift). Empty string for other templates.
+- TURNO (header field in templates that show shift checkboxes) is one of:
+  M, R, XM, T. Empty string for other templates.
 - LOTE follows pattern like M25B0746, M26B0307, H24B1003 — copy exactly what you see.
 - If a field is empty or not visible, use empty string "".
 - Do NOT invent values. If a digit is unclear, copy your best reading; do not make up plausible alternatives.
@@ -178,6 +201,26 @@ WATCH OUT FOR HANDWRITING CONFUSIONS:
 - 1 (one) vs I (letter) vs L (letter) — usually 1 in MODELO codes.
 - 5 vs S, 6 vs G, 8 vs B — handwriting can blur these.
 - Ç in modelos like BRAÇOS — keep the cedilla, do not drop it."""
+
+_RULES_ACABAMENTO = """IMPORTANT RULES:
+- Extract EVERY row that has OF, REFERÊNCIA / PEÇA, or QTD — do not skip any row.
+- COLUMN ALIGNMENT (critical): the table has exactly 3 columns: OF,
+  REFERÊNCIA / PEÇA, QTD. Emit one value per column using the JSON keys
+  `of`, `modelo`, `qtd`. Store REFERÊNCIA / PEÇA internally as `modelo`.
+- OF is EXACTLY 6 digits. If a value is not 6 digits, re-check the physical
+  alignment before placing it in OF.
+- REFERÊNCIA / PEÇA may be written across 2 lines — join them with a space.
+- TURNO is one of: M, R, XM, T (the marked checkbox). Empty string if none.
+- TOTAL QTD is the footer total; store it as `footer.colunas_produzidas`.
+- If a field is empty or not visible, use empty string "".
+- Do NOT invent values. If a digit is unclear, copy your best reading.
+- Normalize date to DD-MM-YYYY format.
+
+WATCH OUT FOR HANDWRITING CONFUSIONS:
+- 0 (zero) vs O (letter) — piece references often use digits where they look like 0.
+- 1 (one) vs I (letter) vs L (letter) — usually 1 in piece references.
+- 5 vs S, 6 vs G, 8 vs B — handwriting can blur these.
+- Ç in references like BRAÇOS — keep the cedilla, do not drop it."""
 
 _RULES_PARAGENS = """IMPORTANT RULES:
 - Extract EVERY paragem (downtime entry) that has data — do not skip any row.
@@ -274,6 +317,9 @@ def build_prompt(template: TemplateSpec) -> str:
     if not template.has_production_rows:
         rules = _RULES_PARAGENS
         domain_hint = "DOWNTIME (paragens — registo de paragens de máquina)"
+    elif template.name == "acabamento":
+        rules = _RULES_ACABAMENTO
+        domain_hint = "ACABAMENTO DE COLUNAS"
     elif template.is_gemini:
         rules = _RULES_GEMINI
         domain_hint = "NESTING DE CHAPA (Gemini — produção de cortes em chapa)"
@@ -287,7 +333,7 @@ def build_prompt(template: TemplateSpec) -> str:
 
     # R132 — header_skel agora é gerado dinamicamente de
     # `template.header_fields` (pré-R132 estava hardcoded a 5 campos e o
-    # `turno` definido em acabamento_mtg2/maq_fustes nunca era pedido ao
+    # `turno` definido em acabamento/maq_fustes nunca era pedido ao
     # Qwen). Ver `_header_skel` abaixo.
     header_skel = _header_skel(template, setor)
 
@@ -303,7 +349,7 @@ def build_prompt(template: TemplateSpec) -> str:
 
     # Footer line in the prompt's structure description
     footer_desc = (
-        f"3. FOOTER fields: {', '.join(_FIELD_LABELS.get(f, f.upper()) for f in template.footer_fields)}"
+        f"3. FOOTER fields: {', '.join(_field_label(template, f) for f in template.footer_fields)}"
         if has_footer
         else "3. (This template has no footer — only header + rows.)"
     )
@@ -315,7 +361,7 @@ This kanban is for {domain_hint}. Setor/Máquina = {setor}.
 Extract ALL data and return ONLY a valid JSON object. No markdown, no <think> blocks, no explanation.
 
 The sheet has:
-1. HEADER fields: Operador (full name), N° (operator number), Setor/Maquina, Cód. Máquina (M0xx code printed near the sector — leave "" if absent), Data
+1. HEADER fields: {_header_desc(template)}
 2. A TABLE with exactly these columns in order:
    {cols_line}
 {footer_desc}
@@ -353,7 +399,7 @@ Return a JSON object with exactly one key:
 
 Common values include: BOBINE-FORMATO, GUILHOTINA, LINHA DE CORTE,
 QUINADORA PAV.4, QUINADORA PAV.8, GUIFIL, SOLDLINE 4, LASER, MANUAL,
-ROBOT, EXPEDIÇÃO, ACABAMENTO MTG2, MÁQUINA DE FUSTES, GASPARINI, HPE32, HD36.
+ROBOT, EXPEDIÇÃO, ACABAMENTO MTG4, MÁQUINA DE FUSTES, GASPARINI, HPE32, HD36.
 
 No markdown. No explanation. No <think> blocks."""
 

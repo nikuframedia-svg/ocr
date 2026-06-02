@@ -134,8 +134,16 @@ def _run_ocr(image_path: Path, template: Any = None) -> dict:
 def _merge_pass2_into_pass1(pass1: dict, pass2: dict) -> dict:
     h1 = pass1.get("header", {}) or {}
     h2 = pass2.get("header", {}) or {}
+
+    base_order = ("operador", "n_operador", "setor_maquina", "cod_maquina", "data", "turno")
+    extra_keys = list(dict.fromkeys(
+        k for k in (*h2.keys(), *h1.keys())
+        if k not in base_order
+    ))
+    header_keys = [k for k in base_order if k in h1 or k in h2] + extra_keys
+
     merged_header = {}
-    for k in ("operador", "n_operador", "setor_maquina", "cod_maquina", "data"):
+    for k in header_keys:
         v2 = (h2.get(k) or "").strip()
         v1 = (h1.get(k) or "").strip()
         merged_header[k] = v2 or v1

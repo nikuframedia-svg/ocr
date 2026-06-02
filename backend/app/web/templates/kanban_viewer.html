@@ -257,7 +257,7 @@
             <tr>
               <th>#</th>
               {% for f in row_fields %}
-                <th>{{ f.upper().replace('_', ' ') }}</th>
+                <th>{{ field_labels.get(f, f.upper().replace('_', ' ')) }}</th>
               {% endfor %}
             </tr>
           </thead>
@@ -297,7 +297,7 @@
             {% set audit = cells_by_path.get(field_path, {}) %}
             {% set edited = audit.fix_chain | length > 0 if audit else false %}
             <tr>
-              <th class="kv-label">{{ f.upper().replace('_', ' ') }}</th>
+              <th class="kv-label">{{ field_labels.get(f, f.upper().replace('_', ' ')) }}</th>
               {% with field_path=field_path, value=value, audit=audit, edited=edited, sheet_id=sheet.id %}
                 {% include "_cell.html" %}
               {% endwith %}

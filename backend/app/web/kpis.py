@@ -11,6 +11,8 @@ Date semantics:
 """
 from __future__ import annotations
 
+from app.production.weights import calculate_row_weights
+
 from .db import conn
 
 
@@ -34,15 +36,14 @@ PRODUCTION_SECTORS = (
 
 # Maps sector name → list of cod_maquina that belong to it (mirrors the
 # factory validator at C:\kanban\nifruka\06_Kanban_OCR\kanban_csv2excel...).
-# Bobine-Formato is the only sector currently captured by kanbans, so its
-# breakdown is the one that has data; other sectors render as placeholders.
+# The lists mirror maquinas.xlsx for the kanbans we now OCR directly.
 SECTOR_TO_COD_MAQUINAS = {
     "Bobine Formato": ["M032"],
     "Corte": ["M020", "M091"],          # Guilhotina 9m, 10m
     "Quinadora": [],                     # not captured yet
     "Soldadura": [],
     "Abertura Portinholas": [],
-    "Acabamento": ["M001"],              # MTG2
+    "Acabamento": ["M001", "M054", "M055", "M061", "M106", "M107"],
     "Expedição": [],
 }
 
@@ -72,6 +73,14 @@ def _derive_cod_maquina(setor_maquina: str | None) -> str:
         "GUILH. 10M": "M091",
         "ACABAMENTO MTG2": "M001",
         "ACAB. MTG2": "M001",
+        "ACABAMENTO MTG3": "M055",
+        "ACAB. MTG3": "M055",
+        "ACABAMENTO MTG4": "M061",
+        "ACAB. MTG4": "M061",
+        "ACABAMENTO MTG5": "M106",
+        "ACAB. MTG5": "M106",
+        "ACABAMENTO SERRALHARIA MTG2": "M107",
+        "ACAB. SERRALHARIA MTG2": "M107",
         "MTG2": "M001",
         # R132 — TPL103 MÁQUINA DE FUSTES (codsec S004 em maquinas.xlsx).
         # Fallback defensivo — o caminho normal é via `maquinas_by_kanban`
@@ -713,7 +722,8 @@ def production_overview(date: str | None = None, period: str = "day") -> dict:
         rows = c.execute(
             """SELECT pr.sheet_id, pr.qtd, pr.comp_mm, pr.larg_mm, pr.esp,
                       pr.operador, pr.sheet_hours, pr.sheet_iso_date,
-                      pr.of, pr.lote, pr.lbase, pr.ltopo,
+                      pr.of, pr.ov, pr.cliente, pr.modelo,
+                      pr.lote, pr.lbase, pr.ltopo,
                       json_extract(s.sheet_data, '$.header.setor_maquina') AS setor_maquina
                FROM production_rows pr
                JOIN sheets s ON s.id = pr.sheet_id
@@ -735,21 +745,8 @@ def production_overview(date: str | None = None, period: str = "day") -> dict:
 
     all_sheet_ids: set[int] = set()
     all_operadores: set[str] = set()
-    # Round 38: per-row weight + waste calculation using plan canonical
-    # dims (lbase/ltopo/comp/npecas) + SAP esp (priority over OCR esp).
-    from app.dq.geometry import row_waste
     from app.cross_check.ref_watcher import get_watcher
     refs = get_watcher().get_refs()
-    of_to_entries = refs.get("of_to_entries", {})
-    sap_full = refs.get("lotes_sap_full", {})
-
-    def _to_num(v):
-        if v is None or v == "":
-            return None
-        try:
-            return float(str(v).replace(",", ".").strip())
-        except (ValueError, TypeError):
-            return None
 
     sheet_hours_global: dict[int, float] = {}
     total_qty = 0
@@ -802,52 +799,20 @@ def production_overview(date: str | None = None, period: str = "day") -> dict:
         sheet_hours_global[sid] = row["sheet_hours"] or 0
         total_qty += qtd
 
-        # Per-row weight + waste (Round 38) — uses plan canonical dims
-        # when available, falls back to OCR otherwise. For OCR errors
-        # like esp=26 (should be 2.6), the SAP/plan fallback prevents
-        # 10× weight inflation.
         if not qtd:
             continue
 
-        # Try plan first for canonical lbase/ltopo/comp/npecas
-        of_str = ((row["of"] or "") if isinstance(row["of"], str) else str(row["of"] or "")).strip()
-        plan_entry = (of_to_entries.get(of_str) or [None])[0] if of_str else None
-        plan_lbase = _to_num(plan_entry.get("lbase")) if plan_entry else None
-        plan_ltopo = _to_num(plan_entry.get("ltopo")) if plan_entry else None
-        plan_comp = _to_num(plan_entry.get("comp")) if plan_entry else None
-        plan_npecas = plan_entry.get("npecas") if plan_entry else None
-        plan_esp = _to_num(plan_entry.get("esp")) if plan_entry else None
-
-        # SAP esp + larg via lote (priority over OCR). R72: larg fallback
-        # added (mirror of esp logic) — bobine larg from SAP is canonical
-        # if available; OCR is fallback.
-        lote = ((row["lote"] or "") if isinstance(row["lote"], str) else "").strip().upper()
-        sap_esp = _to_num(sap_full.get(lote, {}).get("esp")) if lote else None
-        sap_larg = _to_num(sap_full.get(lote, {}).get("larg")) if lote else None
-
-        # Final values (priority: plan/SAP → OCR)
-        lbase_f = plan_lbase if plan_lbase else _to_num(row["lbase"])
-        ltopo_f = plan_ltopo if plan_ltopo else _to_num(row["ltopo"])
-        comp_teorico_f = plan_comp if plan_comp else _to_num(row["comp_mm"])
-        esp_f = sap_esp if sap_esp else (plan_esp if plan_esp else _to_num(row["esp"]))
-        larg_f = sap_larg if sap_larg else _to_num(row["larg_mm"])
-
-        # R72 — single row_waste call computes BOTH peso_consumido +
-        # peso_produzido + peso_desperdicio + ciclos (= nº chapas). User
-        # asked to expose all of these separately. `ciclos = ceil(qtd/npecas)`
-        # matches the explicit formula provided. plan.comp used as both
-        # comp_teorico and comp_a_cortar (pure-geometric interpretation).
-        np_override = plan_npecas if (plan_npecas and plan_npecas > 0) else None
-        waste = row_waste(
-            qtd, larg_f, comp_teorico_f,
-            lbase_f, ltopo_f, comp_teorico_f, esp_f,
-            npecas_override=np_override,
-        )
-        if waste.get("valid"):
-            total_consumido_kg += waste["peso_consumido_kg"]
-            total_produzido_kg += waste["peso_produzido_kg"]
-            total_waste_kg += waste["peso_desperdicio_kg"]
-            total_chapas += waste["ciclos"]
+        weights = calculate_row_weights(dict(row), refs=refs)
+        if not weights.direct_consumption:
+            continue
+        if weights.peso_consumido_kg is not None:
+            total_consumido_kg += weights.peso_consumido_kg
+        if weights.peso_produzido_kg is not None:
+            total_produzido_kg += weights.peso_produzido_kg
+        if weights.desperdicio_kg is not None:
+            total_waste_kg += weights.desperdicio_kg
+        if weights.n_chapas is not None:
+            total_chapas += weights.n_chapas
 
     sectors_out = []
     for sector in PRODUCTION_SECTORS:
@@ -927,6 +892,3 @@ def production_overview(date: str | None = None, period: str = "day") -> dict:
         },
         "sectors": sectors_out,
     }
-
-
-
