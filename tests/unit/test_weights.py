@@ -8,21 +8,23 @@ from app.production.weights import calculate_row_weights
 def _refs(*, npecas=6, pesounit=None, sap_esp=2.6, sap_larg=1500):
     if pesounit is None:
         pesounit = column_weight_kg(200, 150, 5000, 2.6)
+    entry = {
+        "of": "261860",
+        "ov": "100200",
+        "cliente": "ENEDIS",
+        "designacao": "CGC2E10D",
+        "comp": 5000,
+        "lbase": 200,
+        "ltopo": 150,
+        "esp": 2.6,
+        "npecas": npecas,
+        "pesounit": pesounit,
+    }
     return {
         "of_to_entries": {
-            "261860": [{
-                "of": "261860",
-                "ov": "100200",
-                "cliente": "ENEDIS",
-                "designacao": "CGC2E10D",
-                "comp": 5000,
-                "lbase": 200,
-                "ltopo": 150,
-                "esp": 2.6,
-                "npecas": npecas,
-                "pesounit": pesounit,
-            }],
+            "261860": [entry],
         },
+        "plan_by_ov": {"100200": [{**entry, "_of": "261860"}]},
         "lotes_sap_full": {
             "L1": {"esp": sap_esp, "larg": sap_larg},
         },
@@ -108,6 +110,68 @@ def test_acabamento_only_gets_produced_weight_from_plan():
     assert out.n_chapas is None
     assert out.desperdicio_kg is None
     assert out.desperdicio_pct is None
+
+
+def test_expedicao_gets_produced_weight_from_unique_ov_model_without_of():
+    row = {
+        "setor_maquina": "EXPEDIÇÃO",
+        "of": "",
+        "ov": "100200",
+        "modelo": "CGC2E10D",
+        "qtd": 10,
+    }
+    out = calculate_row_weights(row, _refs(pesounit=50))
+
+    assert out.direct_consumption is False
+    assert out.peso_produzido_kg == pytest.approx(500)
+    assert out.peso_consumido_kg is None
+    assert out.n_chapas is None
+    assert out.desperdicio_kg is None
+
+
+def test_expedicao_wrong_existing_of_uses_unique_ov_model_for_weight():
+    refs = _refs(pesounit=50)
+    refs["of_to_entries"]["999999"] = [{
+        "of": "999999",
+        "ov": "999000",
+        "cliente": "OTHER",
+        "designacao": "OUTRA PECA",
+        "pesounit": 99,
+    }]
+    row = {
+        "setor_maquina": "EXPEDIÇÃO",
+        "of": "999999",
+        "ov": "100200",
+        "modelo": "CGC2E10D",
+        "qtd": 10,
+    }
+    out = calculate_row_weights(row, refs)
+
+    assert out.peso_produzido_kg == pytest.approx(500)
+    assert out.peso_consumido_kg is None
+
+
+def test_expedicao_ambiguous_ov_model_leaves_weights_empty():
+    refs = _refs(pesounit=50)
+    refs["plan_by_ov"]["100200"].append({
+        "_of": "999999",
+        "of": "999999",
+        "ov": "100200",
+        "cliente": "ENEDIS",
+        "designacao": "CGC2E10D",
+        "pesounit": 99,
+    })
+    row = {
+        "setor_maquina": "EXPEDIÇÃO",
+        "of": "",
+        "ov": "100200",
+        "modelo": "CGC2E10D",
+        "qtd": 10,
+    }
+    out = calculate_row_weights(row, refs)
+
+    assert out.peso_produzido_kg is None
+    assert out.peso_consumido_kg is None
 
 
 def test_missing_refs_and_geometry_returns_empty_weights():

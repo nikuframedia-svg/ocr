@@ -180,3 +180,26 @@ class TestRender:
         assert r.status_code == 200
         assert "/add-row" not in r.text
         assert "/remove-row" not in r.text
+
+
+class TestConiCanonicalisation:
+    """R134 — o `coni` (FERRAMENTA/CONI) é canonicalizado no write path real.
+
+    db.py `_sync_production_rows` é o ÚNICO ponto vivo de normalização do valor
+    persistido (o ocr_runner não valida e o export CPIS lê verbatim). Este teste
+    cobre o caminho db.update_extraction → production_rows e falha se essa
+    canonicalização for revertida.
+    """
+
+    def test_coni_canonicalised_on_production_rows_write(self, tmp_db):
+        sid = _seed([
+            {"of": "111", "modelo": "A", "qtd": "1", "coni": "Coni"},
+            {"of": "222", "modelo": "B", "qtd": "1", "coni": "OCT."},
+            {"of": "333", "modelo": "C", "qtd": "1", "coni": "T"},
+        ])
+        with db.conn() as c:
+            got = [r["coni"] for r in c.execute(
+                "SELECT coni FROM production_rows WHERE sheet_id = ? ORDER BY of",
+                (sid,)).fetchall()]
+        # válidos → canónico; inválido 'T' fica raw (não inventa snap, vai a revisão)
+        assert got == ["CONI", "OCT", "T"]

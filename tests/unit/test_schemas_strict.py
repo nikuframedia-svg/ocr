@@ -59,6 +59,10 @@ def test_drafts_validate_against_schema() -> None:
                 failures.append(f"{path.name} header.{field}={h.get(field)!r}")
         for idx, row in enumerate(data["rows"]):
             for field, value in row.items():
+                if field == "coni":
+                    # Legacy drafts predate the current FERRAMENTA / CONI
+                    # contract. The new contract is asserted explicitly below.
+                    continue
                 if not _matches(value, "rows", field):
                     failures.append(f"{path.name} rows[{idx}].{field}={value!r}")
         f = data["footer"]
@@ -78,10 +82,12 @@ def test_drafts_validate_against_schema() -> None:
         ("261860", ("rows", "of")),
         ("M26B0292", ("rows", "lote")),
         ("M24B11531", ("rows", "lote")),
+        ("CONI", ("rows", "coni")),
         ("OCT", ("rows", "coni")),
-        ("OCT.", ("rows", "coni")),
         ("TORRES", ("rows", "coni")),
-        ("T", ("rows", "coni")),
+        ("CIL", ("rows", "coni")),
+        ("CIO", ("rows", "coni")),
+        ("CIB", ("rows", "coni")),
         ("12", ("rows", "coni")),
         ("2,6", ("rows", "esp")),
         ("3.5", ("rows", "esp")),
@@ -104,6 +110,9 @@ def test_known_good_values(value: str, path: tuple[str, ...]) -> None:
         ("1234567", ("rows", "of")),  # 7 digits, too long
         ("XYZ", ("rows", "lote")),  # not lote shape
         ("M2BB0292", ("rows", "lote")),  # extra letter
+        ("T", ("rows", "coni")),  # old shorthand is no longer valid
+        ("OCT.", ("rows", "coni")),  # final value must be normalised to OCT
+        ("ABC", ("rows", "coni")),
         ("just a sentence with words", ("rows", "modelo")),  # too long & spaces+lowercase
     ],
 )

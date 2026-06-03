@@ -59,6 +59,28 @@ def test_whitespace_stripped() -> None:
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
+        ("Coni", "CONI"),
+        ("CONI.", "CONI"),
+        ("Oct", "OCT"),
+        ("OCT.", "OCT"),
+        ("Torres", "TORRES"),
+        ("CIL", "CIL"),
+        ("CIO", "CIO"),
+        ("CIB", "CIB"),
+        ("12", "12"),
+        ("T", "T"),
+    ],
+)
+def test_coni_field_normalises_valid_aliases_and_preserves_invalid(
+    raw: str, expected: str
+) -> None:
+    parsed = Row.model_validate({"coni": raw})
+    assert parsed.coni == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
         ("01/04/2026", "01-04-2026"),
         ("01.04.2026", "01-04-2026"),
         ("01-04-2026", "01-04-2026"),

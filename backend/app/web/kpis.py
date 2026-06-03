@@ -11,6 +11,7 @@ Date semantics:
 """
 from __future__ import annotations
 
+from app.dq.machines import resolve_machine_from_setor
 from app.production.weights import calculate_row_weights
 
 from .db import conn
@@ -55,13 +56,46 @@ COD_MAQUINA_TO_SECTOR = {
     for cm in cms
 }
 
+_PHASE_TO_SECTOR = {
+    "bf": "Bobine Formato",
+    "c": "Corte",
+    "q": "Quinadora",
+    "s": "Soldadura",
+    "r": "Abertura Portinholas",
+    "a": "Acabamento",
+    "exp": "Expedição",
+}
+
+
+def _sector_machine_codes(refs: dict | None = None) -> dict[str, list[str]]:
+    """Machine buckets, preferring ``maquinas.xlsx`` over static fallbacks."""
+    out = {sector: list(codes) for sector, codes in SECTOR_TO_COD_MAQUINAS.items()}
+    for rec in ((refs or {}).get("maquinas_by_codmaq") or {}).values():
+        code = str(rec.get("codmaq") or "").strip().upper()
+        phase = str(rec.get("colunaexcel") or "").strip().lower()
+        sector = _PHASE_TO_SECTOR.get(phase)
+        if code and sector and code not in out.setdefault(sector, []):
+            out[sector].append(code)
+    return out
+
+
+def _cod_machine_to_sector(refs: dict | None = None) -> dict[str, str]:
+    return {
+        cm: sector
+        for sector, codes in _sector_machine_codes(refs).items()
+        for cm in codes
+    }
+
 
 # Setor name → cod_maquina derivation (matches factory validator's
 # _CODIGOS_MAQUINAS mapping at C:\kanban\nifruka\06_Kanban_OCR\...).
-def _derive_cod_maquina(setor_maquina: str | None) -> str:
+def _derive_cod_maquina(setor_maquina: str | None, refs: dict | None = None) -> str:
     """Convert setor_maquina text → cod_maquina code. Empty if unknown."""
     if not setor_maquina:
         return ""
+    rec = resolve_machine_from_setor(setor_maquina, refs)
+    if rec and rec.get("codmaq"):
+        return str(rec["codmaq"]).strip().upper()
     s = setor_maquina.strip().upper()
     table = {
         "BOBINE-FORMATO": "M032",
@@ -747,6 +781,8 @@ def production_overview(date: str | None = None, period: str = "day") -> dict:
     all_operadores: set[str] = set()
     from app.cross_check.ref_watcher import get_watcher
     refs = get_watcher().get_refs()
+    sector_to_codes = _sector_machine_codes(refs)
+    cod_to_sector = _cod_machine_to_sector(refs)
 
     sheet_hours_global: dict[int, float] = {}
     total_qty = 0
@@ -763,8 +799,8 @@ def production_overview(date: str | None = None, period: str = "day") -> dict:
     for row in rows:
         sid = row["sheet_id"]
         qtd = row["qtd"] or 0
-        cm = _derive_cod_maquina(row["setor_maquina"])
-        sector = COD_MAQUINA_TO_SECTOR.get(cm, "")
+        cm = _derive_cod_maquina(row["setor_maquina"], refs)
+        sector = cod_to_sector.get(cm, "")
         if not sector:
             sm = (row["setor_maquina"] or "").strip().upper()
             # R68: PRODUCTION_SECTORS now in Title Case (aligned with
@@ -783,7 +819,7 @@ def production_overview(date: str | None = None, period: str = "day") -> dict:
         bucket["n_sheets"].add(sid)
         bucket["_sheet_hours"][sid] = row["sheet_hours"] or 0
 
-        if cm and cm in SECTOR_TO_COD_MAQUINAS.get(sector, []):
+        if cm and cm in sector_to_codes.get(sector, []):
             mb = bucket["machines"].setdefault(cm, {
                 "code": cm, "qtd": 0, "n_rows": 0,
                 "n_sheets": set(), "_sheet_hours": {},
@@ -821,7 +857,7 @@ def production_overview(date: str | None = None, period: str = "day") -> dict:
         col_per_h = (b["qtd"] / hours) if hours > 0 else 0
         min_per_col = (hours * 60.0 / b["qtd"]) if b["qtd"] > 0 else 0
         machines_out = []
-        for cm in SECTOR_TO_COD_MAQUINAS.get(sector, []):
+        for cm in sector_to_codes.get(sector, []):
             mb = b["machines"].get(cm)
             if mb:
                 m_hours = sum(mb["_sheet_hours"].values())

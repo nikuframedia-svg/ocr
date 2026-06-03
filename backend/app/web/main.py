@@ -12,10 +12,12 @@ import datetime as dt
 import json
 import os
 import secrets
+import shutil
 import sys
 import threading
 import traceback
 from pathlib import Path
+from urllib.parse import quote_plus
 
 import httpx  # R120 — endpoint /admin/qwen-tools-test
 
@@ -39,6 +41,7 @@ from app.cross_check import (  # noqa: E402
     load_to_analisar,
     store_cross_check,
 )
+from app.dq.machines import resolve_machine_from_setor  # noqa: E402
 from app.dq.operador_snap import snap_operador  # noqa: E402
 from app.learning import (  # noqa: E402
     materialize as learning_materialize,
@@ -543,10 +546,10 @@ def _apply_codmaq_fill(
     if "header.cod_maquina" in protected:
         return 0
     header = (sheet.get("sheet_data") or {}).get("header") or {}
-    setor = (header.get("setor_maquina") or "").strip().upper()
+    setor = (header.get("setor_maquina") or "").strip()
     if not setor:
         return 0
-    maq = (refs.get("maquinas_by_kanban") or {}).get(setor)
+    maq = resolve_machine_from_setor(setor, refs)
     if not maq or not maq.get("codmaq"):
         return 0
     canonical = maq["codmaq"]
@@ -579,11 +582,15 @@ def _run_and_store_cross_check(sheet_id: int) -> dict | None:
     sheet = db.get_sheet(sheet_id)
     if sheet is None or not sheet.get("sheet_data"):
         return None
-    refs = get_watcher().get_refs()
+    watcher = get_watcher()
+    refs = watcher.get_refs()
     if not refs.get("available"):
         return None
 
     result = cross_check_sheet(sheet["sheet_data"], sheet.get("dq_audit"), refs)
+    from app.cross_check.ref_watcher import refs_snapshot
+    plan_path = getattr(watcher, "plan_path", None)
+    result["refs_snapshot"] = refs_snapshot(refs, plan_path)
 
     # R133 — campos com última edição humana são autoritativos: o
     # auto-overwrite abaixo salta-os, senão o re-cross-check disparado por
@@ -617,6 +624,7 @@ def _run_and_store_cross_check(sheet_id: int) -> dict | None:
         if refreshed is not None and refreshed.get("sheet_data"):
             sheet = refreshed
             result = cross_check_sheet(sheet["sheet_data"], sheet.get("dq_audit"), refs)
+            result["refs_snapshot"] = refs_snapshot(refs, plan_path)
 
     if sheet is None or not sheet.get("sheet_data"):
         return result  # defensive — should not happen
@@ -1529,9 +1537,44 @@ def admin_reload_refs() -> JSONResponse:
 
 
 # ===================== R104 — página de refs SAP/plan =====================
-# Upload de StockSAP.xlsx / plan_colunas_cpis.xlsx com acumulação histórica.
+# Upload dos workbooks de referência usados por OCR/cross-check.
 
-_REFS_FILENAMES = {"stocksap": "StockSAP.xlsx", "plan": "plan_colunas_cpis.xlsx"}
+_REFS_FILENAMES = {
+    "plan": "plan_colunas_cpis.xlsx",
+    "stocksap": "StockSAP.xlsx",
+    "maquinas": "maquinas.xlsx",
+    "colaboradores": "ListaColaboradores.xlsx",
+}
+_REFS_LABELS = {
+    "plan": "Plano",
+    "stocksap": "StockSAP",
+    "maquinas": "Máquinas",
+    "colaboradores": "Colaboradores",
+}
+_REFS_WATCHER_ATTRS = {
+    "plan": "plan_path",
+    "stocksap": "sap_path",
+    "maquinas": "maq_path",
+    "colaboradores": "colab_path",
+}
+_REFS_STATUS_KEYS = {
+    "plan": "plan",
+    "stocksap": "sap",
+    "maquinas": "maquinas",
+    "colaboradores": "colaboradores",
+}
+_REFS_SHA_KEYS = {
+    "plan": "plan_sha256",
+    "stocksap": "sap_sha256",
+    "maquinas": "maquinas_sha256",
+    "colaboradores": "colab_sha256",
+}
+_REFS_COUNT_STAT_KEYS = {
+    "plan": "n_plan_rows",
+    "stocksap": "n_lotes",
+    "maquinas": "n_maquinas",
+    "colaboradores": "n_colaboradores",
+}
 
 # Progresso da re-validação cross-check em background (1 corrida de cada vez).
 _revalidation_state: dict = {
@@ -1568,36 +1611,153 @@ def _revalidate_all_sheets_bg() -> None:
                 dt.datetime.now().isoformat(timespec="seconds"))
 
 
-def _validate_refs_xlsx(path: Path, kind: str) -> str | None:
-    """Return ``None`` if the workbook looks like the expected refs file,
-    else a human error message. Defensive — a bad upload must never replace
-    a good live refs file."""
+def _refs_redirect(param: str, message: str) -> RedirectResponse:
+    return RedirectResponse(
+        f"/refs?{param}={quote_plus(message)}", status_code=303,
+    )
+
+
+def _inspect_refs_xlsx(path: Path, kind: str) -> tuple[str | None, dict]:
+    """Validate refs workbook and return lightweight file stats.
+
+    Defensive: a bad upload must never replace a good live refs file.
+    """
     import openpyxl
+    from app.pipeline.scoring_engine import normalize_of
+
+    info = {
+        "n_rows": 0, "n_ofs": 0, "n_ovs": 0, "n_lotes": 0,
+        "n_maquinas": 0, "n_colaboradores": 0,
+        "size": path.stat().st_size,
+    }
     try:
         wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     except Exception as e:  # noqa: BLE001
-        return f"não consegui abrir o Excel ({e})"
+        return f"não consegui abrir o Excel ({e})", info
     try:
         if kind == "plan":
             ws = (wb["plan_colunas_cpis"]
                   if "plan_colunas_cpis" in wb.sheetnames else wb.active)
             first = next(ws.iter_rows(values_only=True), None)
-            hdrs = {str(h).strip().lower() for h in (first or ()) if h}
-            if "of" not in hdrs:
-                return "falta a coluna 'of' — não parece o plan_colunas_cpis"
-        else:  # stocksap
+            hdrs = {
+                str(h).strip().lower(): i
+                for i, h in enumerate(first or ())
+                if h
+            }
+            required = {"of", "ov", "quanttrp"}
+            missing = sorted(required - set(hdrs))
+            if missing:
+                return (
+                    "falta a coluna "
+                    + ", ".join(repr(m) for m in missing)
+                    + " — não parece o plan_colunas_cpis"
+                ), info
+            ofs: set[str] = set()
+            ovs: set[str] = set()
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                if not row:
+                    continue
+                of_raw = row[hdrs["of"]] if hdrs["of"] < len(row) else None
+                ov_raw = row[hdrs["ov"]] if hdrs["ov"] < len(row) else None
+                if of_raw in (None, "") and ov_raw in (None, ""):
+                    continue
+                info["n_rows"] += 1
+                of_norm = normalize_of(of_raw)
+                if of_norm:
+                    ofs.add(of_norm)
+                ov = str(ov_raw or "").strip()
+                if ov:
+                    ovs.add(ov)
+            info["n_ofs"] = len(ofs)
+            info["n_ovs"] = len(ovs)
+            info["n_plan_rows"] = info["n_rows"]
+            if info["n_rows"] <= 0:
+                return "sem linhas de plano — ficheiro vazio", info
+            if info["n_ofs"] <= 0:
+                return "sem OFs válidas — não parece o plan_colunas_cpis", info
+        elif kind == "stocksap":
             rows = (wb["Folha1"] if "Folha1" in wb.sheetnames
                     else wb.active).iter_rows(values_only=True)
             header = next(rows, None) or ()
             col0 = str(header[0] or "").strip().lower() if header else ""
             if "lote" not in col0:
-                return "1ª coluna não é 'Lote' — não parece o StockSAP"
-            data0 = next(rows, None)
-            if data0 is None or data0[0] is None:
-                return "sem linhas de lote — não parece o StockSAP"
+                return "1ª coluna não é 'Lote' — não parece o StockSAP", info
+            for row in rows:
+                if row and row[0] not in (None, ""):
+                    info["n_rows"] += 1
+            info["n_lotes"] = info["n_rows"]
+            if info["n_rows"] <= 0:
+                return "sem linhas de lote — não parece o StockSAP", info
+        elif kind == "maquinas":
+            ws = wb.active
+            rows = ws.iter_rows(values_only=True)
+            first = next(rows, None)
+            hdrs = {
+                str(h).strip().lower(): i
+                for i, h in enumerate(first or ())
+                if h
+            }
+            required = {"codmaq", "desmaq", "codsec", "dessec", "colunaexcel"}
+            missing = sorted(required - set(hdrs))
+            if missing:
+                return (
+                    "falta a coluna "
+                    + ", ".join(repr(m) for m in missing)
+                    + " — não parece o maquinas.xlsx"
+                ), info
+            for row in rows:
+                if not row:
+                    continue
+                cod_idx = hdrs["codmaq"]
+                codmaq = row[cod_idx] if cod_idx < len(row) else None
+                if codmaq not in (None, ""):
+                    info["n_rows"] += 1
+            info["n_maquinas"] = info["n_rows"]
+            if info["n_maquinas"] <= 0:
+                return "sem máquinas válidas — não parece o maquinas.xlsx", info
+        elif kind == "colaboradores":
+            ws = wb["Export"] if "Export" in wb.sheetnames else wb.active
+            rows = ws.iter_rows(values_only=True)
+            first = next(rows, None)
+            hdrs = {
+                str(h).strip().lower(): i
+                for i, h in enumerate(first or ())
+                if h
+            }
+            required = {"pernr", "sname", "cod"}
+            missing = sorted(required - set(hdrs))
+            if missing:
+                return (
+                    "falta a coluna "
+                    + ", ".join(repr(m) for m in missing)
+                    + " — não parece a ListaColaboradores"
+                ), info
+            for row in rows:
+                if not row:
+                    continue
+                cod_idx = hdrs["cod"]
+                sname_idx = hdrs["sname"]
+                cod = row[cod_idx] if cod_idx < len(row) else None
+                sname = row[sname_idx] if sname_idx < len(row) else None
+                if cod not in (None, "") and sname not in (None, ""):
+                    info["n_rows"] += 1
+            info["n_colaboradores"] = info["n_rows"]
+            if info["n_colaboradores"] <= 0:
+                return (
+                    "sem colaboradores válidos — não parece a ListaColaboradores",
+                    info,
+                )
+        else:
+            return "tipo de refs inválido", info
     finally:
         wb.close()
-    return None
+    return None, info
+
+
+def _validate_refs_xlsx(path: Path, kind: str) -> str | None:
+    """Back-compat wrapper used by older tests/callers."""
+    err, _info = _inspect_refs_xlsx(path, kind)
+    return err
 
 
 def _fmt_mtime(ts: float | None) -> str:
@@ -1605,6 +1765,36 @@ def _fmt_mtime(ts: float | None) -> str:
     if not ts:
         return "—"
     return dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+
+
+def _refs_status_card(
+    status: dict,
+    stats: dict,
+    kind: str,
+    *,
+    big: int,
+    label: str,
+    sub: str,
+) -> dict:
+    st = status.get(_REFS_STATUS_KEYS[kind], {}) or {}
+    sha = st.get("sha256") or ""
+    return {
+        "kind": kind,
+        "filename": _REFS_FILENAMES[kind],
+        "big": big,
+        "label": label,
+        "sub": sub,
+        "date": _fmt_mtime(st.get("mtime")),
+        "hash_short": sha[:8] if sha else "—",
+        "path": st.get("path") or "—",
+        "size": st.get("size") or 0,
+    }
+
+
+def _refs_upload_count(kind: str, refs: dict, upload_info: dict) -> int:
+    stats = refs.get("stats", {}) or {}
+    stat_key = _REFS_COUNT_STAT_KEYS[kind]
+    return int(stats.get(stat_key) or upload_info.get(stat_key) or upload_info.get("n_rows") or 0)
 
 
 def _start_revalidation() -> bool:
@@ -1623,17 +1813,104 @@ def _start_revalidation() -> bool:
 
 @app.get("/refs", response_class=HTMLResponse)
 def refs_page(request: Request) -> Response:
-    """Página para carregar StockSAP/plan e ver o estado das refs."""
+    """Página para carregar refs e ver o estado dos workbooks ativos."""
     from app.cross_check import refs_uploads
     refs = get_watcher().get_refs()
     status = get_watcher().status()
+    stats = refs.get("stats", {}) or {}
+    plan_status = status.get("plan", {}) or {}
+    plan_sha = plan_status.get("sha256") or ""
+    sap_status = status.get("sap", {}) or {}
+    sap_sha = sap_status.get("sha256") or ""
+    maq_status = status.get("maquinas", {}) or {}
+    maq_sha = maq_status.get("sha256") or ""
+    colab_status = status.get("colaboradores", {}) or {}
+    colab_sha = colab_status.get("sha256") or ""
+    refs_cards = [
+        _refs_status_card(
+            status, stats, "plan",
+            big=stats.get("n_ofs", 0),
+            label="OFs no plano",
+            sub=(
+                f"{stats.get('n_clientes', 0)} clientes · "
+                f"{stats.get('n_plan_rows', 0)} linhas · "
+                f"{stats.get('n_ovs', 0)} OVs"
+            ),
+        ),
+        _refs_status_card(
+            status, stats, "stocksap",
+            big=stats.get("n_lotes", 0),
+            label="lotes no StockSAP",
+            sub="espessura e largura por lote",
+        ),
+        _refs_status_card(
+            status, stats, "maquinas",
+            big=stats.get("n_maquinas", 0),
+            label="máquinas mapeadas",
+            sub="código, setor e coluna Excel",
+        ),
+        _refs_status_card(
+            status, stats, "colaboradores",
+            big=stats.get("n_colaboradores", 0),
+            label="colaboradores",
+            sub="operadores e códigos SAP",
+        ),
+    ]
+    upload_cards = [
+        {
+            "kind": "plan",
+            "title": "Carregar plano",
+            "subtitle": "plan_colunas_cpis.xlsx — OFs, OVs, clientes, fases",
+            "button": "Carregar plano",
+            "date": _fmt_mtime(plan_status.get("mtime")),
+            "hash_short": plan_sha[:8] if plan_sha else "—",
+        },
+        {
+            "kind": "stocksap",
+            "title": "Carregar StockSAP",
+            "subtitle": "StockSAP.xlsx — lotes, espessura, largura",
+            "button": "Carregar StockSAP",
+            "date": _fmt_mtime(sap_status.get("mtime")),
+            "hash_short": sap_sha[:8] if sap_sha else "—",
+        },
+        {
+            "kind": "maquinas",
+            "title": "Carregar máquinas",
+            "subtitle": "maquinas.xlsx — códigos, setores, fases",
+            "button": "Carregar máquinas",
+            "date": _fmt_mtime(maq_status.get("mtime")),
+            "hash_short": maq_sha[:8] if maq_sha else "—",
+        },
+        {
+            "kind": "colaboradores",
+            "title": "Carregar colaboradores",
+            "subtitle": "ListaColaboradores.xlsx — operadores e códigos",
+            "button": "Carregar colaboradores",
+            "date": _fmt_mtime(colab_status.get("mtime")),
+            "hash_short": colab_sha[:8] if colab_sha else "—",
+        },
+    ]
     return templates.TemplateResponse(request, "refs.html", {
         "refs_status": status,
-        "stats": refs.get("stats", {}),
+        "stats": stats,
         "uploads": refs_uploads.recent(),
+        "refs_cards": refs_cards,
+        "upload_cards": upload_cards,
+        "refs_kind_labels": _REFS_LABELS,
         "revalidation": dict(_revalidation_state),
-        "sap_file_date": _fmt_mtime(status.get("sap", {}).get("mtime")),
-        "plan_file_date": _fmt_mtime(status.get("plan", {}).get("mtime")),
+        "sap_file_date": _fmt_mtime(sap_status.get("mtime")),
+        "sap_hash_short": sap_sha[:8] if sap_sha else "—",
+        "sap_path": sap_status.get("path") or "—",
+        "plan_file_date": _fmt_mtime(plan_status.get("mtime")),
+        "plan_hash_short": plan_sha[:8] if plan_sha else "—",
+        "plan_path": plan_status.get("path") or "—",
+        "plan_size": plan_status.get("size") or 0,
+        "maquinas_file_date": _fmt_mtime(maq_status.get("mtime")),
+        "maquinas_hash_short": maq_sha[:8] if maq_sha else "—",
+        "maquinas_path": maq_status.get("path") or "—",
+        "colaboradores_file_date": _fmt_mtime(colab_status.get("mtime")),
+        "colaboradores_hash_short": colab_sha[:8] if colab_sha else "—",
+        "colaboradores_path": colab_status.get("path") or "—",
         "flash_ok": request.query_params.get("ok"),
         "flash_err": request.query_params.get("err"),
         "active_tab": "refs",
@@ -1645,24 +1922,24 @@ async def refs_upload(
     kind: str = Form(...),
     file: UploadFile = File(...),
 ) -> Response:
-    """Recebe um StockSAP.xlsx / plan_colunas_cpis.xlsx, valida-o e substitui
+    """Recebe um workbook de refs, valida-o e substitui
     o ficheiro vivo. Recarrega as refs DIRETO do ficheiro (sem acumulação
     histórica). NÃO re-cross-checka folhas — isso é o botão 'Re-validar'."""
     from app.cross_check import refs_uploads
+    from app.cross_check.ref_watcher import file_sha256
     if kind not in _REFS_FILENAMES:
         raise HTTPException(400, "kind inválido")
     if not file.filename:
-        return RedirectResponse("/refs?err=sem+ficheiro", status_code=303)
+        return _refs_redirect("err", "sem ficheiro")
     if Path(file.filename).suffix.lower() not in (".xlsx", ".xlsm"):
-        return RedirectResponse(
-            "/refs?err=o+ficheiro+tem+de+ser+.xlsx", status_code=303)
+        return _refs_redirect("err", "o ficheiro tem de ser .xlsx")
 
     # R118 — rede de segurança global: qualquer exceção (PermissionError no
     # mkdir, falha do watcher, etc.) é silenciosa hoje e dá página em branco
     # ao operador. Captura e devolve mensagem útil em ?err=...
     try:
         watcher = get_watcher()
-        target = watcher.sap_path if kind == "stocksap" else watcher.plan_path
+        target = getattr(watcher, _REFS_WATCHER_ATTRS[kind])
         target.parent.mkdir(parents=True, exist_ok=True)
         # Temp file keeps the .xlsx suffix — openpyxl validates by extension.
         tmp = target.with_name(f"{target.stem}.upload-tmp{target.suffix}")
@@ -1674,15 +1951,26 @@ async def refs_upload(
                 if bytes_written > _MAX_UPLOAD_BYTES:
                     f.close()
                     tmp.unlink(missing_ok=True)
-                    return RedirectResponse(
-                        "/refs?err=ficheiro+demasiado+grande", status_code=303)
+                    return _refs_redirect("err", "ficheiro demasiado grande")
                 f.write(chunk)
 
-        err = _validate_refs_xlsx(tmp, kind)
+        err, upload_info = _inspect_refs_xlsx(tmp, kind)
         if err:
             tmp.unlink(missing_ok=True)
-            return RedirectResponse(
-                f"/refs?err=ficheiro+rejeitado:+{err}", status_code=303)
+            return _refs_redirect("err", f"ficheiro rejeitado: {err}")
+        upload_sha = file_sha256(tmp)
+
+        # R134 — backup do ficheiro vivo ANTES de o substituir, para poder
+        # restaurar se a validação/reload falhar (um ficheiro mau nunca fica
+        # ativo com refs inconsistentes nem entala scans). Best-effort: se não
+        # der para copiar, segue sem rollback em vez de bloquear o upload.
+        backup: Path | None = None
+        if target.exists():
+            backup = target.with_name(f"{target.stem}.prevbak{target.suffix}")
+            try:
+                shutil.copy2(target, backup)
+            except Exception:  # noqa: BLE001
+                backup = None
 
         # os.replace falha se o ficheiro vivo estiver aberto (ex.: Excel) — tenta
         # algumas vezes antes de desistir com um erro claro.
@@ -1696,31 +1984,88 @@ async def refs_upload(
                 await asyncio.sleep(0.3)
         if not replaced:
             tmp.unlink(missing_ok=True)
-            return RedirectResponse(
-                "/refs?err=ficheiro+em+uso+-+fecha+o+Excel+e+tenta+outra+vez",
-                status_code=303)
-        refs = get_watcher().force_reload()  # recarrega direto do ficheiro
-        # R115 — refs novas invalidam o agregado /obras
+            if backup is not None:
+                backup.unlink(missing_ok=True)
+            return _refs_redirect(
+                "err", "ficheiro em uso - fecha o Excel e tenta outra vez",
+            )
+
+        def _rollback(msg: str) -> Response:
+            # R134 — restaura o ficheiro anterior e recarrega refs a partir
+            # dele, deixando ficheiro vivo e refs em memória consistentes.
+            if backup is not None and backup.exists():
+                try:
+                    os.replace(backup, target)
+                    watcher.force_reload()
+                except Exception:  # noqa: BLE001
+                    traceback.print_exc()
+            return _refs_redirect("err", msg)
+
+        active_sha = file_sha256(target)
+        if active_sha != upload_sha:
+            return _rollback(
+                "upload falhou verificação: o ficheiro ativo não tem o mesmo hash",
+            )
+
+        refs = watcher.force_reload()  # recarrega direto do ficheiro
+        if refs.get(_REFS_SHA_KEYS[kind]) != active_sha:
+            return _rollback(
+                "upload falhou verificação: refs carregadas não batem o ficheiro ativo",
+            )
+
+        # Sucesso — descartar o backup transitório.
+        if backup is not None:
+            backup.unlink(missing_ok=True)
+
+        # R115 + upload hardening — refs novas invalidam agregados/caches.
         try:
             from app.pipeline.obras_status import invalidate_cache as obras_inv
             obras_inv()
         except Exception:  # noqa: BLE001
             pass
+        try:
+            from app.pipeline.of_consumption import invalidate_cache as of_inv
+            of_inv()
+        except Exception:  # noqa: BLE001
+            pass
         stats = refs.get("stats", {})
-        n_rows = stats.get("n_plan_rows" if kind == "plan" else "n_lotes", 0)
+        n_rows = _refs_upload_count(kind, refs, upload_info)
+        # R134 — `stats` tem sempre as chaves (default 0), por isso o fallback
+        # ao upload_info só dispara com `or` (e não com get(key, default)).
+        n_ofs = stats.get("n_ofs") or upload_info.get("n_ofs", 0)
+        n_ovs = stats.get("n_ovs") or upload_info.get("n_ovs", 0)
         # R118 — record() é best-effort; nunca falhar o ?ok=
         try:
-            refs_uploads.record(kind, target.name, n_rows)
+            refs_uploads.record(
+                kind, target.name, n_rows,
+                sha256=active_sha,
+                n_ofs=n_ofs if kind == "plan" else None,
+                n_ovs=n_ovs if kind == "plan" else None,
+                size=target.stat().st_size,
+            )
         except Exception:  # noqa: BLE001
             traceback.print_exc()
-        return RedirectResponse(f"/refs?ok={kind}+atualizado", status_code=303)
+        if kind == "plan":
+            ok_msg = (
+                f"Plano atualizado: {n_rows} linhas, {n_ofs} OFs, "
+                f"{n_ovs} OVs, hash {active_sha[:8]}"
+            )
+        elif kind == "stocksap":
+            ok_msg = f"StockSAP atualizado: {n_rows} lotes, hash {active_sha[:8]}"
+        elif kind == "maquinas":
+            ok_msg = f"Máquinas atualizadas: {n_rows} máquinas, hash {active_sha[:8]}"
+        else:
+            ok_msg = (
+                f"Colaboradores atualizados: {n_rows} colaboradores, "
+                f"hash {active_sha[:8]}"
+            )
+        return _refs_redirect("ok", ok_msg)
     except Exception as e:  # noqa: BLE001
         # R118 — captura qualquer exceção não tratada e devolve mensagem
         # útil ao operador (antes: silêncio / página em branco).
         traceback.print_exc()
-        msg = str(e)[:80].replace("\n", " ").replace("&", "").replace("?", "")
-        return RedirectResponse(
-            f"/refs?err=erro+inesperado:+{msg}", status_code=303)
+        msg = str(e)[:80].replace("\n", " ")
+        return _refs_redirect("err", f"erro inesperado: {msg}")
 
 
 @app.post("/refs/revalidate")

@@ -1,8 +1,8 @@
-"""Upload log for the SAP/plan reference files (Round 106).
+"""Upload log for the reference workbooks (Round 106).
 
-Just an audit trail — one line per StockSAP/plan upload through the /refs
-page. No data accumulation: the refs themselves come straight from the
-current Excel files (the Round 104 cumulative merge was removed in R106).
+Just an audit trail — one line per workbook upload through the /refs page.
+No data accumulation: the refs themselves come straight from the current
+Excel files (the Round 104 cumulative merge was removed in R106).
 
 Stored at ``data/refs_uploads.json`` as ``{"uploads": [...]}``.
 """
@@ -32,16 +32,34 @@ def recent() -> list[dict]:
     return uploads if isinstance(uploads, list) else []
 
 
-def record(kind: str, filename: str, n_rows: int) -> None:
-    """Append one upload entry (kind = 'plan' | 'stocksap')."""
+def record(
+    kind: str,
+    filename: str,
+    n_rows: int,
+    *,
+    sha256: str = "",
+    n_ofs: int | None = None,
+    n_ovs: int | None = None,
+    size: int | None = None,
+) -> None:
+    """Append one upload entry for plan/StockSAP/maquinas/colaboradores."""
     with _lock:
         uploads = recent()
-        uploads.insert(0, {
+        entry = {
             "at": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
             "kind": kind,
             "filename": filename,
             "n_rows": n_rows,
-        })
+        }
+        if sha256:
+            entry["sha256"] = sha256
+        if n_ofs is not None:
+            entry["n_ofs"] = n_ofs
+        if n_ovs is not None:
+            entry["n_ovs"] = n_ovs
+        if size is not None:
+            entry["size"] = size
+        uploads.insert(0, entry)
         _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = _LOG_PATH.with_suffix(".json.tmp")
         tmp.write_text(

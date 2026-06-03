@@ -24,6 +24,8 @@ from typing import Any, Final
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
+from app.dq.ferramenta import normalize_ferramenta
+
 _DATE_RE = re.compile(r"^(\d{1,2})-(\d{1,2})-(\d{4})$")
 
 HEADER_FIELDS: Final[tuple[str, ...]] = (
@@ -131,6 +133,12 @@ class Row(_StringFields):
     # R128 — kanban LASER (dimensões diâmetro base/topo)
     dbase: str = ""
     dtopo: str = ""
+
+    @field_validator("coni", mode="after")
+    @classmethod
+    def _normalise_coni(cls, value: str) -> str:
+        canonical = normalize_ferramenta(value)
+        return canonical if canonical is not None else value
 
 
 class Footer(_StringFields):

@@ -38,7 +38,7 @@ _NUMERIC_DIM = r"^\d{2,5}$|^$"
 _NUMERIC_LARGE = r"^\d{1,5}$|^$"
 _ESP = r"^\d{1,2}(?:[.,]\d)?$|^$"
 _HORAS = r"^\d{1,2}(?:[: ]?\d{0,2})?\s?[hH]?$|^\d{1,2}[.,]\d{1,2}$|^$"
-_CONI = r"^(?:OCT\.?|TORRES|T|\d{1,3})$|^$"
+_CONI = r"^(?:CONI|TORRES|OCT|CIL|CIO|CIB|\d+)$|^$"
 _PRI = r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$|^$"
 
 # Free-form text fields: alphanumeric, common punctuation/accents. Not

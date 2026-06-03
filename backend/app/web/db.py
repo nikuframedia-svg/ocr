@@ -18,6 +18,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+from app.dq.ferramenta import canonical_ferramenta_or_raw
+
 # R117 — logger para auto-promote de propostas em save_proposal
 logger = logging.getLogger(__name__)
 
@@ -1016,7 +1018,7 @@ def _sync_production_rows(c: sqlite3.Connection, sheet_id: int, sheet_data: dict
                 _parse_int(row.get("comp_mm")),
                 _parse_int(row.get("larg_mm")),
                 (row.get("lote") or "").strip() or None,
-                (row.get("coni") or "").strip() or None,
+                canonical_ferramenta_or_raw(row.get("coni")) or None,
                 _parse_float(row.get("esp")),
                 _parse_int(row.get("lbase")),
                 _parse_int(row.get("ltopo")),

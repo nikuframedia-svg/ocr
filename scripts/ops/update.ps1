@@ -22,6 +22,13 @@ $protect = @(
   "data/cross_sheet.json",
   "data/refs_cumulative.json",
   "kanban_refs/04_Documentacao/_refs_status.json",
+  # R134 — os workbooks de refs sao actualizados pelo operador via /refs upload
+  # (os.replace sobre o ficheiro tracked). Sem assume-unchanged, o 'git pull'
+  # abaixo abortava/revertia o upload e o restart minerava o plano antigo.
+  "kanban_refs/04_Documentacao/plan_colunas_cpis.xlsx",
+  "kanban_refs/04_Documentacao/StockSAP.xlsx",
+  "kanban_refs/04_Documentacao/maquinas.xlsx",
+  "kanban_refs/04_Documentacao/ListaColaboradores.xlsx",
   "lexicons/learned_overlay.json",
   "lexicons/sap_plan_mined.json"
 )

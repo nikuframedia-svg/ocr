@@ -32,8 +32,10 @@ Refs dict shape (matches old ``sap_plan_mined.json``):
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import hashlib
 import threading
 import time
 from datetime import datetime, timezone
@@ -41,6 +43,8 @@ from pathlib import Path
 from typing import Any
 
 from app.pipeline.scoring_engine import normalize_of
+
+logger = logging.getLogger(__name__)
 
 # R64 + R118 — fallback inteligente: env var > path produção (se existe) >
 # `<repo>/kanban_refs/04_Documentacao`. Faz o servidor "just work" em dev
@@ -85,13 +89,107 @@ def _empty_refs() -> dict[str, Any]:
         # name resolves directly via this lexicon.
         "operador_aliases": {},
         "loaded_at": None,
+        "sap_path": "",
+        "sap_sha256": "",
+        "sap_size": 0,
         "sap_mtime": 0.0,
         "plan_mtime": 0.0,
+        "plan_path": "",
+        "plan_sha256": "",
+        "plan_size": 0,
+        "colab_path": "",
+        "colab_sha256": "",
+        "colab_size": 0,
         "colab_mtime": 0.0,
+        "maquinas_path": "",
+        "maquinas_sha256": "",
+        "maquinas_size": 0,
         "maquinas_mtime": 0.0,
         "aliases_mtime": 0.0,
-        "stats": {"n_lotes": 0, "n_ofs": 0, "n_plan_rows": 0, "n_clientes": 0, "n_colaboradores": 0, "n_maquinas": 0, "n_ofs_file": 0, "n_lotes_file": 0},
+        "stats": {
+            "n_lotes": 0, "n_ofs": 0, "n_ovs": 0,
+            "n_plan_rows": 0, "n_clientes": 0,
+            "n_colaboradores": 0, "n_maquinas": 0,
+            "n_ofs_file": 0, "n_lotes_file": 0,
+        },
         "available": False,
+    }
+
+
+def file_sha256(path: Path) -> str:
+    """Return SHA-256 for a reference file without loading it all in memory."""
+    h = hashlib.sha256()
+    with Path(path).open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _set_file_meta(refs: dict[str, Any], prefix: str, path: Path | str | None) -> None:
+    """Store path/hash/mtime/size for one refs workbook."""
+    if path is None:
+        return
+    p = Path(path)
+    refs[f"{prefix}_path"] = str(p)
+    if not p.exists():
+        return
+    st = p.stat()
+    refs[f"{prefix}_mtime"] = st.st_mtime
+    refs[f"{prefix}_size"] = st.st_size
+    refs[f"{prefix}_sha256"] = file_sha256(p)
+
+
+def _snapshot_file(
+    refs: dict[str, Any],
+    prefix: str,
+    *,
+    stats: dict[str, Any],
+    counts: dict[str, str],
+) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "path": refs.get(f"{prefix}_path") or "",
+        "sha256": refs.get(f"{prefix}_sha256") or "",
+        "mtime": refs.get(f"{prefix}_mtime") or 0.0,
+        "size": refs.get(f"{prefix}_size") or 0,
+    }
+    for label, stat_key in counts.items():
+        out[label] = stats.get(stat_key, 0)
+    return out
+
+
+def refs_snapshot(refs: dict, plan_path: Path | str | None = None) -> dict[str, Any]:
+    """Small audit payload identifying the refs used by a cross-check run."""
+    stats = refs.get("stats") or {}
+    files = {
+        "plan": _snapshot_file(
+            refs, "plan", stats=stats,
+            counts={"rows": "n_plan_rows", "ofs": "n_ofs", "ovs": "n_ovs"},
+        ),
+        "stocksap": _snapshot_file(
+            refs, "sap", stats=stats, counts={"lotes": "n_lotes"},
+        ),
+        "maquinas": _snapshot_file(
+            refs, "maquinas", stats=stats, counts={"maquinas": "n_maquinas"},
+        ),
+        "colaboradores": _snapshot_file(
+            refs, "colab", stats=stats,
+            counts={"colaboradores": "n_colaboradores"},
+        ),
+    }
+    if plan_path:
+        files["plan"]["path"] = str(plan_path)
+    return {
+        # Legacy top-level fields kept for old JSON/tests, but the canonical
+        # audit payload is now refs_snapshot["files"].
+        "plan_path": files["plan"]["path"],
+        "plan_sha256": refs.get("plan_sha256") or "",
+        "plan_mtime": refs.get("plan_mtime") or 0.0,
+        "plan_size": refs.get("plan_size") or 0,
+        "plan_rows": stats.get("n_plan_rows", 0),
+        "plan_ofs": stats.get("n_ofs", 0),
+        "plan_ovs": stats.get("n_ovs", 0),
+        "files": files,
+        "refs_loaded_at": refs.get("loaded_at"),
     }
 
 
@@ -108,19 +206,33 @@ def _mine_colaboradores(colab_path: Path) -> dict[int, dict[str, str]]:
     out: dict[int, dict[str, str]] = {}
     wb = openpyxl.load_workbook(colab_path, read_only=True, data_only=True)
     ws = wb["Export"] if "Export" in wb.sheetnames else wb.active
+    hdrs: dict[str, int] = {}
     for i, r in enumerate(ws.iter_rows(values_only=True)):
         if i == 0:
+            hdrs = {
+                str(h).strip().lower(): j
+                for j, h in enumerate(r or ())
+                if h
+            }
             continue
-        if r is None or r[0] is None:
+        if r is None:
+            continue
+        pernr_idx = hdrs.get("pernr", 0)
+        sname_idx = hdrs.get("sname", 1)
+        cod_idx = hdrs.get("cod", 2)
+        cod_raw = r[cod_idx] if cod_idx < len(r) else None
+        pernr_raw = r[pernr_idx] if pernr_idx < len(r) else None
+        sname_raw = r[sname_idx] if sname_idx < len(r) else None
+        if cod_raw is None:
             continue
         try:
-            cod = int(r[2]) if r[2] is not None else None
+            cod = int(cod_raw) if cod_raw is not None else None
         except (TypeError, ValueError):
             continue
         if cod is None:
             continue
-        pernr = str(r[0]).strip()
-        sname = str(r[1] or "").strip().upper()
+        pernr = str(pernr_raw or "").strip()
+        sname = str(sname_raw or "").strip().upper()
         if not sname:
             continue
         # First entry wins on cod collisions (should not happen — cod is PK)
@@ -221,6 +333,7 @@ def _mine_from_excel(
     sap_path: Path,
     plan_path: Path,
     colab_path: Path | None = None,
+    maq_path: Path | None = None,
 ) -> dict[str, Any]:
     """Re-mine StockSAP + plan_colunas + ListaColaboradores Excel files into
     in-memory refs. Mirror of scripts/mine_sap_plan.py logic (kept inline
@@ -228,6 +341,12 @@ def _mine_from_excel(
     import openpyxl
 
     refs = _empty_refs()
+    if maq_path is None and colab_path:
+        maq_path = colab_path.parent / "maquinas.xlsx"
+    _set_file_meta(refs, "sap", sap_path)
+    _set_file_meta(refs, "plan", plan_path)
+    _set_file_meta(refs, "colab", colab_path)
+    _set_file_meta(refs, "maquinas", maq_path)
 
     # ---- StockSAP: column0=Lote, col1=Qtd, col2=Espessura, col3=Largura, col4=Desc
     stock_full: dict[str, dict] = {}
@@ -265,6 +384,8 @@ def _mine_from_excel(
     # ---- plan_colunas: cliente, ov, of, designacao, quanttrp, bf, esp, lbase, ltopo, ltotal, comp, dbase, dtopo, ...
     of_to_entries: dict[str, list[dict]] = {}
     if plan_path.exists():
+        refs["plan_size"] = plan_path.stat().st_size
+        refs["plan_sha256"] = file_sha256(plan_path)
         wb = openpyxl.load_workbook(plan_path, read_only=True, data_only=True)
         ws = wb["plan_colunas_cpis"] if "plan_colunas_cpis" in wb.sheetnames else wb.active
         hdrs: dict[str, int] = {}
@@ -276,8 +397,13 @@ def _mine_from_excel(
                         hdrs[str(h).strip().lower()] = j
                 phase_cols = _phase_columns(hdrs)
                 continue
-            if r[0] is None:
-                break
+            # R134 — não terminar no primeiro col-0 vazio: a coluna 0 é
+            # `cliente`, que pode vir em branco a meio do plano (linhas de
+            # continuação). Antes (`if r[0] is None: break`) truncava OFs
+            # silenciosamente, divergindo do validador `_inspect_refs_xlsx`
+            # (que faz `continue`). Saltar só linhas totalmente vazias.
+            if r is None or all(c in (None, "") for c in r):
+                continue
             try:
                 of_int = int(float(str(r[hdrs["of"]])))
             except (ValueError, TypeError, KeyError):
@@ -362,7 +488,6 @@ def _mine_from_excel(
     # Quando vários M-cods reclamam a mesma chave, ganha o de menor
     # `ordem` (máquina mais usada). Prioridade mais baixa nunca é
     # sobrescrita — desigkanban exacto continua sempre autoritativo.
-    maq_path = colab_path.parent / "maquinas.xlsx" if colab_path else None
     if maq_path and maq_path.exists():
         wb = openpyxl.load_workbook(maq_path, read_only=True, data_only=True)
         ws = wb.active
@@ -447,7 +572,10 @@ def _mine_from_excel(
     refs["stats"]["n_lotes"] = len(refs["lotes_sap"])
     refs["loaded_at"] = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
     refs["available"] = bool(
-        refs["lotes_sap"] or refs["ofs_plan_str"] or refs["colaboradores"]
+        refs["lotes_sap"]
+        or refs["ofs_plan_str"]
+        or refs["colaboradores"]
+        or refs["maquinas_by_codmaq"]
     )
     return refs
 
@@ -470,6 +598,9 @@ def _persist_refs_status(refs: dict, doc_dir: Path, *, prev_stats: dict | None =
                 datetime.fromtimestamp(refs["sap_mtime"], tz=timezone.utc).isoformat(timespec="seconds")
                 if refs["sap_mtime"] else None
             ),
+            "path": refs.get("sap_path"),
+            "sha256": refs.get("sap_sha256"),
+            "size": refs.get("sap_size"),
             "n_lotes": refs["stats"]["n_lotes"],
         },
         "plan_colunas": {
@@ -477,9 +608,33 @@ def _persist_refs_status(refs: dict, doc_dir: Path, *, prev_stats: dict | None =
                 datetime.fromtimestamp(refs["plan_mtime"], tz=timezone.utc).isoformat(timespec="seconds")
                 if refs["plan_mtime"] else None
             ),
+            "path": refs.get("plan_path"),
+            "sha256": refs.get("plan_sha256"),
+            "size": refs.get("plan_size"),
             "n_ofs": refs["stats"]["n_ofs"],
+            "n_ovs": refs["stats"].get("n_ovs", 0),
             "n_rows": refs["stats"]["n_plan_rows"],
             "n_clientes": refs["stats"]["n_clientes"],
+        },
+        "maquinas": {
+            "mtime": (
+                datetime.fromtimestamp(refs["maquinas_mtime"], tz=timezone.utc).isoformat(timespec="seconds")
+                if refs["maquinas_mtime"] else None
+            ),
+            "path": refs.get("maquinas_path"),
+            "sha256": refs.get("maquinas_sha256"),
+            "size": refs.get("maquinas_size"),
+            "n_maquinas": refs["stats"].get("n_maquinas", 0),
+        },
+        "colaboradores": {
+            "mtime": (
+                datetime.fromtimestamp(refs["colab_mtime"], tz=timezone.utc).isoformat(timespec="seconds")
+                if refs["colab_mtime"] else None
+            ),
+            "path": refs.get("colab_path"),
+            "sha256": refs.get("colab_sha256"),
+            "size": refs.get("colab_size"),
+            "n_colaboradores": refs["stats"].get("n_colaboradores", 0),
         },
         "diff_vs_previous": diff,
     }
@@ -534,6 +689,10 @@ class RefWatcher:
         self._lock = threading.Lock()
         self._last_check_ts = 0.0
         self._check_interval = 1.0  # seconds — debounce mtime stat calls
+        # R134 — snapshot dos mtimes de um ficheiro que falhou a mineração.
+        # Enquanto o ficheiro on-disk não mudar, não voltamos a tentar minerar
+        # (evita martelar o miner em cada scan com um ficheiro corrupto).
+        self._failed_mtimes: tuple[float, float, float, float, float] | None = None
 
     def _current_mtimes(self) -> tuple[float, float, float, float, float]:
         sap_m = self.sap_path.stat().st_mtime if self.sap_path.exists() else 0.0
@@ -545,7 +704,12 @@ class RefWatcher:
         return sap_m, plan_m, colab_m, maq_m, aliases_m
 
     def _needs_reload(self) -> bool:
-        sap_m, plan_m, colab_m, maq_m, aliases_m = self._current_mtimes()
+        current = self._current_mtimes()
+        # R134 — ficheiro que já falhou a mineração e não mudou desde então:
+        # não voltar a tentar (só re-tenta quando o conteúdo/mtime muda).
+        if self._failed_mtimes is not None and current == self._failed_mtimes:
+            return False
+        sap_m, plan_m, colab_m, maq_m, aliases_m = current
         return (
             sap_m != self._refs.get("sap_mtime", 0.0)
             or plan_m != self._refs.get("plan_mtime", 0.0)
@@ -553,6 +717,37 @@ class RefWatcher:
             or maq_m != self._refs.get("maquinas_mtime", 0.0)
             or aliases_m != self._refs.get("aliases_mtime", 0.0)
         )
+
+    def _reload_locked(self) -> None:
+        """Re-mine refs into ``self._refs`` (caller holds ``self._lock``).
+
+        R134 — em falha (ficheiro corrupto/aberto a meio), **mantém** as refs
+        anteriores em vez de propagar a exceção, para um ficheiro mau não
+        rebentar scans no hot path. As refs novas invalidam o cache de índices
+        do motor (`scoring_engine._INDEX_CACHE`).
+        """
+        prev_stats = (
+            dict(self._refs.get("stats", {})) if self._refs.get("available") else None
+        )
+        try:
+            new_refs = _mine_from_excel(
+                self.sap_path, self.plan_path, self.colab_path, self.maq_path
+            )
+        except Exception:  # noqa: BLE001
+            self._failed_mtimes = self._current_mtimes()
+            logger.exception(
+                "ref reload falhou — a manter refs anteriores (%s)", self.plan_path
+            )
+            return
+        self._failed_mtimes = None
+        self._refs = new_refs
+        _persist_refs_status(self._refs, self.doc_dir, prev_stats=prev_stats)
+        _persist_legacy_mined(self._refs, self.repo_root)
+        try:
+            from app.pipeline import scoring_engine
+            scoring_engine.invalidate_index_cache()
+        except Exception:  # noqa: BLE001
+            pass
 
     def get_refs(self) -> dict[str, Any]:
         """Return current refs. Cheap (debounced mtime check ≤ 1/second).
@@ -564,19 +759,13 @@ class RefWatcher:
         with self._lock:
             self._last_check_ts = now
             if self._needs_reload():
-                prev_stats = dict(self._refs.get("stats", {})) if self._refs.get("available") else None
-                self._refs = _mine_from_excel(self.sap_path, self.plan_path, self.colab_path)
-                _persist_refs_status(self._refs, self.doc_dir, prev_stats=prev_stats)
-                _persist_legacy_mined(self._refs, self.repo_root)
+                self._reload_locked()
         return self._refs
 
     def force_reload(self) -> dict[str, Any]:
         """Skip mtime check, force reload + persist. Used by /admin/reload-refs."""
         with self._lock:
-            prev_stats = dict(self._refs.get("stats", {})) if self._refs.get("available") else None
-            self._refs = _mine_from_excel(self.sap_path, self.plan_path, self.colab_path)
-            _persist_refs_status(self._refs, self.doc_dir, prev_stats=prev_stats)
-            _persist_legacy_mined(self._refs, self.repo_root)
+            self._reload_locked()
             self._last_check_ts = time.monotonic()
         return self._refs
 
@@ -590,15 +779,36 @@ class RefWatcher:
                 "path": str(self.sap_path),
                 "exists": self.sap_path.exists(),
                 "mtime": refs["sap_mtime"],
+                "sha256": refs.get("sap_sha256", ""),
+                "size": refs.get("sap_size", 0),
                 "n_lotes": refs["stats"]["n_lotes"],
             },
             "plan": {
                 "path": str(self.plan_path),
                 "exists": self.plan_path.exists(),
                 "mtime": refs["plan_mtime"],
+                "sha256": refs.get("plan_sha256", ""),
+                "size": refs.get("plan_size", 0),
                 "n_ofs": refs["stats"]["n_ofs"],
+                "n_ovs": refs["stats"].get("n_ovs", 0),
                 "n_rows": refs["stats"]["n_plan_rows"],
                 "n_clientes": refs["stats"]["n_clientes"],
+            },
+            "maquinas": {
+                "path": str(self.maq_path),
+                "exists": self.maq_path.exists(),
+                "mtime": refs["maquinas_mtime"],
+                "sha256": refs.get("maquinas_sha256", ""),
+                "size": refs.get("maquinas_size", 0),
+                "n_maquinas": refs["stats"].get("n_maquinas", 0),
+            },
+            "colaboradores": {
+                "path": str(self.colab_path),
+                "exists": self.colab_path.exists(),
+                "mtime": refs["colab_mtime"],
+                "sha256": refs.get("colab_sha256", ""),
+                "size": refs.get("colab_size", 0),
+                "n_colaboradores": refs["stats"].get("n_colaboradores", 0),
             },
         }
 

@@ -2,7 +2,7 @@
 
 Cobre:
 - Devolução básica do `shadow_score` (shape, summary, duração)
-- Campos sem ref (PRI/CONI/QTD) ficam NA
+- Campos sem ref (PRI/QTD) ficam NA; ferramenta/coni valida vocabulário
 - Geração de candidatos por campo (top-K)
 - Funcionamento com refs vazias (degrada para NA total)
 """
@@ -167,7 +167,7 @@ class TestShadowScore:
         scoring, total, snapped, confirmed, na, dur_ms = shadow_score(
             sheet_data, None, _REFS
         )
-        assert scoring["engine_version"] == "v9_R134"
+        assert scoring["engine_version"] == "v10_R140"
         assert scoring["template_name"] == "bobine_formato"
         assert "checked_at" in scoring
         assert scoring["summary"]["total"] == total
@@ -239,7 +239,7 @@ class TestShadowScore:
         assert scoring["header"]["operador"]["status"] == "confirmed"
 
     def test_no_ref_fields_stay_ocr_raw(self):
-        """PRI/CONI/QTD ficam OCR raw + status NA mesmo com refs disponíveis."""
+        """PRI/QTD ficam OCR raw + status NA mesmo com refs disponíveis."""
         sheet_data = {
             "template_name": "bobine_formato", "header": {}, "footer": {},
             "rows": [{
@@ -249,10 +249,35 @@ class TestShadowScore:
         }
         scoring, *_ = shadow_score(sheet_data, None, _REFS)
         row = scoring["rows"][0]
-        # pri/qtd/coni: NA + valor OCR preservado
-        for field in ("pri", "qtd", "coni"):
+        # pri/qtd: NA + valor OCR preservado
+        for field in ("pri", "qtd"):
             assert row["fields"][field]["status"] == "NA"
             assert row["fields"][field]["source"] == "ocr_raw"
+        assert row["fields"]["coni"]["status"] == "confirmed"
+        assert row["fields"]["coni"]["value"] == "OCT"
+
+    def test_ferramenta_coni_alias_is_normalised(self):
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"of": "262107", "qtd": "5", "coni": "OCT."}],
+        }
+        scoring, *_ = shadow_score(sheet_data, None, _REFS)
+        cell = scoring["rows"][0]["fields"]["coni"]
+        assert cell["value"] == "OCT"
+        assert cell["status"] == "snapped"
+        assert cell["source"] == "lexicon"
+
+    @pytest.mark.parametrize("bad", ["T", "ABC"])
+    def test_ferramenta_coni_invalid_value_goes_to_review(self, bad):
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"of": "262107", "qtd": "5", "coni": bad}],
+        }
+        scoring, *_ = shadow_score(sheet_data, None, _REFS)
+        cell = scoring["rows"][0]["fields"]["coni"]
+        assert cell["value"] == bad
+        assert cell["status"] == "very_different"
+        assert cell["source"] == "ocr_raw"
 
     def test_winner_picks_entry_via_agreement(self):
         """Linha com cliente+of+modelo a apontar para a mesma entry deve
@@ -277,16 +302,17 @@ class TestFindWinner:
         assert winner is None
 
 
-class TestR134SubstituteEverything:
-    """R134 — substitute-everything (filosofia R108, R130 revertido): a
-    entry vencedora holística (máximo de campos iguais, peso igual por
-    campo) substitui TODOS os campos, incl. of/ov/cliente. O valor da
-    célula passa a ser o do winner; após auto-apply + re-cross-check fica
-    MATCH/verde."""
+class TestR140IdentityAnchoring:
+    """R140 — OF/OV lidas no papel ancoram a escolha da linha do plan.
+
+    O motor continua a substituir pelos valores canónicos quando há uma
+    identidade forte (OF ou OV) a apontar para a entry vencedora, mas já não
+    troca uma OF escrita por outra apenas porque dimensões/modelo batem.
+    """
 
     def test_of_substituted_by_winner(self):
-        """OCR de OF que não existe no plan mas a linha bate uma entry pelos
-        outros campos → OF substituída pelo valor do winner (não preserva OCR)."""
+        """OCR de OF que não existe mas OV existe no plan → OV ancora o winner
+        e a OF é corrigida para a entry dessa OV."""
         sheet_data = {
             "template_name": "bobine_formato", "header": {}, "footer": {},
             "rows": [{
@@ -333,10 +359,9 @@ class TestR134SubstituteEverything:
         cli = scoring["rows"][0]["fields"]["cliente"]
         assert cli["value"] == "ELECNOR"   # substituído pelo winner
 
-    def test_512_dimensional_only_winner_substitutes_all(self):
-        """Caso #512 (decisão do utilizador): OCR of/ov/cliente/modelo não
-        batem nenhuma entry; o winner é escolhido pelo máximo de campos
-        iguais (aqui as medidas) → substitui tudo por essa entry."""
+    def test_dimensional_only_does_not_replace_written_identity(self):
+        """Regressão #967: OCR of/ov/cliente/modelo não batem nenhuma entry;
+        mesmo que as medidas batam outra linha, não substitui a OF/OV."""
         sheet_data = {
             "template_name": "bobine_formato", "header": {}, "footer": {},
             "rows": [{
@@ -348,10 +373,41 @@ class TestR134SubstituteEverything:
         }
         scoring, *_ = shadow_score(sheet_data, None, _REFS)
         fields = scoring["rows"][0]["fields"]
-        # winner = entry 262108 (bate as 5 medidas) → substitui of/ov/cliente.
-        assert fields["of"]["value"] == "262108"
-        assert fields["ov"]["value"] == "2410002"
-        assert fields["cliente"]["value"] == "MTG BELUX"
+        assert fields["of"]["value"] in ("111111", "")
+        assert fields["ov"]["value"] in ("8888888", "")
+        assert scoring["rows"][0]["winner_of"] is None
+
+    def test_stale_refs_do_not_select_anulada_by_geometry(self):
+        """Caso real #967: se a OF/OV nova ainda não existe nas refs, uma
+        linha anulada com geometria igual não pode ganhar."""
+        refs = {
+            **_REFS,
+            "of_to_entries": {
+                "232976": [{
+                    "ov": "2305550",
+                    "cliente": "ABILIO E PAULO PEIXOTO",
+                    "designacao": "CAC4E10B - 1ud- Anulada email Helena Silva 19-06",
+                    "comp": 11050, "lbase": 659, "ltopo": 242, "esp": 4,
+                    "quanttrp": 0,
+                }],
+            },
+            "of_to_ovs": {"232976": frozenset({"2305550"})},
+            "clientes_plan": frozenset({"ABILIO E PAULO PEIXOTO"}),
+        }
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{
+                "cliente": "CODELBA", "ov": "2603977", "of": "263348",
+                "modelo": "CA04E10B", "comp_mm": "11050",
+                "lbase": "659", "ltopo": "242", "esp": "4",
+            }],
+        }
+        scoring, *_ = shadow_score(sheet_data, None, refs)
+        fields = scoring["rows"][0]["fields"]
+        assert scoring["rows"][0]["winner_of"] is None
+        assert fields["of"]["value"] in ("263348", "")
+        assert fields["ov"]["value"] in ("2603977", "")
+        assert fields["of"]["value"] != "232976"
 
     def test_score_propagated_to_legacy_cell(self):
         """Legacy cell carrega `score` (winner score) — usado no audit."""
@@ -411,11 +467,13 @@ class TestR139AcabamentoNoSubstitute:
         assert fields["modelo"]["source"] == "ocr_raw"
 
     def test_bobine_still_substitutes(self):
-        """Sanidade: o mesmo of divergente num template não-Acabamento continua
-        a ser substituído (R134 intacto)."""
+        """Sanidade: Bobine ainda substitui quando a OV ancora a entry."""
         sheet_data = {
             "template_name": "bobine_formato", "header": {}, "footer": {},
-            "rows": [{"of": "999999", "cliente": "MTG BELUX", "modelo": "OMEGA 1500 H"}],
+            "rows": [{
+                "of": "999999", "ov": "2410002",
+                "cliente": "MTG BELUX", "modelo": "OMEGA 1500 H",
+            }],
         }
         scoring, *_ = shadow_score(sheet_data, None, _REFS)
         assert scoring["rows"][0]["fields"]["of"]["value"] == "262108"
@@ -461,6 +519,17 @@ class TestR132MaqFustes:
         assert "M | R | XM | T" in prompt
         # qtd_metros vem na coluna line via _FIELD_LABELS
         assert "QTD (METROS)" in prompt
+
+    def test_production_prompt_uses_ferramenta_contract(self):
+        from app.pipeline.prompt_builder import build_prompt
+        from app.templates_registry import get_template
+
+        prompt = build_prompt(get_template("bobine_formato"))
+
+        assert "FERRAMENTA / CONI" in prompt
+        assert "CONI, TORRES, OCT, CIL, CIO, CIB" in prompt
+        assert '"OCT."' not in prompt
+        assert "text (T, OCT, TORRES)" not in prompt
 
     def test_acabamento_prompt_uses_tpl086_contract(self):
         """Acabamento usa o formato TPL086: OF/REFERÊNCIA-PEÇA/QTD."""

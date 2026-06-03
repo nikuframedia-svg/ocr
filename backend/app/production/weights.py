@@ -103,18 +103,12 @@ def find_plan_entry(row: dict, refs: dict | None) -> dict | None:
 
     OF is the primary key. When an OF has multiple plan entries, prefer the
     entry whose designation contains the OCR/reference model; then OV and
-    cliente are used as tie-breakers. Falls back to the first OF entry when
-    no stronger signal exists.
+    cliente are used as tie-breakers. If there is no OF match, fall back to
+    a unique ``OV + modelo`` match. Falls back to the first OF entry when no
+    stronger signal exists.
     """
     if not refs:
         return None
-    of_key = normalize_of(row.get("of"))
-    entries = (refs.get("of_to_entries") or {}).get(of_key) or []
-    if not entries:
-        return None
-    if len(entries) == 1:
-        return entries[0]
-
     row_model = _norm_text(row.get("modelo"))
     row_ov = str(row.get("ov") or "").strip()
     row_cliente = _norm_text(row.get("cliente"))
@@ -122,10 +116,13 @@ def find_plan_entry(row: dict, refs: dict | None) -> dict | None:
     row_lbase = _to_float(row.get("lbase"))
     row_ltopo = _to_float(row.get("ltopo"))
 
+    def model_matches(entry: dict) -> bool:
+        des = _norm_text(entry.get("designacao"))
+        return bool(row_model and des and (row_model in des or des in row_model))
+
     def score(entry: dict) -> tuple[int, float]:
         s = 0
-        des = _norm_text(entry.get("designacao"))
-        if row_model and des and (row_model in des or des in row_model):
+        if model_matches(entry):
             s += 8
         if row_ov and row_ov == str(entry.get("ov") or "").strip():
             s += 4
@@ -145,7 +142,32 @@ def find_plan_entry(row: dict, refs: dict | None) -> dict | None:
                     s += 1
         return s, -sum(diffs)
 
-    return max(entries, key=score)
+    def unique_ov_model_match() -> dict | None:
+        if not row_ov or not row_model:
+            return None
+        ov_entries = (refs.get("plan_by_ov") or {}).get(row_ov) or []
+        matches = [entry for entry in ov_entries if model_matches(entry)]
+        by_identity: dict[tuple[str, str], dict] = {}
+        for entry in matches:
+            key = (
+                str(entry.get("_of") or entry.get("of") or "").strip(),
+                _norm_text(entry.get("designacao")),
+            )
+            by_identity.setdefault(key, entry)
+        if len(by_identity) == 1:
+            return next(iter(by_identity.values()))
+        return None
+
+    of_key = normalize_of(row.get("of"))
+    entries = (refs.get("of_to_entries") or {}).get(of_key) or []
+    if entries:
+        best = entries[0] if len(entries) == 1 else max(entries, key=score)
+        best_ov = str(best.get("ov") or "").strip()
+        if row_ov and row_model and best_ov != row_ov and not model_matches(best):
+            return unique_ov_model_match()
+        return best
+
+    return unique_ov_model_match()
 
 
 def is_direct_consumption_row(row: dict) -> bool:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.dq.machines import resolve_machine_from_setor
 from app.templates_registry import DEFAULT_TEMPLATE, detect_template, get_template
 
 # Todos os labels de quinadora vindos do maquinas.xlsx (desigkanban + desmaq).
@@ -18,6 +19,29 @@ QUINADORA_LABELS = [
     "QUINADORA CÓNICA P8", "QUINADORA MTG3", "QUINADORA PUMA", "QUINADORA PUMA P4",
     "QUINADORA GUIFIL MTG2", "GUIFIL",
 ]
+
+
+def _machine_refs():
+    recs = {
+        "M041": {"codmaq": "M041", "desmaq": "QUINADORA ADIRA MTG4", "desigkanban": "QUINADORA ADIRA", "colunaexcel": "Q"},
+        "M044": {"codmaq": "M044", "desmaq": "QUINADORA ADIRA 14M P4", "desigkanban": "QUINADORA P4", "colunaexcel": "Q"},
+        "M045": {"codmaq": "M045", "desmaq": "QUINADORA ADIRA 14M P8", "desigkanban": "QUINADORA P8", "colunaexcel": "Q"},
+        "M067": {"codmaq": "M067", "desmaq": "QUINADORA GUIFIL MTG2", "desigkanban": "GUIFIL", "colunaexcel": "Q"},
+        "M081": {"codmaq": "M081", "desmaq": "QUINADORA MTG3", "desigkanban": "", "colunaexcel": "Q"},
+        "M040": {"codmaq": "M040", "desmaq": "QUINADORA CÓNICA P8", "desigkanban": "", "colunaexcel": "Q"},
+    }
+    return {
+        "maquinas_by_codmaq": recs,
+        "maquinas_by_kanban": {
+            "QUINADORA ADIRA": recs["M041"],
+            "QUINADORA P4": recs["M044"],
+            "QUINADORA P8": recs["M045"],
+            "GUIFIL": recs["M067"],
+            "QUINADORA GUIFIL MTG2": recs["M067"],
+            "QUINADORA MTG3": recs["M081"],
+            "QUINADORA CÓNICA P8": recs["M040"],
+        },
+    }
 
 
 @pytest.mark.parametrize("label", QUINADORA_LABELS)
@@ -78,3 +102,50 @@ def test_acabamento_legacy_template_aliases_resolve_to_canonical():
     assert get_template("acabamento_mtg2").name == "acabamento"
     assert get_template("acabamento_mtg4").name == "acabamento"
     assert get_template("acabamento").name == "acabamento"
+
+
+@pytest.mark.parametrize(
+    ("setor", "expected_code"),
+    [
+        ("QUINADORA P8", "M045"),
+        ("QUINADORA PAV.8", "M045"),
+        ("QUINADORA P4", "M044"),
+        ("QUINADORA PAV.4", "M044"),
+        ("QUINADORA CÓNICA P8", "M040"),
+        ("QUINADORA CONICA P8", "M040"),
+        ("QUINADORA MTG3", "M081"),
+        ("QUINADORA ADIRA", "M041"),
+        ("GUIFIL", "M067"),
+    ],
+)
+def test_resolve_machine_from_setor_handles_quinadora_aliases(setor, expected_code):
+    rec = resolve_machine_from_setor(setor, _machine_refs())
+    assert rec is not None
+    assert rec["codmaq"] == expected_code
+
+
+def test_apply_codmaq_fill_uses_machine_resolver(monkeypatch):
+    from app.web import main
+
+    calls = []
+    monkeypatch.setattr(
+        main.db,
+        "apply_edit",
+        lambda sid, path, value, source: calls.append((sid, path, value, source)),
+    )
+    sheet = {
+        "sheet_data": {
+            "header": {"setor_maquina": "QUINADORA PAV.8", "cod_maquina": ""}
+        }
+    }
+
+    assert main._apply_codmaq_fill(42, sheet, _machine_refs()) == 1
+    assert calls == [(42, "header.cod_maquina", "M045", "system")]
+
+
+def test_kpi_machine_derivation_uses_refs_for_quinadora():
+    from app.web.kpis import _derive_cod_maquina, _sector_machine_codes
+
+    refs = _machine_refs()
+    assert _derive_cod_maquina("QUINADORA CONICA P8", refs) == "M040"
+    assert "M045" in _sector_machine_codes(refs)["Quinadora"]

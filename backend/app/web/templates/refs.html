@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Refs SAP & Plan{% endblock %}
+{% block title %}Ficheiros de referência{% endblock %}
 {% block content %}
 
 <div class="page-h">
   <div>
     <div class="page-eyebrow">Inteligência</div>
-    <h1 class="page-title">Refs SAP &amp; Plan</h1>
+    <h1 class="page-title">Ficheiros de referência</h1>
   </div>
 </div>
 
@@ -23,28 +23,23 @@
     <div class="card-h">
       <div class="card-h-title">Estado das refs</div>
       <div class="card-h-sub">
-        as refs vêm direto dos ficheiros carregados — o plano e o StockSAP
-        mais recentes
+        as refs vêm direto dos ficheiros carregados — plano, StockSAP,
+        máquinas e colaboradores
       </div>
     </div>
     <div class="card-b">
       <div class="refs-status">
+        {% for card in refs_cards %}
         <div class="refs-stat">
-          <div class="refs-stat-name">plan_colunas_cpis.xlsx</div>
-          <div class="refs-stat-big">{{ stats.get('n_ofs', 0) }}</div>
-          <div class="refs-stat-lbl">OFs no plano</div>
-          <div class="refs-stat-sub">
-            {{ stats.get('n_clientes', 0) }} clientes ·
-            {{ stats.get('n_plan_rows', 0) }} linhas
-          </div>
-          <div class="refs-stat-sub muted">atualizado: {{ plan_file_date }}</div>
+          <div class="refs-stat-name">{{ card.filename }}</div>
+          <div class="refs-stat-big">{{ card.big }}</div>
+          <div class="refs-stat-lbl">{{ card.label }}</div>
+          <div class="refs-stat-sub">{{ card.sub }}</div>
+          <div class="refs-stat-sub muted">atualizado: {{ card.date }}</div>
+          <div class="refs-stat-sub muted">hash: {{ card.hash_short }}</div>
+          <div class="refs-stat-sub muted" title="{{ card.path }}">ficheiro: {{ card.path }}</div>
         </div>
-        <div class="refs-stat">
-          <div class="refs-stat-name">StockSAP.xlsx</div>
-          <div class="refs-stat-big">{{ stats.get('n_lotes', 0) }}</div>
-          <div class="refs-stat-lbl">lotes no StockSAP</div>
-          <div class="refs-stat-sub muted">atualizado: {{ sap_file_date }}</div>
-        </div>
+        {% endfor %}
       </div>
     </div>
   </div>
@@ -54,10 +49,11 @@
 
   {# ---- Uploads ---- #}
   <div class="refs-uploads">
+    {% for upload_card in upload_cards %}
     <div class="card">
       <div class="card-h">
-        <div class="card-h-title">Carregar plano</div>
-        <div class="card-h-sub">plan_colunas_cpis.xlsx — OFs, OVs, clientes, fases</div>
+        <div class="card-h-title">{{ upload_card.title }}</div>
+        <div class="card-h-sub">{{ upload_card.subtitle }}</div>
       </div>
       <div class="card-b">
         {# R123 — feedback de ficheiro: mostra o nome escolhido antes de
@@ -65,44 +61,23 @@
         <form method="post" action="/refs/upload" enctype="multipart/form-data"
               class="refs-form" x-data="{ fileName: '', uploading: false }"
               @submit="uploading = true">
-          <input type="hidden" name="kind" value="plan">
+          <input type="hidden" name="kind" value="{{ upload_card.kind }}">
           <input type="file" name="file" accept=".xlsx,.xlsm" required
                  @change="fileName = $event.target.files.length ? $event.target.files[0].name : ''">
           <div class="refs-file-chosen" x-show="fileName" x-cloak>
             <span>✓ Ficheiro selecionado:</span> <strong x-text="fileName"></strong>
           </div>
           <button class="btn primary" type="submit" :disabled="uploading">
-            <span x-show="!uploading">Carregar plano</span>
+            <span x-show="!uploading">{{ upload_card.button }}</span>
             <span x-show="uploading" x-cloak>A carregar…</span>
           </button>
         </form>
-        <div class="muted tiny">Ficheiro atual: {{ plan_file_date }}</div>
+        <div class="muted tiny">
+          Ficheiro atual: {{ upload_card.date }} · hash {{ upload_card.hash_short }}
+        </div>
       </div>
     </div>
-    <div class="card">
-      <div class="card-h">
-        <div class="card-h-title">Carregar StockSAP</div>
-        <div class="card-h-sub">StockSAP.xlsx — lotes, espessura, largura</div>
-      </div>
-      <div class="card-b">
-        {# R123 — feedback de ficheiro (ver card "Carregar plano"). #}
-        <form method="post" action="/refs/upload" enctype="multipart/form-data"
-              class="refs-form" x-data="{ fileName: '', uploading: false }"
-              @submit="uploading = true">
-          <input type="hidden" name="kind" value="stocksap">
-          <input type="file" name="file" accept=".xlsx,.xlsm" required
-                 @change="fileName = $event.target.files.length ? $event.target.files[0].name : ''">
-          <div class="refs-file-chosen" x-show="fileName" x-cloak>
-            <span>✓ Ficheiro selecionado:</span> <strong x-text="fileName"></strong>
-          </div>
-          <button class="btn primary" type="submit" :disabled="uploading">
-            <span x-show="!uploading">Carregar StockSAP</span>
-            <span x-show="uploading" x-cloak>A carregar…</span>
-          </button>
-        </form>
-        <div class="muted tiny">Ficheiro atual: {{ sap_file_date }}</div>
-      </div>
-    </div>
+    {% endfor %}
   </div>
 
   {# ---- Re-validar ---- #}
@@ -135,15 +110,19 @@
       <table class="refs-log">
         <thead>
           <tr><th>Data</th><th>Ficheiro</th><th>Tipo</th>
-              <th class="num">Linhas</th></tr>
+              <th class="num">Linhas</th><th class="num">OFs</th>
+              <th class="num">OVs</th><th>Hash</th></tr>
         </thead>
         <tbody>
           {% for u in uploads %}
           <tr>
             <td>{{ u.at[:16].replace('T', ' ') }}</td>
             <td>{{ u.filename }}</td>
-            <td>{{ 'Plano' if u.kind == 'plan' else 'StockSAP' }}</td>
+            <td>{{ refs_kind_labels.get(u.kind, u.kind) }}</td>
             <td class="num">{{ u.n_rows }}</td>
+            <td class="num">{{ u.n_ofs if u.n_ofs is defined else '—' }}</td>
+            <td class="num">{{ u.n_ovs if u.n_ovs is defined else '—' }}</td>
+            <td>{{ u.sha256[:8] if u.sha256 is defined else '—' }}</td>
           </tr>
           {% endfor %}
         </tbody>

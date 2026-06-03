@@ -47,6 +47,20 @@ EXPECTED_HEADER_LABELS = [
 
 
 def _refs():
+    maquinas = {
+        "M045": {
+            "codmaq": "M045",
+            "desmaq": "QUINADORA ADIRA 14M P8",
+            "desigkanban": "QUINADORA P8",
+            "colunaexcel": "Q",
+        },
+        "M040": {
+            "codmaq": "M040",
+            "desmaq": "QUINADORA CÓNICA P8",
+            "desigkanban": "",
+            "colunaexcel": "Q",
+        },
+    }
     return {
         "of_to_entries": {
             "999999": [{
@@ -62,8 +76,28 @@ def _refs():
                 "pesounit": 17.85875,
             }],
         },
+        "plan_by_ov": {
+            "100200": [{
+                "_of": "999999",
+                "of": "999999",
+                "ov": "100200",
+                "cliente": "ENEDIS",
+                "designacao": "CGC2E10D",
+                "comp": 5000,
+                "lbase": 200,
+                "ltopo": 150,
+                "esp": 2.6,
+                "npecas": 6,
+                "pesounit": 17.85875,
+            }],
+        },
         "lotes_sap_full": {
             "L1": {"esp": 2.6, "larg": 1500},
+        },
+        "maquinas_by_codmaq": maquinas,
+        "maquinas_by_kanban": {
+            "QUINADORA P8": maquinas["M045"],
+            "QUINADORA CÓNICA P8": maquinas["M040"],
         },
     }
 
@@ -182,6 +216,113 @@ def test_build_cpis_row_acabamento_produced_only_from_plan() -> None:
     assert out["peso_consumido_t"] is None
     assert out["desperdicio_t"] is None
     assert out["desperdicio_pct"] is None
+
+
+def test_build_cpis_row_quinadora_derives_cod_maquina_from_refs() -> None:
+    raw = {
+        "sheet_iso_date": "2026-05-25",
+        "n_operador": "0537",
+        "setor_maquina": "QUINADORA PAV.8",
+        "header_cod_maquina": None,
+        "operador": "JÚLIO LIMA",
+    }
+    out = _build_cpis_row(raw, refs=_refs())
+
+    assert out["cod_maquina"] == "M045"
+
+
+def test_build_cpis_row_expedicao_produced_weight_by_of() -> None:
+    raw = {
+        "sheet_iso_date": "2026-05-25",
+        "n_operador": "0537",
+        "setor_maquina": "EXPEDIÇÃO",
+        "header_cod_maquina": None,
+        "operador": "JÚLIO LIMA",
+        "of": "999999",
+        "modelo": "CGC2E10D",
+        "qtd": 10,
+    }
+    out = _build_cpis_row(raw, refs=_refs())
+
+    assert out["peso_produzido_t"] == 0.179
+    assert out["n_chapas"] is None
+    assert out["peso_consumido_t"] is None
+    assert out["desperdicio_t"] is None
+    assert out["desperdicio_pct"] is None
+
+
+def test_build_cpis_row_expedicao_produced_weight_by_unique_ov_model() -> None:
+    raw = {
+        "sheet_iso_date": "2026-05-25",
+        "n_operador": "0537",
+        "setor_maquina": "EXPEDIÇÃO",
+        "header_cod_maquina": None,
+        "operador": "JÚLIO LIMA",
+        "of": "",
+        "ov": "100200",
+        "modelo": "CGC2E10D",
+        "qtd": 10,
+    }
+    out = _build_cpis_row(raw, refs=_refs())
+
+    assert out["of"] == ""
+    assert out["ov"] == "100200"
+    assert out["cliente"] == "ENEDIS"
+    assert out["peso_produzido_t"] == 0.179
+    assert out["peso_consumido_t"] is None
+
+
+def test_build_cpis_row_expedicao_wrong_existing_of_uses_ov_model() -> None:
+    refs = _refs()
+    refs["of_to_entries"]["888888"] = [{
+        "of": "888888",
+        "ov": "999000",
+        "cliente": "OTHER",
+        "designacao": "OUTRA PECA",
+        "pesounit": 99,
+    }]
+    raw = {
+        "sheet_iso_date": "2026-05-25",
+        "n_operador": "0537",
+        "setor_maquina": "EXPEDIÇÃO",
+        "header_cod_maquina": None,
+        "operador": "JÚLIO LIMA",
+        "of": "888888",
+        "ov": "100200",
+        "modelo": "CGC2E10D",
+        "qtd": 10,
+    }
+    out = _build_cpis_row(raw, refs=refs)
+
+    assert out["of"] == "888888"
+    assert out["peso_produzido_t"] == 0.179
+    assert out["peso_consumido_t"] is None
+
+
+def test_build_cpis_row_expedicao_ambiguous_ov_model_leaves_weight_empty() -> None:
+    refs = _refs()
+    refs["plan_by_ov"]["100200"].append({
+        "_of": "888888",
+        "of": "888888",
+        "ov": "100200",
+        "cliente": "ENEDIS",
+        "designacao": "CGC2E10D",
+        "pesounit": 99,
+    })
+    raw = {
+        "sheet_iso_date": "2026-05-25",
+        "n_operador": "0537",
+        "setor_maquina": "EXPEDIÇÃO",
+        "operador": "JÚLIO LIMA",
+        "of": "",
+        "ov": "100200",
+        "modelo": "CGC2E10D",
+        "qtd": 10,
+    }
+    out = _build_cpis_row(raw, refs=refs)
+
+    assert out["peso_produzido_t"] is None
+    assert out["peso_consumido_t"] is None
 
 
 def test_cpis_filename_includes_operador_slug() -> None:

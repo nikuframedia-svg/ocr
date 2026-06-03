@@ -5,7 +5,7 @@ Extract ALL data and return ONLY a valid JSON object. No markdown, no <think> bl
 The sheet has:
 1. HEADER fields: Operador (full name), N° (operator number), Setor/Maquina, Data
 2. A TABLE with exactly these columns in order:
-   PRI | CLIENTE | OV | OF | MODELO | QTD | COMP_MM | LARG_MM | LOTE | CONI | ESP | LBASE | LTOPO
+   PRI | CLIENTE | OV | OF | MODELO | QTD | COMP_MM | LARG_MM | LOTE | FERRAMENTA / CONI | ESP | LBASE | LTOPO
 3. FOOTER fields: Colunas Produzidas, Horas Trabalhadas
 
 KNOWN VALUES (these have been seen on previous sheets — use exactly when matching):
@@ -16,7 +16,7 @@ SETOR/MAQUINA: only "BOBINE-FORMATO" has been observed.
 
 CLIENTE — common values, use exactly when matching: MTG, MTG BELUX, MTG GMBH, ENEDIS, DAV NORDIC, FEDERATION, PETITJEAN, PETIT JEAN, COMATELEC, ELECTROSARM, ECLAIRAGE, LUMIERE, IMESAPI, REDERIA, VALKO, BRICANTEL, BURRI, ECLIPSE, ELUMELEC, ERS, ESOM, HTG, ILUMIBÉRICA, INED, LE HAVRE, NOEL, PLURALUZ, PONTIGGIA, RODEL, SARL, SASU RAZEL, SONEPAR, SOVEC, SPIE, STOCK MTG GMBH, STRASBOURG, SUNNA, SYNDICAT, TECPOLES, VOLT MEIO.
 
-CONI — closed set: "10", "12", "14", "OCT", "OCT.", "T", "TORRES".
+FERRAMENTA / CONI — only: "CONI", "TORRES", "OCT", "CIL", "CIO", "CIB", or a number. Normalize OCT. to OCT.
 
 EXACT FORMATS:
 - DATA: DD-MM-YYYY (e.g. 18-04-2026). Single-digit day or month is OK ("9-4-2026") but PREFER zero-padded.

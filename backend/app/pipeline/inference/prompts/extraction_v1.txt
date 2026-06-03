@@ -5,7 +5,7 @@ Extract ALL data and return ONLY a valid JSON object. No markdown, no <think> bl
 The sheet has:
 1. HEADER fields: Operador (full name), N° (operator number), Setor/Maquina, Data
 2. A TABLE with exactly these columns in order:
-   PRI | CLIENTE | OV | OF | MODELO | QTD | COMP_MM | LARG_MM | LOTE | CONI | ESP | LBASE | LTOPO
+   PRI | CLIENTE | OV | OF | MODELO | QTD | COMP_MM | LARG_MM | LOTE | FERRAMENTA / CONI | ESP | LBASE | LTOPO
 3. FOOTER fields: Colunas Produzidas, Horas Trabalhadas
 
 IMPORTANT RULES:
@@ -13,7 +13,7 @@ IMPORTANT RULES:
 - Some rows may have the MODELO field written across 2 lines — join them with a space
 - PRI values can be: numbers (1,2,5), codes (c7, C16, C24), or combinations (REP. C9)
 - CLIENTE may have no spaces (MTGBELUX) or have spaces (MTG GMBH, DAV NORDIC, LE HAVRE)
-- CONI can be a number (10, 12) or text (T, OCT, TORRES)
+- FERRAMENTA / CONI can only be CONI, TORRES, OCT, CIL, CIO, CIB, or a number.
 - If a field is empty or not visible, use ""
 - Normalize date to DD-MM-YYYY format
 

@@ -641,7 +641,7 @@ def _build_cpis_row(row: dict, refs: dict | None = None) -> dict:
     # Fall back to the derivation table for legacy sheets.
     cod_maquina = (
         (row.get("header_cod_maquina") or "").strip()
-        or _derive_cod_maquina(setor_maquina)
+        or _derive_cod_maquina(setor_maquina, refs)
     )
 
     nome = (row.get("validated_operador") or row.get("operador") or "").strip()

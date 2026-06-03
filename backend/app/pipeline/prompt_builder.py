@@ -51,7 +51,7 @@ _FIELD_LABELS: dict[str, str] = {
     "comp_mm": "COMP_MM",
     "larg_mm": "LARG_MM",
     "lote": "LOTE",
-    "coni": "CONI",
+    "coni": "FERRAMENTA / CONI",
     "esp": "ESP",
     "lbase": "LBASE",
     "ltopo": "LTOPO",
@@ -178,7 +178,8 @@ _RULES_PRODUCTION = """IMPORTANT RULES:
 - Some MODELO values include suffixes like "1ª PRIORIDADE" or "2ª PRIORIDADE" — preserve them.
 - PRI values can be: numbers (1, 2, 5), codes (c7, C16, C24, P2, P4), or combinations (REP. C9).
 - CLIENTE may have no spaces (MTGBELUX) or have spaces (MTG GMBH, DAV NORDIC, LE HAVRE).
-- CONI can be a number (10, 12, 14) or text (T, OCT, TORRES).
+- FERRAMENTA / CONI can only be CONI, TORRES, OCT, CIL, CIO, CIB, or a number.
+  Normalize obvious punctuation/case variants in your JSON (for example OCT. -> OCT).
 - TURNO (header field in templates that show shift checkboxes) is one of:
   M, R, XM, T. Empty string for other templates.
 - LOTE follows pattern like M25B0746, M26B0307, H24B1003 — copy exactly what you see.

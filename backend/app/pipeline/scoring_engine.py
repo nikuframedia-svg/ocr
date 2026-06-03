@@ -25,6 +25,9 @@ from datetime import datetime, timezone
 from itertools import product
 from typing import Any
 
+from app.dq.ferramenta import normalize_ferramenta
+from app.dq.machines import machine_phase_from_setor
+
 
 # Inline deps (R109 — motor self-contained) ----------------------------------
 
@@ -145,7 +148,7 @@ def score_entry(
 # Configuração ---------------------------------------------------------------
 
 _NO_REF_FIELDS = frozenset({
-    "pri", "coni", "qtd",
+    "pri", "qtd",
     "horas_trabalhadas", "colunas_produzidas",
     "n_operador", "data", "setor_maquina", "cod_maquina", "operador",
     # R132 — turno (M/R/XM/T) é header próprio de acabamento e
@@ -199,11 +202,11 @@ _STATUS_LABELS = {
 # R130 — cross-check rigoroso: of/ov/cliente nunca silenciosamente
 # substituídos; dim só auto-corrige com winner score>=4; UI marca cells
 # auto-substituídas com cor amarela (cc-warn) via `proposed` no tooltip.
-# R134 — substitute-everything restaurado (of/ov/cliente voltam a ser
-# substituídos pela entry vencedora). BUMP obrigatório da versão: sem ele,
-# `_build_cc_maps` não regenera as folhas processadas sob R130 e elas ficam
-# presas no estado antigo (of/ov/cliente a amarelo, sem substituir).
-ENGINE_VERSION = "v9_R134"
+# R140 — identity anchoring: quando o OCR traz OF/OV, a escolha da linha do
+# plan fica ancorada nessa identidade. Se a OF/OV lida não existe nas refs,
+# o motor não pode inventar outra OF apenas porque dimensões/modelo batem.
+# BUMP obrigatório: força regeneração dos cross-check JSON antigos.
+ENGINE_VERSION = "v10_R140"
 
 
 # Utilidades de distância ----------------------------------------------------
@@ -287,6 +290,19 @@ def _format_value(field: str, value: Any) -> str:
 # Pre-indexação das refs (cache por refs id) --------------------------------
 
 _INDEX_CACHE: dict[int, dict] = {}
+
+
+def invalidate_index_cache() -> None:
+    """R134 — limpar o cache de índices das refs.
+
+    Chamado no reload das refs (`RefWatcher.force_reload`/`get_refs`), à
+    semelhança de `obras_status.invalidate_cache()`. `_get_indices` é keyed por
+    `id(refs)` + `loaded_at` (resolução de 1s); um re-upload no mesmo segundo
+    com reutilização de `id()` pelo CPython poderia servir índices do plano
+    antigo. Limpar no reload fecha essa janela e evita o crescimento ilimitado
+    do cache (uma entrada por objeto de refs).
+    """
+    _INDEX_CACHE.clear()
 
 
 def _get_indices(refs: dict) -> dict:
@@ -469,6 +485,39 @@ def _entry_key(entry: dict) -> tuple:
     )
 
 
+def _identity_anchor_keys(row: dict, entries_by_key: dict[tuple, dict]) -> set[tuple] | None:
+    """Return the subset of entries allowed by strong OCR identity.
+
+    OF and OV are identifiers written on the sheet. When either is present,
+    they must anchor the plan-row choice:
+    - exact/O-zero OF match wins;
+    - otherwise exact/O-zero OV match wins;
+    - if an identity was written but neither exists in the candidate pool,
+      return an empty set so the caller refuses a geometry-only winner.
+
+    ``None`` means "no identity in OCR, keep holistic scoring".
+    """
+    op_of = normalize_of(row.get("of"))
+    op_ov = str(row.get("ov") or "").strip()
+    if not op_of and not op_ov:
+        return None
+
+    of_variants = set(_o_zero_variants(op_of)) if op_of else set()
+    ov_variants = set(_o_zero_variants(op_ov)) if op_ov else set()
+
+    if of_variants:
+        by_of = {k for k in entries_by_key if k[0] in of_variants}
+        if by_of:
+            return by_of
+
+    if ov_variants:
+        by_ov = {k for k in entries_by_key if k[1] in ov_variants}
+        if by_ov:
+            return by_ov
+
+    return set()
+
+
 # R125 — consciência do estado de produção (fases do plan) ------------------
 
 def _current_phase(sheet_data: dict, refs: dict) -> str | None:
@@ -476,14 +525,10 @@ def _current_phase(sheet_data: dict, refs: dict) -> str | None:
     da folha. None se não houver mapeamento — toda a lógica de fases
     fica em no-op.
     """
-    setor = ((sheet_data.get("header") or {}).get("setor_maquina") or "").strip().upper()
+    setor = ((sheet_data.get("header") or {}).get("setor_maquina") or "").strip()
     if not setor:
         return None
-    maq = (refs.get("maquinas_by_kanban") or {}).get(setor)
-    if not maq:
-        return None
-    col = (maq.get("colunaexcel") or "").strip().lower()
-    return col or None
+    return machine_phase_from_setor(setor, refs)
 
 
 def _phase_is_full(entry: dict, phase: str) -> bool:
@@ -530,6 +575,14 @@ def _find_winner_entry(
 
     if not entries_by_key:
         return None
+    allowed_keys = _identity_anchor_keys(row, entries_by_key)
+    if allowed_keys is not None:
+        if not allowed_keys:
+            return None
+        entries_by_key = {
+            k: e for k, e in entries_by_key.items()
+            if k in allowed_keys
+        }
 
     # Tuple (-score, phase_full, remaining_sortable, key, entry):
     # 1) maior score primeiro, 2) sectores ainda com espaço primeiro,
@@ -627,6 +680,17 @@ def _make_cell(value: str, status: str, source: str, **extra) -> dict:
     }
     cell.update(extra)
     return cell
+
+
+def _score_ferramenta_cell(ocr_value: str) -> dict:
+    canonical = normalize_ferramenta(ocr_value)
+    if canonical == "":
+        return _make_cell("", "NA", "ocr_raw")
+    if canonical is None:
+        return _make_cell(ocr_value, "very_different", "ocr_raw")
+    if canonical == str(ocr_value or "").strip():
+        return _make_cell(canonical, "confirmed", "ocr_raw")
+    return _make_cell(canonical, "snapped", "lexicon")
 
 
 def _finish_cell(
@@ -781,7 +845,7 @@ def _score_row(
 
     Cada campo cai num de três tratamentos:
       - campo com referência no plan/SAP (_ROW_FIELDS) → winner/candidatos;
-      - campo sem referência (_NO_REF_FIELDS: pri, qtd, coni, ...) → NA;
+      - campo sem referência (_NO_REF_FIELDS: pri, qtd, ...) → NA;
       - campo próprio do template (cesta_n, qtd_metros, m2, sobras, ...) →
         validação sintáctica leve: preenchido = confirmed, vazio = NA.
 
@@ -819,7 +883,9 @@ def _score_row(
 
     for field in row_fields:
         ocr_value = str(row.get(field) or "").strip()
-        if field in _ROW_FIELDS:
+        if field == "coni":
+            result = _score_ferramenta_cell(ocr_value)
+        elif field in _ROW_FIELDS:
             result = _apply_winner_to_field(
                 field, ocr_value, winner,
                 candidates_by_field.get(field, []), refs, row,
