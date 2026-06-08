@@ -206,7 +206,7 @@ _STATUS_LABELS = {
 # plan fica ancorada nessa identidade. Se a OF/OV lida não existe nas refs,
 # o motor não pode inventar outra OF apenas porque dimensões/modelo batem.
 # BUMP obrigatório: força regeneração dos cross-check JSON antigos.
-ENGINE_VERSION = "v10_R140"
+ENGINE_VERSION = "v11_R141"
 
 
 # Utilidades de distância ----------------------------------------------------
@@ -808,20 +808,11 @@ def _apply_winner_to_field(
     if not proposed:
         return _make_cell(ocr_value, "NA", "ocr_raw")
 
-    # R139 — Acabamento: of/modelo são a leitura do operador (papel) e NUNCA são
-    # substituídos pelo plan (regressão do Codex: o substitute-everything de R134
-    # aplicava o valor da entry vencedora). Valida mas preserva o OCR; o
-    # source="ocr_raw" impede o auto-apply em _maybe_apply_snap (main.py). Os
-    # restantes templates mantêm o R134 inalterado.
-    if template_name == "acabamento" and field in ("of", "modelo") and ocr_value:
-        matches = (
-            _format_value(field, proposed).upper()
-            == _format_value(field, ocr_value).upper()
-        )
-        return _make_cell(
-            ocr_value, "confirmed" if matches else "very_different", "ocr_raw"
-        )
-
+    # R141 — reverte o carve-out R139: o Acabamento volta a substituir of/modelo
+    # pelo plan (R134 substitute-everything), uniforme com os outros kanbans. É
+    # seguro porque o R140 (identity anchoring) garante que o winner é a entry que
+    # bate na OF/OV — substitui-se sempre pela entry correta, nunca por "parecidas".
+    # (template_name continua propagado para uso futuro; já não há ramo especial.)
     return _finish_cell(
         field, ocr_value, proposed,
         source="plan" if winner else "lexicon",

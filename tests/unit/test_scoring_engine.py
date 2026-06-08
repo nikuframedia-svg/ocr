@@ -13,7 +13,6 @@ import pytest
 from app.pipeline.scoring_engine import (
     _candidates_for_field,
     _find_winner_entry,
-    _format_value,
     _get_indices,
     _lev_distance,
     _num_sim,
@@ -167,7 +166,7 @@ class TestShadowScore:
         scoring, total, snapped, confirmed, na, dur_ms = shadow_score(
             sheet_data, None, _REFS
         )
-        assert scoring["engine_version"] == "v10_R140"
+        assert scoring["engine_version"] == "v11_R141"
         assert scoring["template_name"] == "bobine_formato"
         assert "checked_at" in scoring
         assert scoring["summary"]["total"] == total
@@ -440,13 +439,13 @@ class TestR140IdentityAnchoring:
             assert of_cell["value"] == "262108"
 
 
-class TestR139AcabamentoNoSubstitute:
-    """R139 — no template `acabamento` o cross-check NÃO substitui of/modelo OCR
-    não vazios pelo valor do plan (regressão do Codex revertida só para Acabamento;
-    os outros templates mantêm o substitute-everything do R134 — ver
-    TestR134SubstituteEverything)."""
+class TestR141AcabamentoSubstitutes:
+    """R141 — reverte o carve-out R139: o template `acabamento` volta a substituir
+    of/modelo pelo plan (R134 substitute-everything), uniforme com os restantes
+    kanbans. Seguro pelo identity anchoring do R140 (o winner é a entry que bate
+    na OF/OV)."""
 
-    def test_acabamento_keeps_ocr_of_and_modelo(self):
+    def test_acabamento_substitutes_of_and_modelo(self):
         sheet_data = {
             "template_name": "acabamento", "header": {}, "footer": {},
             "rows": [{
@@ -458,13 +457,13 @@ class TestR139AcabamentoNoSubstitute:
         scoring, *_ = shadow_score(sheet_data, None, _REFS)
         fields = scoring["rows"][0]["fields"]
 
-        # of OCR preservado (não substituído), e como bate o plan → confirmed.
+        # of bate o plan → substituído/confirmado a partir da ref (não ocr_raw).
         assert fields["of"]["value"] == "262108"
-        assert fields["of"]["source"] == "ocr_raw"
+        assert fields["of"]["source"] == "plan"
 
-        # modelo OCR preservado — NÃO o "OMEGA 1500 H" do plan.
-        assert fields["modelo"]["value"] == "PEÇA-X"
-        assert fields["modelo"]["source"] == "ocr_raw"
+        # modelo substituído pela designacao COMPLETA do plan (R128/R134), não o OCR.
+        assert fields["modelo"]["value"] == "OMEGA 1500 H"
+        assert fields["modelo"]["source"] == "plan"
 
     def test_bobine_still_substitutes(self):
         """Sanidade: Bobine ainda substitui quando a OV ancora a entry."""
