@@ -328,12 +328,10 @@ async def upload(
 # `source`. As constantes R61/R66 anteriores (campos hard-coded) saíram
 # por dead code; R109 substituiu-as pela flag `snapped` por célula.
 
-# R134 — substitute-everything (filosofia R108): a entry vencedora
-# holística (score_entry: +1 por campo, peso igual; _find_winner_entry
-# escolhe o máximo de campos iguais) substitui TODOS os campos. As guardas
-# R124/R130 (dims só com score≥4, of/ov/cliente nunca substituídos) foram
-# removidas por decisão do utilizador — a folha fica igual ao plan. Único
-# travão: edições humanas (R133) e obra_concluida (R125).
+# R142 — auto-overwrite conservador: só `snapped` (delta suave / autofill)
+# é aplicado. `very_different` fica para revisão humana, mesmo quando há
+# proposta concreta do plan/SAP. Travões adicionais: edições humanas (R133)
+# e obra_concluida (R125).
 
 
 def _human_edited_paths(sheet_id: int) -> frozenset[str]:
@@ -368,14 +366,12 @@ def _maybe_apply_snap(
     cell: dict,
     protected: frozenset[str] = frozenset(),
 ) -> bool:
-    """R134 — aplica o canonical da entry vencedora a TODOS os campos
-    (substitute-everything, filosofia R108).
+    """Aplica apenas correções suaves/autofill propostas pelo cross-check.
 
     Política:
       - `snapped` (delta suave / autofill) → aplica.
-      - `very_different` → aplica (a folha fica igual ao plan), desde que o
-        motor tenha proposta concreta vinda de uma ref (`source` != "ocr_raw").
       - `confirmed` / `NA` → no-op.
+      - `very_different` → no-op; é revisão humana.
 
     Travões (apenas estes):
       - R133: campo com última edição humana (`protected`) — autoritativo,
@@ -394,10 +390,7 @@ def _maybe_apply_snap(
     if engine_status == "snapped":
         pass
     elif engine_status == "very_different":
-        # R134 — substitui tudo pela entry vencedora. Só não aplica quando
-        # não há proposta concreta de uma ref (fallback do motor).
-        if cell.get("source") in (None, "ocr_raw"):
-            return False
+        return False
     else:
         return False
     canonical = (cell.get("value") or "").strip()
@@ -419,9 +412,9 @@ def _apply_auto_overwrites(
     R124 estende:
       - cobre também `result["header"]` e `result["footer"]` (motor já
         produz cells nessas secções desde R123 Fase 4 B9);
-      - aplica `very_different` em campos não-dimensionais quando o
-        motor tem proposta concreta (modelo/cliente/of/ov, cod_maquina,
-        etc. que antes ficavam vermelhos sem auto-correcção).
+
+    R142: `very_different` deixou de ser aplicado automaticamente. Vermelho
+    significa rever, não escrever por cima.
 
     R133 — `protected` (field_paths com última edição humana) salta o
     auto-overwrite desses campos. Ver `_maybe_apply_snap`.
@@ -603,7 +596,7 @@ def _run_and_store_cross_check(sheet_id: int) -> dict | None:
     if sheet.get("status") == "validated":
         n_overwritten = n_op_snapped = n_codmaq_filled = 0
     else:
-        # R61 — auto-overwrite modelo/cliente when MATCH but value diverges
+        # Cross-check auto-overwrite: só células `snapped` (suaves/autofill).
         n_overwritten = _apply_auto_overwrites(sheet_id, result, protected)
         # R70 — operator snap against ListaColaboradores (SAP employee list).
         # Resolves OCR name/cod against canonical sname/cod/pernr and applies
@@ -675,10 +668,14 @@ def _spawn_shadow_scoring(
                 # R117 — kernel event: shadow scoring concluído (thread daemon,
                 # kernel.emit_event é thread-safe via _LOCK).
                 try:
+                    very_different = int(
+                        (scoring.get("summary") or {}).get("very_different", 0) or 0
+                    )
                     kernel.emit_event("shadow_run_completed", {
                         "sheet_id": sheet_id,
                         "total": total,
                         "snapped": snapped,
+                        "very_different": very_different,
                         "confirmed": confirmed,
                         "na": na,
                         "duration_ms": dur_ms,
@@ -733,14 +730,16 @@ def sheet_page(
         # Show original OCR — disable cross-check colors (they validate
         # the post-snap values, not raw)
         src = sheet["raw_extraction"]
-        (cc_status_by_path, cc_ref_by_path, cc_suspended_by_path,
-         cc_snapped_by_path, cc_obra_concluida_by_path) = (
-            {}, {}, {}, {}, {},
+        (cc_status_by_path, cc_ref_by_path, cc_ref_title_by_path,
+         cc_suspended_by_path, cc_snapped_by_path,
+         cc_obra_concluida_by_path) = (
+            {}, {}, {}, {}, {}, {},
         )
     else:
         src = sheet.get("sheet_data") or {}
-        (cc_status_by_path, cc_ref_by_path, cc_suspended_by_path,
-         cc_snapped_by_path, cc_obra_concluida_by_path) = (
+        (cc_status_by_path, cc_ref_by_path, cc_ref_title_by_path,
+         cc_suspended_by_path, cc_snapped_by_path,
+         cc_obra_concluida_by_path) = (
             _build_cc_maps(sheet_id)
         )
 
@@ -773,6 +772,7 @@ def sheet_page(
             "cells_by_path": cells_by_path,
             "cc_status_by_path": cc_status_by_path,
             "cc_ref_by_path": cc_ref_by_path,
+            "cc_ref_title_by_path": cc_ref_title_by_path,
             "cc_suspended_by_path": cc_suspended_by_path,
             "cc_snapped_by_path": cc_snapped_by_path,
             "cc_obra_concluida_by_path": cc_obra_concluida_by_path,
@@ -828,11 +828,12 @@ def _build_snapped_map_from_raw(sheet: dict) -> dict[str, bool]:
 
 
 def _build_cc_maps(sheet_id: int) -> tuple[
-    dict[str, str], dict[str, str], dict[str, bool], dict[str, bool],
-    dict[str, bool],
+    dict[str, str], dict[str, str], dict[str, str], dict[str, bool],
+    dict[str, bool], dict[str, bool],
 ]:
     """Round 33: load cross-check JSON for sheet, build {field_path: status}
     + {field_path: ref} maps for template rendering of green/red cell colors.
+    Ref titles include the real source (Plan/SAP/machines/collaborators).
 
     R52 F4: also returns {field_path: suspended_by_stub} for distinguishing
     NA from stub-accept (amarelo soft) vs NA from no-ref (cinza).
@@ -842,7 +843,7 @@ def _build_cc_maps(sheet_id: int) -> tuple[
     modified after upload (auto-correction or manual edit). Used for the
     `*` indicator showing operator which values aren't the OCR original.
 
-    Returns ({}, {}, {}, {}) if no cross-check data available."""
+    Returns empty maps plus the snapped map if no cross-check data is available."""
     from app.cross_check.storage import load_sheet_cross_check
     from app.pipeline.scoring_engine import ENGINE_VERSION
     cc = load_sheet_cross_check(sheet_id)
@@ -858,26 +859,50 @@ def _build_cc_maps(sheet_id: int) -> tuple[
             pass
     snapped_map = _build_snapped_map_from_raw(db.get_sheet(sheet_id) or {})
     if not cc:
-        return {}, {}, {}, snapped_map, {}
+        return {}, {}, {}, {}, snapped_map, {}
     status_map: dict[str, str] = {}
     ref_map: dict[str, str] = {}
+    ref_title_map: dict[str, str] = {}
     suspended_map: dict[str, bool] = {}
-    # R125 — paths cujas cells foram marcadas pelo motor com
-    # source="obra_concluida" (todas as linhas do plan para esta OF
-    # estão fechadas na etapa actual). Usado pelo template para mostrar
-    # tooltip "obra concluída — verificar".
+    # R125/R163 — paths de linhas com obra_concluida=True. Antes isto vinha
+    # como source="obra_concluida" em todas as células; agora é metadata da
+    # linha para evitar transformar células certas em NO_MATCH.
     obra_concluida_map: dict[str, bool] = {}
+
+    def _cell_ref(info: dict) -> object:
+        ref = info.get("ref")
+        if ref not in (None, ""):
+            return ref
+        return info.get("plan_value")
+
+    def _cell_ref_title(info: dict, ref: object) -> str:
+        ref_text = str(ref).strip()
+        ref_source = str(info.get("ref_source") or info.get("source") or "").strip()
+        prefix = {
+            "plan": "Plan diz",
+            "sap": "SAP diz",
+            "maquinas": "Máquina esperada",
+            "colaboradores": "Colaborador esperado",
+            "ferramenta": "Ferramenta esperada",
+            "syntax": "Formato esperado",
+        }.get(ref_source, "Referência diz")
+        return f"{prefix}: {ref_text}" if ref_text else ""
+
     for r in cc.get("rows", []):
         i = r.get("row_index")
+        row_obra_concluida = bool(r.get("obra_concluida"))
         for f, info in (r.get("fields") or {}).items():
             path = f"rows[{i}].{f}"
             status_map[path] = info.get("status", "NA")
-            ref = info.get("ref")
+            ref = _cell_ref(info)
             if ref is not None:
                 ref_map[path] = str(ref)
+                title = _cell_ref_title(info, ref)
+                if title:
+                    ref_title_map[path] = title
             if info.get("suspended_by_stub"):
                 suspended_map[path] = True
-            if info.get("source") == "obra_concluida":
+            if row_obra_concluida or info.get("source") == "obra_concluida":
                 obra_concluida_map[path] = True
     # R123 (B9) — header/footer também coloridos (operador, data, máquina,
     # colunas_produzidas, ...). Cross-checks gravados antes do R123 não os
@@ -886,10 +911,13 @@ def _build_cc_maps(sheet_id: int) -> tuple[
         for f, info in (cc.get(section) or {}).items():
             path = f"{section}.{f}"
             status_map[path] = info.get("status", "NA")
-            ref = info.get("ref")
+            ref = _cell_ref(info)
             if ref is not None:
                 ref_map[path] = str(ref)
-    return (status_map, ref_map, suspended_map, snapped_map,
+                title = _cell_ref_title(info, ref)
+                if title:
+                    ref_title_map[path] = title
+    return (status_map, ref_map, ref_title_map, suspended_map, snapped_map,
             obra_concluida_map)
 
 
@@ -1021,8 +1049,9 @@ async def sheet_edit(
     if real_value is None:
         real_value = new
     cells_by_path = (sheet.get("dq_audit") or {}).get("cells", {})
-    (cc_status_by_path, cc_ref_by_path, cc_suspended_by_path,
-     cc_snapped_by_path, cc_obra_concluida_by_path) = (
+    (cc_status_by_path, cc_ref_by_path, cc_ref_title_by_path,
+     cc_suspended_by_path, cc_snapped_by_path,
+     cc_obra_concluida_by_path) = (
         _build_cc_maps(sheet_id)
     )
 
@@ -1038,6 +1067,7 @@ async def sheet_edit(
             edited=edited,
             cc_status_by_path=cc_status_by_path,
             cc_ref_by_path=cc_ref_by_path,
+            cc_ref_title_by_path=cc_ref_title_by_path,
             cc_suspended_by_path=cc_suspended_by_path,
             cc_snapped_by_path=cc_snapped_by_path,
             cc_obra_concluida_by_path=cc_obra_concluida_by_path,
@@ -2647,6 +2677,7 @@ def kanban_viewer(
                 "cells_by_path": {},
                 "cc_status_by_path": {},
                 "cc_ref_by_path": {},
+                "cc_ref_title_by_path": {},
                 "cc_obra_concluida_by_path": {},
                 "valid_operadores": _get_operadores(),
                 **_template_ctx_for_sheet(None),  # bobine_formato defaults
@@ -2700,11 +2731,13 @@ def kanban_viewer(
     footer = (sheet.get("sheet_data") or {}).get("footer", {}) if sheet else {}
 
     # Round 33: cross-check colors per cell
-    (cc_status_by_path, cc_ref_by_path, cc_suspended_by_path,
-     cc_snapped_by_path, cc_obra_concluida_by_path) = ({}, {}, {}, {}, {})
+    (cc_status_by_path, cc_ref_by_path, cc_ref_title_by_path,
+     cc_suspended_by_path, cc_snapped_by_path,
+     cc_obra_concluida_by_path) = ({}, {}, {}, {}, {}, {})
     if sheet:
-        (cc_status_by_path, cc_ref_by_path, cc_suspended_by_path,
-         cc_snapped_by_path, cc_obra_concluida_by_path) = (
+        (cc_status_by_path, cc_ref_by_path, cc_ref_title_by_path,
+         cc_suspended_by_path, cc_snapped_by_path,
+         cc_obra_concluida_by_path) = (
             _build_cc_maps(sheet["id"])
         )
 
@@ -2736,6 +2769,7 @@ def kanban_viewer(
             "cells_by_path": cells_by_path,
             "cc_status_by_path": cc_status_by_path,
             "cc_ref_by_path": cc_ref_by_path,
+            "cc_ref_title_by_path": cc_ref_title_by_path,
             "cc_suspended_by_path": cc_suspended_by_path,
             "cc_snapped_by_path": cc_snapped_by_path,
             "cc_obra_concluida_by_path": cc_obra_concluida_by_path,
@@ -3398,9 +3432,11 @@ def agent_proposal_approve(proposal_id: int) -> JSONResponse:
             status_code=404,
         )
     proposal = db.get_proposal(proposal_id)
+    proposal_status = (proposal or {}).get("status") or "accepted"
     kernel.emit_event("proposal_decided",
-                      {"proposal_id": proposal_id, "decision": "accepted"})
-    kernel.emit_event("policy_promoted", {"version": version_id})
+                      {"proposal_id": proposal_id, "decision": proposal_status})
+    if proposal_status == "accepted":
+        kernel.emit_event("policy_promoted", {"version": version_id})
     return _json_ok({
         "status": "ok",
         "proposal_id": proposal_id,

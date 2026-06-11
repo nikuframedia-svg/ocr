@@ -116,7 +116,7 @@ class TestEventLog:
 class TestKernelEndpoints:
     def test_state_endpoint(self):
         from fastapi.testclient import TestClient
-        from backend.app.web.main import app
+        from app.web.main import app
         client = TestClient(app)
         kernel.emit_event("sheet_uploaded", {"sheet_id": 99})
         r = client.get("/agent/kernel/state")
@@ -127,7 +127,7 @@ class TestKernelEndpoints:
 
     def test_events_endpoint(self):
         from fastapi.testclient import TestClient
-        from backend.app.web.main import app
+        from app.web.main import app
         client = TestClient(app)
         kernel.emit_event("sheet_uploaded", {"sheet_id": 100})
         r = client.get("/agent/kernel/events?limit=5")

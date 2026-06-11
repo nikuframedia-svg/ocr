@@ -193,11 +193,34 @@ def propose_template_change(
     # Validar que o template existe
     try:
         from app.templates_registry import TEMPLATES
-        if template_name not in TEMPLATES:
+        template = TEMPLATES.get(template_name)
+        if template is None:
             return {
                 "status": "error",
                 "error": f"Template '{template_name}' não existe. "
                          f"Disponíveis: {', '.join(sorted(TEMPLATES.keys()))}.",
+            }
+        known_fields = (
+            set(template.row_fields)
+            | set(template.header_fields)
+            | set(template.footer_fields)
+        )
+        fname = field_name.strip()
+        if change_type == "add_field" and fname in known_fields:
+            return {
+                "status": "error",
+                "error": (
+                    f"Campo '{fname}' já existe no template "
+                    f"'{template_name}'."
+                ),
+            }
+        if change_type == "remove_field" and fname not in known_fields:
+            return {
+                "status": "error",
+                "error": (
+                    f"Campo '{fname}' não existe no template "
+                    f"'{template_name}'."
+                ),
             }
     except Exception:
         pass

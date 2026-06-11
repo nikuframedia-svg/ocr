@@ -17,6 +17,7 @@ from app.pipeline.tools import (
     query_db,
     query_learnings,
 )
+from app.web import llm_assistant
 
 
 # ----- SQL Validator ------------------------------------------------------
@@ -132,6 +133,45 @@ class TestDBTools:
         result = list_recent_edits(n_days=1)
         assert result["status"] == "ok"
         assert result["n_rows"] <= 100
+
+
+class TestCrossCheckDossier:
+    def test_no_match_sample_exposes_ref_value_not_only_sap_value(self, monkeypatch):
+        monkeypatch.setattr(
+            llm_assistant.cc_storage,
+            "load_summary",
+            lambda: {
+                "totals": {"match": 8, "no_match": 2, "na": 1},
+                "n_sheets": 1,
+                "by_operador": {},
+            },
+        )
+        monkeypatch.setattr(
+            llm_assistant.cc_storage,
+            "load_to_analisar",
+            lambda limit=15: {
+                "total": 1,
+                "items": [{
+                    "sheet_id": 1,
+                    "section": "header",
+                    "field": "setor_maquina",
+                    "field_path": "header.setor_maquina",
+                    "value": "MAQUINA INEXISTENTE",
+                    "ref_value": "",
+                    "plan_value": "",
+                    "ref_source": "maquinas",
+                    "reason": "Valor não encontrado no catálogo de máquinas",
+                }],
+            },
+        )
+        monkeypatch.setattr(llm_assistant, "_get_refs", lambda: {})
+
+        dossier = llm_assistant._cross_check_dossier()
+
+        sample = dossier["no_match_sample"][0]
+        assert sample["ref_value"] == ""
+        assert sample["sap_value"] == ""
+        assert sample["ref_source"] == "maquinas"
 
 
 # ----- Qwen Agent (sem chamar Ollama) -------------------------------------

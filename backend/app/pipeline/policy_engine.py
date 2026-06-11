@@ -13,6 +13,7 @@ para a versão anterior.
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from typing import Any
@@ -25,6 +26,14 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_EVAL_WINDOW = 50
 _CIRCUIT_BREAKER_THRESHOLD = 0.15  # 15% regressão dispara rollback
+_RULE_PROPOSAL_KINDS = {
+    "cliente_alias",
+    "modelo_alias",
+    "operador_alias",
+    "confusion_pair",
+    "snap_rule",
+}
+_SIMULABLE_KINDS = {"cliente_alias", "modelo_alias"}
 
 
 # ----- Policy version helpers -------------------------------------------
@@ -33,6 +42,63 @@ def get_active_policy() -> dict | None:
     """Devolve a policy_version active (parsed) ou None se não houver."""
     p = db.get_active_policy_version()
     return p
+
+
+def _rule_kind_and_payload(proposal: dict) -> tuple[str, dict]:
+    """Return the rule subtype for both stored and canonical proposal shapes."""
+    raw_payload = proposal.get("payload") or {}
+    payload = raw_payload if isinstance(raw_payload, dict) else {}
+    kind = (proposal.get("kind") or "").strip()
+
+    if kind == "rule":
+        sub_kind = (payload.get("kind") or "").strip()
+    elif kind in _RULE_PROPOSAL_KINDS:
+        sub_kind = kind
+    else:
+        sub_kind = ""
+
+    if sub_kind:
+        payload = dict(payload)
+        payload.setdefault("kind", sub_kind)
+    return sub_kind, payload
+
+
+def _rule_key(rule: dict) -> tuple[str, str]:
+    payload = rule.get("payload") if isinstance(rule.get("payload"), dict) else {}
+    return (
+        str(rule.get("kind") or "").strip(),
+        json.dumps(payload, ensure_ascii=False, sort_keys=True),
+    )
+
+
+def _template_overlay_key(overlay: dict) -> tuple[str, str, str]:
+    return (
+        str(overlay.get("change_type") or "").strip(),
+        str(overlay.get("field_name") or "").strip(),
+        str(overlay.get("field_position") or "").strip(),
+    )
+
+
+def _cpis_overlay_key(overlay: dict) -> tuple[str, str, str]:
+    return (
+        str(overlay.get("scope") or "").strip(),
+        str(overlay.get("change_type") or "").strip(),
+        str(overlay.get("column_name") or "").strip(),
+    )
+
+
+def _no_effect_eval_result(proposal: dict) -> dict:
+    return {
+        "decision": "passed_dry_run",
+        "window_size": 0,
+        "n_sheets_evaluated": 0,
+        "edits_per_sheet_baseline": 0.0,
+        "edits_per_sheet_with_proposal": None,
+        "note": (
+            "proposal has no effect on the active policy; "
+            f"not promoted (kind={proposal.get('kind')})"
+        ),
+    }
 
 
 def promote_policy_from_proposal(
@@ -66,8 +132,28 @@ def promote_policy_from_proposal(
     new_yaml = json.dumps(new_data, ensure_ascii=False, indent=2)
     diff_summary = _summarize_diff(current_data, new_data)
 
-    # Corre eval gate (best effort — só regista, não bloqueia se "skipped")
+    if new_data == current_data:
+        eval_results = _no_effect_eval_result(proposal)
+        db.decide_proposal(
+            proposal_id,
+            status="rejected",
+            decided_by=created_by,
+            eval_results=eval_results,
+        )
+        return current.get("version") if current else None
+
+    # Corre eval gate. `passed_dry_run` continua permissivo porque pode
+    # significar refs/sheets insuficientes, mas um `failed` explícito bloqueia
+    # a promoção.
     eval_results = run_eval_gate(proposal)
+    if (eval_results or {}).get("decision") == "failed":
+        db.decide_proposal(
+            proposal_id,
+            status="rejected",
+            decided_by=created_by,
+            eval_results=eval_results,
+        )
+        return current.get("version") if current else None
 
     parent = current.get("version") if current else None
     version_id = db.save_policy_version(
@@ -113,38 +199,48 @@ def _apply_proposal_to_policy(policy: dict, proposal: dict) -> dict:
     new = dict(policy)
     kind = proposal["kind"]
     payload = proposal["payload"] if isinstance(proposal["payload"], dict) else {}
+    rule_kind, rule_payload = _rule_kind_and_payload(proposal)
 
-    if kind == "rule":
+    if rule_kind:
         # Acumular em new["rules"]
         rules = list(new.get("rules") or [])
-        rules.append({
+        new_rule = {
             "id": f"prop_{proposal['id']}",
-            "kind": payload.get("kind") or "rule",
-            "payload": payload,
-            "added_at": proposal["created_at"],
-        })
+            "kind": rule_kind,
+            "payload": rule_payload,
+            "added_at": str(proposal.get("created_at") or ""),
+        }
+        existing_keys = {_rule_key(r) for r in rules}
+        if _rule_key(new_rule) not in existing_keys:
+            rules.append(new_rule)
         new["rules"] = rules
     elif kind == "template":
         templates = dict(new.get("template_overlays") or {})
         tname = payload.get("template_name", "")
         if tname:
             existing = list(templates.get(tname) or [])
-            existing.append({
+            new_overlay = {
                 "change_type": payload.get("change_type"),
                 "field_name": payload.get("field_name"),
                 "field_position": payload.get("field_position"),
                 "from_proposal": proposal["id"],
-            })
+            }
+            existing_keys = {_template_overlay_key(o) for o in existing}
+            if _template_overlay_key(new_overlay) not in existing_keys:
+                existing.append(new_overlay)
             templates[tname] = existing
             new["template_overlays"] = templates
     elif kind == "cpis":
         overlays = list(new.get("cpis_overlays") or [])
-        overlays.append({
+        new_overlay = {
             "scope": payload.get("scope"),
             "change_type": payload.get("change_type"),
             "column_name": payload.get("column_name"),
             "from_proposal": proposal["id"],
-        })
+        }
+        existing_keys = {_cpis_overlay_key(o) for o in overlays}
+        if _cpis_overlay_key(new_overlay) not in existing_keys:
+            overlays.append(new_overlay)
         new["cpis_overlays"] = overlays
     return new
 
@@ -182,7 +278,6 @@ def _summarize_diff(old: dict, new: dict) -> str:
 _EVAL_SHADOW_WINDOW = 20          # folhas usadas para o A/B
 _EVAL_MIN_SHEETS = 5              # abaixo disto → fallback dry-run
 _EVAL_REGRESSION_THRESHOLD = 0.05 # piora > 5% → failed
-_SIMULABLE_KINDS = {"cliente_alias", "modelo_alias"}
 
 
 def _cells_need_attention(scoring: dict) -> int:
@@ -201,14 +296,7 @@ def _apply_proposal_to_refs(proposal: dict, base_refs: dict) -> dict | None:
     forma de ser simulada com um shadow_score leve (ex.: confusion_pair,
     snap_rule, template, cpis).
     """
-    kind = proposal.get("kind")
-    if kind != "rule":
-        return None
-
-    payload = proposal.get("payload") or {}
-    if not isinstance(payload, dict):
-        return None
-    sub_kind = (payload.get("kind") or "").strip()
+    sub_kind, payload = _rule_kind_and_payload(proposal)
     if sub_kind not in _SIMULABLE_KINDS:
         return None
 
@@ -218,29 +306,70 @@ def _apply_proposal_to_refs(proposal: dict, base_refs: dict) -> dict | None:
         return None
 
     # Cópia shallow — as estruturas internas são tratadas como read-only
-    # pelo shadow_score, exceptuando o dict aliases que aqui (re)injectamos.
+    # pelo shadow_score, exceptuando os dicts de aliases que aqui
+    # (re)injectamos. Aliases não podem inventar pools de plan: sem uma
+    # entry real em of_to_entries/plan_by_* o cross-check deve continuar NA.
     new_refs = dict(base_refs)
 
     if sub_kind == "cliente_alias":
-        # `clientes_lexicon` é incluído no pool de candidatos para o campo
-        # cliente; basta garantir que o canónico `to` aparece lá.
-        existing = set(new_refs.get("clientes_lexicon") or [])
-        existing.add(to)
-        new_refs["clientes_lexicon"] = sorted(existing)
-        # E juntar `to` aos clientes_plan para ser elegível no score_entry
-        plan_set = set(new_refs.get("clientes_plan") or frozenset())
-        plan_set.add(to)
-        new_refs["clientes_plan"] = frozenset(plan_set)
+        aliases = {
+            str(k).strip().upper(): str(v).strip().upper()
+            for k, v in (new_refs.get("cliente_aliases") or {}).items()
+            if str(k).strip() and str(v).strip()
+        }
+        aliases[fr] = to
+        new_refs["cliente_aliases"] = aliases
     elif sub_kind == "modelo_alias":
-        # Equivalente para modelos — adicionamos `to` ao pool de modelos.
-        modelos = set(new_refs.get("modelos_plan") or frozenset())
-        modelos.add(to)
-        new_refs["modelos_plan"] = frozenset(modelos)
+        aliases = {
+            str(k).strip().upper(): str(v).strip().upper()
+            for k, v in (new_refs.get("modelo_aliases") or {}).items()
+            if str(k).strip() and str(v).strip()
+        }
+        aliases[fr] = to
+        new_refs["modelo_aliases"] = aliases
 
     # Forçar nova entrada no INDEX_CACHE com loaded_at distinto, para o
     # shadow_score reindexar com as refs alteradas.
     new_refs["loaded_at"] = f"{base_refs.get('loaded_at', '')}+prop{proposal.get('id', 0)}"
     return new_refs
+
+
+def _apply_proposal_to_sheet_data(proposal: dict, sheet_data: dict) -> tuple[dict, bool]:
+    """Return sheet_data as it would look after an OCR alias correction.
+
+    Eval-gate aliases must be tested on the captured rows, not by inventing
+    plan refs. We only replace exact case-insensitive values in the field the
+    proposal targets; fuzzy matching belongs to the OCR/snap layer.
+    """
+    sub_kind, payload = _rule_kind_and_payload(proposal)
+    field_by_kind = {
+        "cliente_alias": "cliente",
+        "modelo_alias": "modelo",
+    }
+    field = field_by_kind.get(sub_kind)
+    if field is None:
+        return sheet_data, False
+
+    fr = str(payload.get("from") or "").strip().upper()
+    to = str(payload.get("to") or "").strip()
+    if not fr or not to:
+        return sheet_data, False
+
+    rows = sheet_data.get("rows")
+    if not isinstance(rows, list):
+        return sheet_data, False
+
+    out = copy.deepcopy(sheet_data)
+    changed = False
+    for row in out.get("rows") or []:
+        if not isinstance(row, dict):
+            continue
+        current = str(row.get(field) or "").strip()
+        if current.upper() == fr:
+            row[field] = to
+            changed = True
+
+    return out, changed
 
 
 def _load_validated_sheets_for_eval(window: int) -> list[dict]:
@@ -342,7 +471,15 @@ def run_eval_gate(
             continue
         if simulable:
             try:
-                scoring_w, *_ = shadow_score(s["sheet_data"], s["dq_audit"], proposal_refs)
+                proposal_sheet_data, _changed = _apply_proposal_to_sheet_data(
+                    proposal,
+                    s["sheet_data"],
+                )
+                scoring_w, *_ = shadow_score(
+                    proposal_sheet_data,
+                    s["dq_audit"],
+                    proposal_refs,
+                )
                 with_attn.append(_cells_need_attention(scoring_w))
             except Exception:  # noqa: BLE001
                 # Se a proposta rebenta o motor numa folha, conta como piora

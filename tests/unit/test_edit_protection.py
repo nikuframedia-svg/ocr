@@ -110,6 +110,132 @@ class TestMaybeApplySnapProtected:
         sheet = db.get_sheet(sid)
         assert sheet["sheet_data"]["rows"][0]["modelo"] == "CANONICO"
 
+    def test_very_different_never_auto_applies(self, tmp_db):
+        """Vermelho/rever é sinal de decisão humana, mesmo quando há ref."""
+        sid = db.insert_sheet("test.jpg")
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"modelo": "OCR_ORIG"}],
+        }
+        db.update_extraction(sid, sheet_data, {}, sheet_data)
+        cell = {"engine_status": "very_different", "value": "CANONICO", "source": "plan"}
+
+        applied = main._maybe_apply_snap(sid, "rows[0].modelo", cell, frozenset())
+
+        assert applied is False
+        sheet = db.get_sheet(sid)
+        assert sheet["sheet_data"]["rows"][0]["modelo"] == "OCR_ORIG"
+
+
+class TestShadowRunCounters:
+    def test_very_different_is_persisted_separately_from_snapped(self, tmp_db):
+        sid = _mk_sheet()
+        run_id = db.start_shadow_run(sid)
+        scoring = {
+            "summary": {
+                "snapped": 2,
+                "very_different": 3,
+                "confirmed": 4,
+                "na": 5,
+                "total": 14,
+            }
+        }
+
+        db.finish_shadow_run(
+            run_id, sid, scoring,
+            cells_total=14,
+            cells_snapped=2,
+            cells_confirmed=4,
+            cells_na=5,
+            duration_ms=9,
+        )
+
+        with db.conn() as c:
+            row = c.execute(
+                "SELECT cells_snapped, cells_very_different, cells_confirmed, "
+                "cells_na FROM shadow_runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+
+        assert dict(row) == {
+            "cells_snapped": 2,
+            "cells_very_different": 3,
+            "cells_confirmed": 4,
+            "cells_na": 5,
+        }
+
+
+class TestBuildCcMapsLegacyRefs:
+    def test_ref_map_uses_legacy_plan_value_when_ref_empty(self, tmp_db, monkeypatch):
+        from app.cross_check import storage as cc_storage
+        from app.pipeline.scoring_engine import ENGINE_VERSION
+
+        sid = db.insert_sheet("test.jpg")
+        sheet_data = {
+            "template_name": "bobine_formato",
+            "header": {},
+            "footer": {},
+            "rows": [{"modelo": "OCR"}],
+        }
+        db.update_extraction(sid, sheet_data, {}, sheet_data)
+        monkeypatch.setattr(cc_storage, "load_sheet_cross_check", lambda _sid: {
+            "engine_version": ENGINE_VERSION,
+            "rows": [{
+                "row_index": 0,
+                "fields": {
+                    "modelo": {
+                        "status": "NO_MATCH",
+                        "value": "OCR",
+                        "ref": "",
+                        "plan_value": "PLAN",
+                    },
+                },
+            }],
+            "header": {},
+            "footer": {},
+        })
+
+        _status, ref_map, *_ = main._build_cc_maps(sid)
+
+        assert ref_map["rows[0].modelo"] == "PLAN"
+
+    def test_ref_title_uses_ferramenta_source(self, tmp_db, monkeypatch):
+        from app.cross_check import storage as cc_storage
+        from app.pipeline.scoring_engine import ENGINE_VERSION
+
+        sid = db.insert_sheet("test.jpg")
+        sheet_data = {
+            "template_name": "bobine_formato",
+            "header": {},
+            "footer": {},
+            "rows": [{"coni": "ABC"}],
+        }
+        db.update_extraction(sid, sheet_data, {}, sheet_data)
+        monkeypatch.setattr(cc_storage, "load_sheet_cross_check", lambda _sid: {
+            "engine_version": ENGINE_VERSION,
+            "rows": [{
+                "row_index": 0,
+                "fields": {
+                    "coni": {
+                        "status": "NO_MATCH",
+                        "value": "ABC",
+                        "ref": "CIB/CIL/CIO/CONI/OCT/TORRES ou número",
+                        "ref_source": "ferramenta",
+                    },
+                },
+            }],
+            "header": {},
+            "footer": {},
+        })
+
+        _status, ref_map, ref_title_map, *_ = main._build_cc_maps(sid)
+
+        assert ref_map["rows[0].coni"] == "CIB/CIL/CIO/CONI/OCT/TORRES ou número"
+        assert (
+            ref_title_map["rows[0].coni"]
+            == "Ferramenta esperada: CIB/CIL/CIO/CONI/OCT/TORRES ou número"
+        )
+
 
 # Refs sintéticas (espelham test_scoring_engine) — plan com OF 262107.
 _REFS = {
@@ -188,3 +314,27 @@ class TestEditPersistsEndToEnd:
         # Sem edit humano, o motor alinha o modelo pela designação canónica.
         sheet = db.get_sheet(sid)
         assert sheet["sheet_data"]["rows"][0]["modelo"] == "OMEGA 1200 H"
+
+    def test_acabamento_reference_survives_re_cross_check(self, tmp_db, monkeypatch):
+        """Acabamento: REFERÊNCIA/PEÇA do operador não é substituída pela
+        designação completa do plan durante o auto-overwrite."""
+        monkeypatch.setattr(main, "get_watcher", lambda: _FakeWatcher())
+        monkeypatch.setattr(main, "store_cross_check", lambda *a, **k: {})
+
+        sid = db.insert_sheet("t.jpg")
+        sheet_data = {
+            "template_name": "acabamento",
+            "header": {"operador": "", "data": "10-05-2026"},
+            "footer": {},
+            "rows": [{
+                "of": "262107",
+                "modelo": "PEÇA-X",
+                "qtd": "1",
+            }],
+        }
+        db.update_extraction(sid, sheet_data, {}, sheet_data)
+
+        main._run_and_store_cross_check(sid)
+
+        sheet = db.get_sheet(sid)
+        assert sheet["sheet_data"]["rows"][0]["modelo"] == "PEÇA-X"

@@ -15,6 +15,7 @@ Atomicity: write to ``.tmp`` then rename. Safe across concurrent /upload
 Read API:
 - ``load_summary()`` → dict (for /admin/refs-status + dashboards)
 - ``load_to_analisar(limit=20)`` → list (inbox of cells needing review)
+- ``load_sheet_cross_check(sheet_id)`` → current-engine sheet JSON, or None
 """
 from __future__ import annotations
 
@@ -31,6 +32,14 @@ from typing import Any
 from app.config import resolve_kanban_path
 
 _lock = threading.Lock()
+
+
+def _current_engine_version() -> str:
+    try:
+        from app.pipeline.scoring_engine import ENGINE_VERSION
+    except Exception:  # noqa: BLE001
+        return ""
+    return ENGINE_VERSION
 
 
 def _base_dir() -> Path:
@@ -98,6 +107,7 @@ def store_cross_check(
     summary = cross_check_result.get("summary", {})
     to_analisar = cross_check_result.get("to_analisar", [])
 
+    engine_version = cross_check_result.get("engine_version") or _current_engine_version()
     payload = {
         "sheet_id": sheet_id,
         "image_path": image_path,
@@ -108,7 +118,7 @@ def store_cross_check(
         "refs_loaded_at": cross_check_result.get("refs_loaded_at"),
         "refs_snapshot": cross_check_result.get("refs_snapshot") or {},
         # R123 — versão do motor; o viewer regenera JSONs de versões antigas.
-        "engine_version": cross_check_result.get("engine_version"),
+        "engine_version": engine_version,
         "summary": summary,
         "rows": cross_check_result.get("rows", []),
         # R123 (B9) — header/footer validados passam a ser persistidos
@@ -120,7 +130,10 @@ def store_cross_check(
 
     with _lock:
         _atomic_write(file_path, json.dumps(payload, indent=2, ensure_ascii=False, default=str))
-        _update_index(sheet_id, operador, date_iso, sheet_status, summary, rel_key)
+        _update_index(
+            sheet_id, operador, date_iso, sheet_status, summary, rel_key,
+            engine_version=engine_version,
+        )
         _update_summary()
         _update_to_analisar()
 
@@ -150,20 +163,95 @@ def _index_path() -> Path:
     return _base_dir() / "_index.json"
 
 
+def _summary_count(summary: dict, key: str) -> float:
+    try:
+        return float(summary.get(key, 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _ok_rate(summary: dict) -> float:
+    """MATCH rate over comparable cells only; NA is not an error."""
+    ok = _summary_count(summary, "match")
+    comparable = ok + _summary_count(summary, "no_match")
+    return round(ok / comparable, 3) if comparable else 0
+
+
+def _normalise_index_sheets(idx: dict[str, dict]) -> dict[str, dict]:
+    sheets: dict[str, dict] = {}
+    for sid, entry in idx.items():
+        if not isinstance(entry, dict):
+            continue
+        cleaned = dict(entry)
+        summary = cleaned.get("summary", {}) or {}
+        if isinstance(summary, dict):
+            cleaned["summary"] = _normalise_summary_counts(summary)
+        cleaned["ok_rate"] = _ok_rate(cleaned.get("summary", {}) or {})
+        if "engine_version" not in cleaned and "engine" in cleaned:
+            cleaned["engine_version"] = cleaned.get("engine")
+        sheets[str(sid)] = cleaned
+    return sheets
+
+
+def _normalise_summary_counts(summary: dict | None) -> dict:
+    src = summary if isinstance(summary, dict) else {}
+    return {
+        **src,
+        "match": int(_summary_count(src, "match")),
+        "no_match": int(_summary_count(src, "no_match")),
+        "na": int(_summary_count(src, "na")),
+        "total": int(_summary_count(src, "total")),
+    }
+
+
+def _normalise_to_analisar_item(item: dict) -> dict:
+    section = item.get("section") or "rows"
+    row_index = item.get("row_index")
+    field = item.get("field")
+    field_path = item.get("field_path")
+    if not field_path and field:
+        if section == "rows":
+            field_path = f"rows[{row_index}].{field}"
+        else:
+            field_path = f"{section}.{field}"
+    ref_value = item.get("ref")
+    if ref_value in (None, ""):
+        ref_value = item.get("plan_value")
+    return {
+        **item,
+        "section": section,
+        "row_index": row_index,
+        "field": field,
+        "field_path": field_path,
+        "ref_value": ref_value,
+        # Compatibilidade: consumidores antigos ainda leem `plan_value`.
+        # Para fontes como maquinas/colaboradores/syntax, `ref_value` é o
+        # nome semanticamente correto.
+        "plan_value": ref_value,
+        "ref_source": item.get("ref_source") or item.get("source"),
+    }
+
+
 def _read_index() -> dict[str, dict]:
     p = _index_path()
     if not p.exists():
         return {}
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        raw = json.loads(p.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return {}
+    if isinstance(raw, dict) and "sheets" in raw:
+        raw = raw.get("sheets", {})
+    if not isinstance(raw, dict):
+        return {}
+    return _normalise_index_sheets(raw)
 
 
 def _write_index(idx: dict[str, dict]) -> None:
+    sheets = _normalise_index_sheets(idx)
     _atomic_write(_index_path(), json.dumps({
         "updated_at": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
-        "sheets": idx,
+        "sheets": sheets,
     }, indent=2, ensure_ascii=False))
 
 
@@ -174,20 +262,21 @@ def _update_index(
     sheet_status: str,
     summary: dict,
     rel_key: str,
+    *,
+    engine_version: str | None = None,
 ) -> None:
     raw = _read_index()
     sheets = raw.get("sheets", raw) if isinstance(raw, dict) and "sheets" in raw else raw
-    total = summary.get("total", 0) or 1
-    # R123 (G1) — o summary do motor v5 usa match/no_match/na; as chaves
-    # antigas (ok/corrigido/preenchido) já não existem e davam ok_rate=0.
-    ok = summary.get("match", 0)
     sheets[str(sheet_id)] = {
         "sheet_id": sheet_id,
         "operador": operador,
         "date": date_iso,
         "sheet_status": sheet_status,
         "summary": summary,
-        "ok_rate": round(ok / total, 3) if total else 0,
+        "engine_version": engine_version or _current_engine_version(),
+        # R143 — ok_rate mede apenas células comparáveis. `NA` significa sem
+        # referência e não deve penalizar a taxa.
+        "ok_rate": _ok_rate(summary),
         "file": rel_key,
         "updated_at": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
     }
@@ -200,34 +289,88 @@ def _summary_path() -> Path:
     return _base_dir() / "_summary.json"
 
 
-def _update_summary() -> None:
-    """Recompute totals + per-day + per-operador from the index."""
-    raw = _read_index()
-    sheets = raw.get("sheets", raw) if isinstance(raw, dict) and "sheets" in raw else raw
+def _current_engine_entries(sheets: dict[str, dict]) -> tuple[dict[str, dict], int]:
+    current = _current_engine_version()
+    if not current:
+        return sheets, 0
+    active = {
+        sid: entry for sid, entry in sheets.items()
+        if entry.get("engine_version") == current
+    }
+    return active, max(0, len(sheets) - len(active))
 
+
+def _load_sheet_payload(entry: dict, *, include_stale: bool = False) -> dict | None:
+    current = _current_engine_version()
+    if not include_stale and current and entry.get("engine_version") != current:
+        return None
+    rel_file = entry.get("file")
+    if not rel_file:
+        return None
+    sheet_file = _base_dir() / rel_file
+    if not sheet_file.exists():
+        return None
+    try:
+        payload = json.loads(sheet_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if not include_stale and current and payload.get("engine_version") != current:
+        return None
+    expected_sheet_id = entry.get("sheet_id")
+    payload_sheet_id = payload.get("sheet_id")
+    if (
+        not include_stale
+        and expected_sheet_id is not None
+        and payload_sheet_id is not None
+        and str(payload_sheet_id) != str(expected_sheet_id)
+    ):
+        return None
+    return payload
+
+
+def _build_summary_from_index(sheets: dict[str, dict]) -> dict:
     # Round 33: simplified statuses (MATCH/NO_MATCH/NA)
     totals = {"match": 0, "no_match": 0, "na": 0, "total": 0}
     by_day: dict[str, dict] = defaultdict(lambda: dict(totals))
     by_op: dict[str, dict] = defaultdict(lambda: dict(totals))
+    active, stale = _current_engine_entries(sheets)
+    n_valid = 0
 
-    for entry in sheets.values():
-        s = entry.get("summary", {})
+    for entry in active.values():
+        payload = _load_sheet_payload(entry)
+        if payload is None:
+            stale += 1
+            continue
+        s = payload.get("summary") or entry.get("summary", {})
+        n_valid += 1
         for k in totals:
-            totals[k] += s.get(k, 0)
+            totals[k] += int(_summary_count(s, k))
         d = entry.get("date") or "no-date"
         for k in totals:
-            by_day[d][k] += s.get(k, 0)
+            by_day[d][k] += int(_summary_count(s, k))
         op = entry.get("operador") or "_"
         for k in totals:
-            by_op[op][k] += s.get(k, 0)
+            by_op[op][k] += int(_summary_count(s, k))
 
     summary = {
         "updated_at": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
+        "engine_version": _current_engine_version(),
         "totals": totals,
         "by_day": {d: dict(v) for d, v in sorted(by_day.items())},
         "by_operador": {o: dict(v) for o, v in sorted(by_op.items())},
-        "n_sheets": len(sheets),
+        "n_sheets": n_valid,
+        "stale_sheets": stale,
     }
+    return summary
+
+
+def _update_summary() -> None:
+    """Recompute totals + per-day + per-operador from current-engine index entries."""
+    raw = _read_index()
+    sheets = raw.get("sheets", raw) if isinstance(raw, dict) and "sheets" in raw else raw
+    summary = _build_summary_from_index(sheets)
     _atomic_write(_summary_path(), json.dumps(summary, indent=2, ensure_ascii=False))
 
 
@@ -238,97 +381,178 @@ def _to_analisar_path() -> Path:
 
 
 def _update_to_analisar() -> None:
-    """Aggregate all ANALISAR cells across all sheets into a flat list."""
+    """Aggregate all NO_MATCH cells across all sheets into a flat list."""
     raw = _read_index()
     sheets = raw.get("sheets", raw) if isinstance(raw, dict) and "sheets" in raw else raw
+    out = _build_to_analisar_from_index(sheets)
+    _atomic_write(_to_analisar_path(), json.dumps(out, indent=2, ensure_ascii=False))
+
+
+def _build_to_analisar_from_index(sheets: dict[str, dict]) -> dict:
+    active, stale = _current_engine_entries(sheets)
     all_items: list[dict] = []
-    for entry in sheets.values():
-        sheet_file = _base_dir() / entry["file"]
-        if not sheet_file.exists():
-            continue
-        try:
-            data = json.loads(sheet_file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+    for entry in active.values():
+        data = _load_sheet_payload(entry)
+        if data is None:
+            stale += 1
             continue
         for item in data.get("to_analisar", []):
+            norm_item = _normalise_to_analisar_item(item)
             all_items.append({
-                "sheet_id": entry["sheet_id"],
-                "operador": entry["operador"],
-                "date": entry["date"],
-                "row_index": item.get("row_index"),
-                "field": item.get("field"),
-                "value": item.get("value"),
-                # R123 (G2) — o item do to_analisar usa a chave `ref`,
-                # não `plan_value` (que vinha sempre None).
-                "plan_value": item.get("ref"),
-                "reason": item.get("reason"),
+                "sheet_id": entry.get("sheet_id") or data.get("sheet_id"),
+                "operador": entry.get("operador") or data.get("operador") or "_",
+                "date": entry.get("date") or data.get("date") or "no-date",
+                "engine_version": entry.get("engine_version"),
+                "section": norm_item.get("section"),
+                "row_index": norm_item.get("row_index"),
+                "field": norm_item.get("field"),
+                "field_path": norm_item.get("field_path"),
+                "value": norm_item.get("value"),
+                "ref_value": norm_item.get("ref_value"),
+                # R123 (G2) — o item antigo do to_analisar usa a chave `ref`,
+                # não `plan_value` (que vinha sempre None). Mantemos
+                # `plan_value` como alias compatível, mas `ref_value` é o
+                # nome correto para refs de plan/SAP/máquinas/colaboradores.
+                "plan_value": norm_item.get("plan_value"),
+                "ref_source": norm_item.get("ref_source"),
+                "reason": norm_item.get("reason"),
             })
     out = {
         "updated_at": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
+        "engine_version": _current_engine_version(),
         "total": len(all_items),
+        "stale_sheets": stale,
         "items": all_items,
     }
-    _atomic_write(_to_analisar_path(), json.dumps(out, indent=2, ensure_ascii=False))
+    return out
 
 
 # --- Read API ---
 
+def _empty_summary(*, stale_sheets: int = 0) -> dict:
+    return {
+        "updated_at": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
+        "engine_version": _current_engine_version(),
+        "totals": {"match": 0, "no_match": 0, "na": 0, "total": 0},
+        "by_day": {},
+        "by_operador": {},
+        "n_sheets": 0,
+        "stale_sheets": int(stale_sheets or 0),
+    }
+
+
 def load_summary() -> dict:
+    raw_idx = _read_index()
+    sheets = raw_idx.get("sheets", raw_idx) if isinstance(raw_idx, dict) and "sheets" in raw_idx else raw_idx
+    if sheets:
+        return _build_summary_from_index(sheets)
     p = _summary_path()
     if not p.exists():
-        return {"totals": {"total": 0}, "by_day": {}, "by_operador": {}, "n_sheets": 0}
+        return _empty_summary()
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        data = json.loads(p.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
-        return {"totals": {"total": 0}, "by_day": {}, "by_operador": {}, "n_sheets": 0}
+        return _empty_summary()
+    if not isinstance(data, dict):
+        return _empty_summary()
+    current = _current_engine_version()
+    if current and data.get("engine_version") not in (None, current):
+        return _empty_summary(
+            stale_sheets=int(_summary_count({"n_sheets": data.get("n_sheets")}, "n_sheets"))
+        )
+    data["totals"] = _normalise_summary_counts(data.get("totals"))
+    data["by_day"] = {
+        day: _normalise_summary_counts(counts)
+        for day, counts in (data.get("by_day") or {}).items()
+        if isinstance(counts, dict)
+    }
+    data["by_operador"] = {
+        op: _normalise_summary_counts(counts)
+        for op, counts in (data.get("by_operador") or {}).items()
+        if isinstance(counts, dict)
+    }
+    try:
+        data["n_sheets"] = int(data.get("n_sheets", 0) or 0)
+    except (TypeError, ValueError):
+        data["n_sheets"] = 0
+    try:
+        data["stale_sheets"] = int(data.get("stale_sheets", 0) or 0)
+    except (TypeError, ValueError):
+        data["stale_sheets"] = 0
+    data.setdefault("engine_version", _current_engine_version())
+    return data
 
 
 def load_to_analisar(limit: int | None = None) -> dict:
+    raw_idx = _read_index()
+    sheets = raw_idx.get("sheets", raw_idx) if isinstance(raw_idx, dict) and "sheets" in raw_idx else raw_idx
+    if sheets:
+        data = _build_to_analisar_from_index(sheets)
+        if limit is not None and len(data.get("items", [])) > limit:
+            data["items"] = data["items"][:limit]
+        return data
     p = _to_analisar_path()
     if not p.exists():
         return {"total": 0, "items": []}
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
-        if limit is not None and len(data.get("items", [])) > limit:
-            data["items"] = data["items"][:limit]
+        if not isinstance(data, dict):
+            return {"total": 0, "items": []}
+        current = _current_engine_version()
+        if current and data.get("engine_version") not in (None, current):
+            return {
+                "engine_version": current,
+                "total": 0,
+                "stale_sheets": int(_summary_count({"total": data.get("total")}, "total")),
+                "items": [],
+            }
+        items = [
+            _normalise_to_analisar_item(item)
+            for item in (data.get("items", []) or [])
+            if isinstance(item, dict)
+        ]
+        raw_total = data.get("total", len(items))
+        if limit is not None and len(items) > limit:
+            items = items[:limit]
+        data["items"] = items
+        data["total"] = int(raw_total or 0)
         return data
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError, ValueError):
         return {"total": 0, "items": []}
 
 
-def iter_sheet_cross_checks() -> list[dict]:
+def iter_sheet_cross_checks(*, include_stale: bool = False) -> list[dict]:
     """Read every per-sheet cross-check JSON listed in the index.
 
     Returns the full per-sheet payloads (sheet_id, operador, date, summary,
     rows, header, footer, to_analisar, ...). Used by the attractors module
     to aggregate real MATCH/NO_MATCH counts per field/template/operador.
     Missing or corrupt files are skipped silently.
+
+    By default this only returns files generated by the current scoring
+    engine. Pass ``include_stale=True`` for historical diagnostics.
     """
     raw = _read_index()
     sheets = raw.get("sheets", raw) if isinstance(raw, dict) and "sheets" in raw else raw
+    if not include_stale:
+        sheets, _stale = _current_engine_entries(sheets)
     out: list[dict] = []
     for entry in sheets.values():
-        sheet_file = _base_dir() / entry["file"]
-        if not sheet_file.exists():
-            continue
-        try:
-            out.append(json.loads(sheet_file.read_text(encoding="utf-8")))
-        except (json.JSONDecodeError, OSError):
-            continue
+        payload = _load_sheet_payload(entry, include_stale=include_stale)
+        if payload is not None:
+            out.append(payload)
     return out
 
 
-def load_sheet_cross_check(sheet_id: int) -> dict | None:
-    """Read the per-sheet cross-check JSON. Returns None if not found."""
+def load_sheet_cross_check(sheet_id: int, *, include_stale: bool = False) -> dict | None:
+    """Read one per-sheet cross-check JSON.
+
+    By default this only returns data generated by the current scoring engine.
+    Pass ``include_stale=True`` for historical diagnostics.
+    """
     raw = _read_index()
     sheets = raw.get("sheets", raw) if isinstance(raw, dict) and "sheets" in raw else raw
     entry = sheets.get(str(sheet_id))
     if not entry:
         return None
-    sheet_file = _base_dir() / entry["file"]
-    if not sheet_file.exists():
-        return None
-    try:
-        return json.loads(sheet_file.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
+    return _load_sheet_payload(entry, include_stale=include_stale)

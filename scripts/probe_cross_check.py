@@ -1,7 +1,7 @@
 """R123 — Probe do cross-check sobre a app.db (read-only, diagnóstico).
 
-Corre ``cross_check_sheet`` em memória sobre todas as folhas ``extracted``
-e agrega % MATCH / NO_MATCH / NA — global, por template e por campo. Não
+Corre ``cross_check_sheet`` em memória sobre folhas ``extracted`` e
+``validated`` e agrega % MATCH / NO_MATCH / NA — global, por template e por campo. Não
 grava nada; serve para medir o efeito de cada fase do R123 sem depender
 dos JSONs já gravados em 03_Cross_Check.
 
@@ -10,6 +10,7 @@ NA == cinza na UI (sem cor). MATCH == verde. NO_MATCH == vermelho/amarelo.
 Uso:
     uv run python scripts/probe_cross_check.py
     uv run python scripts/probe_cross_check.py --label "Fase 1"
+    uv run python scripts/probe_cross_check.py --status extracted
 """
 from __future__ import annotations
 
@@ -24,20 +25,21 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO / "backend"))
 
 from app.cross_check import cross_check_sheet, get_watcher  # noqa: E402
+from app.web.db import db_path  # noqa: E402
 
-_DB = _REPO / "data" / "app.db"
 
-
-def _load_sheets() -> list[tuple[int, dict]]:
-    con = sqlite3.connect(str(_DB))
+def _load_sheets(statuses: tuple[str, ...]) -> list[tuple[int, str, dict]]:
+    con = sqlite3.connect(str(db_path()))
     con.row_factory = sqlite3.Row
-    out: list[tuple[int, dict]] = []
+    out: list[tuple[int, str, dict]] = []
+    placeholders = ",".join("?" for _ in statuses)
     for r in con.execute(
-        "SELECT id, sheet_data FROM sheets "
-        "WHERE status = 'extracted' AND sheet_data IS NOT NULL"
+        "SELECT id, status, sheet_data FROM sheets "
+        f"WHERE status IN ({placeholders}) AND sheet_data IS NOT NULL",
+        statuses,
     ):
         try:
-            out.append((r["id"], json.loads(r["sheet_data"])))
+            out.append((r["id"], r["status"], json.loads(r["sheet_data"])))
         except (json.JSONDecodeError, TypeError):
             continue
     con.close()
@@ -47,7 +49,8 @@ def _load_sheets() -> list[tuple[int, dict]]:
 def _line(name: str, d: dict) -> str:
     m, nm, na = d.get("MATCH", 0), d.get("NO_MATCH", 0), d.get("NA", 0)
     t = m + nm + na
-    pct = 100 * m / t if t else 0.0
+    comparable = m + nm
+    pct = 100 * m / comparable if comparable else 0.0
     gray = 100 * na / t if t else 0.0
     return (
         f"  {name:<24} M={m:<5} NM={nm:<5} NA={na:<5} "
@@ -58,20 +61,29 @@ def _line(name: str, d: dict) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--label", default="current")
+    ap.add_argument(
+        "--status",
+        action="append",
+        choices=("extracted", "validated"),
+        help="Estado a medir; repetir para vários. Default: extracted + validated.",
+    )
     args = ap.parse_args()
+    statuses = tuple(dict.fromkeys(args.status or ["extracted", "validated"]))
 
     refs = get_watcher().get_refs()
     if not refs.get("available"):
         print("AVISO: refs indisponíveis — cross-check vai degradar tudo a NA.")
 
-    sheets = _load_sheets()
+    sheets = _load_sheets(statuses)
     glob: dict[str, int] = defaultdict(int)
+    glob_all: dict[str, int] = defaultdict(int)
     by_tpl: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     by_field: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    by_status: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     hdr: dict[str, int] = defaultdict(int)
     errors = 0
 
-    for sid, sd in sheets:
+    for sid, sheet_status, sd in sheets:
         try:
             res = cross_check_sheet(sd, None, refs)
         except Exception as exc:  # noqa: BLE001
@@ -83,21 +95,33 @@ def main() -> None:
             for fld, info in (row.get("fields") or {}).items():
                 st = (info or {}).get("status", "NA")
                 glob[st] += 1
+                by_status[sheet_status][st] += 1
                 by_tpl[tpl][st] += 1
                 by_field[fld][st] += 1
+                glob_all[st] += 1
         for sec in ("header", "footer"):
             for info in (res.get(sec) or {}).values():
-                hdr[(info or {}).get("status", "NA")] += 1
+                st = (info or {}).get("status", "NA")
+                hdr[st] += 1
+                glob_all[st] += 1
 
     print(f"=== PROBE cross-check — {args.label} ===")
+    print(f"statuses: {','.join(statuses)}")
     print(f"folhas: {len(sheets)}  erros: {errors}")
     print()
-    print("GLOBAL (celulas de linha):")
+    print("GLOBAL (todas as celulas):")
+    print(_line("global", glob_all))
+    print()
+    print("LINHAS:")
     print(_line("global", glob))
     print()
     print("POR TEMPLATE:")
     for tpl in sorted(by_tpl, key=lambda t: -sum(by_tpl[t].values())):
         print(_line(tpl, by_tpl[tpl]))
+    print()
+    print("POR STATUS:")
+    for st in statuses:
+        print(_line(st, by_status[st]))
     print()
     print("POR CAMPO:")
     for fld in sorted(by_field):

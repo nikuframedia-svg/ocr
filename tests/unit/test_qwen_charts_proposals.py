@@ -1,6 +1,8 @@
 """R110.B+C — Testes para chart_renderer + propose_tools."""
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from app.pipeline.chart_renderer import (
@@ -196,13 +198,24 @@ class TestProposeTemplateChange:
         reset_session_buffers()
         db.init_db()
 
-    def test_add_field_to_existing_template(self):
+    def test_add_existing_field_rejected(self):
         result = propose_template_change(
             template_name="quinadora_pav8",
             change_type="add_field",
             field_name="ov",
             field_position="after_cliente",
             justification="23 folhas têm OV",
+        )
+        assert result["status"] == "error"
+        assert "já existe" in result["error"]
+
+    def test_add_new_field_to_existing_template(self):
+        result = propose_template_change(
+            template_name="quinadora_pav8",
+            change_type="add_field",
+            field_name=f"zz_test_{uuid.uuid4().hex}",
+            field_position="end",
+            justification="campo novo em teste",
         )
         assert result["status"] == "ok"
         assert result["risk_class"] == "review"

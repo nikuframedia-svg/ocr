@@ -18,6 +18,7 @@
 {% set _is_dim_field = field_path.endswith('.esp') or field_path.endswith('.larg_mm')
                       or field_path.endswith('.lbase') or field_path.endswith('.ltopo')
                       or field_path.endswith('.comp_mm')
+                      or field_path.endswith('.dbase') or field_path.endswith('.dtopo')
                       or field_path.endswith('.lote') %}{# R52 F3: lote NO_MATCH amarelo (warn) — não em SAP é review, não erro crítico #}
 {# R52 F4: NA from stub-accept (suspended_by_stub) → cc-na-suspended (amarelo soft)
    to distinguish from NA sem-ref (qtd/coni/pri/etc — cinza neutro). #}
@@ -27,7 +28,7 @@
    R133: removido o override `_was_auto_substituted → cc-warn` (era
    demasiado abrangente — pintava de amarelo cells auto-corrigidas que
    ficaram CERTAS: operador snap, cod_maquina fill, modelo, dim). O fix
-   real do bug #512 vive no engine (`_finish_cell` preserva OCR em
+   real vive no engine (`_preserve_ocr_with_ref` preserva OCR em
    disagreement de of/ov/cliente → very_different → cc-warn aqui). O
    asterisco `*` (cc_snapped_by_path) continua a marcar auto-correcções
    sem fundo amarelo. #}
@@ -65,6 +66,7 @@
 {% set _obra_concluida = cc_obra_concluida_by_path is defined and cc_obra_concluida_by_path.get(field_path) %}
 <td {% if oob is defined and oob %}hx-swap-oob="true" {% endif %}class="{{ cell_class }} {{ cc_class }} {% if edited %}cell-edited{% endif %} {% if _is_validated %}cell-locked{% endif %}"
     {% if _obra_concluida %}title="Obra já concluída no plan — verificar"
+    {% elif cc_status == 'NO_MATCH' and cc_ref_title_by_path is defined and cc_ref_title_by_path.get(field_path) %}title="{{ cc_ref_title_by_path.get(field_path) }}"
     {% elif cc_status == 'NO_MATCH' and cc_ref_by_path is defined and cc_ref_by_path.get(field_path) %}title="Plan diz: {{ cc_ref_by_path.get(field_path, '') }}"{% endif %}
     style="padding:6px 8px; font-family:var(--font-mono); font-size:12px; {% if _is_validated %}cursor:default;{% else %}cursor:text;{% endif %} min-width:60px; position:relative;"
     {% if not _is_validated %}

@@ -119,13 +119,33 @@ def get_settings() -> Settings:
     return Settings()
 
 
+def _dotenv_value(repo_root: Path, env_var: str) -> str | None:
+    env_path = repo_root / ".env"
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key.strip() != env_var:
+            continue
+        value = value.strip().strip('"').strip("'")
+        return value or None
+    return None
+
+
 def resolve_kanban_path(env_var: str, prod_default: str, repo_subpath: str) -> Path:
     """R118 — resolve a kanban-data path com fallback inteligente.
 
     Ordem:
       1. Se env var set → usa esse path (interpretado relativo ao repo se não absoluto).
-      2. Senão, se o path produção ``prod_default`` existe → usa-o (compat com PC Metalogalva).
-      3. Senão → usa ``<repo>/{repo_subpath}`` (dev laptop).
+      2. Senão, se `.env` define a env var → usa esse path.
+      3. Senão, se o path produção ``prod_default`` existe e é absoluto no
+         sistema atual → usa-o (compat com PC Metalogalva).
+      4. Senão → usa ``<repo>/{repo_subpath}`` (dev laptop).
 
     Args:
         env_var: nome da env var (ex: ``KANBAN_DOC_DIR``).
@@ -138,11 +158,14 @@ def resolve_kanban_path(env_var: str, prod_default: str, repo_subpath: str) -> P
     são resolvidos contra o repo root (não contra CWD).
     """
     repo_root = Path(__file__).resolve().parents[2]
-    env_val = os.environ.get(env_var)
+    env_val = os.environ.get(env_var) or _dotenv_value(repo_root, env_var)
     if env_val:
         p = Path(env_val)
         return p if p.is_absolute() else repo_root / p
     prod = Path(prod_default)
-    if prod.exists():
+    # On POSIX, Windows strings like "C:\\kanban\\..." are relative paths.
+    # Never treat those as production defaults, even if a previous run
+    # accidentally created such a directory in the repo.
+    if prod.is_absolute() and prod.exists():
         return prod
     return repo_root / repo_subpath

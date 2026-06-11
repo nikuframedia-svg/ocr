@@ -88,6 +88,9 @@ def _empty_refs() -> dict[str, Any]:
         # header.operador field via the UI; next OCR of the same corrupt
         # name resolves directly via this lexicon.
         "operador_aliases": {},
+        # Cliente aliases are shared with the snap layer so cross-check uses
+        # the same canonical customer shortcuts during reprocessing.
+        "cliente_aliases": {},
         "loaded_at": None,
         "sap_path": "",
         "sap_sha256": "",
@@ -106,6 +109,7 @@ def _empty_refs() -> dict[str, Any]:
         "maquinas_size": 0,
         "maquinas_mtime": 0.0,
         "aliases_mtime": 0.0,
+        "cliente_aliases_mtime": 0.0,
         "stats": {
             "n_lotes": 0, "n_ofs": 0, "n_ovs": 0,
             "n_plan_rows": 0, "n_clientes": 0,
@@ -334,6 +338,7 @@ def _mine_from_excel(
     plan_path: Path,
     colab_path: Path | None = None,
     maq_path: Path | None = None,
+    repo_root: Path = _REPO_ROOT,
 ) -> dict[str, Any]:
     """Re-mine StockSAP + plan_colunas + ListaColaboradores Excel files into
     in-memory refs. Mirror of scripts/mine_sap_plan.py logic (kept inline
@@ -553,7 +558,7 @@ def _mine_from_excel(
     # R91 — operador aliases lexicon (memorized OCR-corrupt → canonical
     # snaps). Empty dict if file missing/invalid. Path: <repo>/lexicons/
     # operador_aliases.json. Hot-reload happens when file mtime changes.
-    aliases_path = _REPO_ROOT / "lexicons" / "operador_aliases.json"
+    aliases_path = repo_root / "lexicons" / "operador_aliases.json"
     if aliases_path.exists():
         try:
             refs["operador_aliases"] = json.loads(
@@ -568,6 +573,25 @@ def _mine_from_excel(
     else:
         refs["operador_aliases"] = {}
         refs["aliases_mtime"] = 0.0
+
+    cliente_aliases_path = repo_root / "lexicons" / "cliente_aliases.json"
+    if cliente_aliases_path.exists():
+        try:
+            raw_aliases = json.loads(cliente_aliases_path.read_text(encoding="utf-8"))
+            refs["cliente_aliases"] = {
+                str(k).strip().upper(): str(v).strip().upper()
+                for k, v in raw_aliases.items()
+                if not str(k).startswith("_") and str(k).strip() and str(v).strip()
+            }
+        except (json.JSONDecodeError, OSError, AttributeError):
+            refs["cliente_aliases"] = {}
+        try:
+            refs["cliente_aliases_mtime"] = cliente_aliases_path.stat().st_mtime
+        except OSError:
+            refs["cliente_aliases_mtime"] = 0.0
+    else:
+        refs["cliente_aliases"] = {}
+        refs["cliente_aliases_mtime"] = 0.0
 
     refs["stats"]["n_lotes"] = len(refs["lotes_sap"])
     refs["loaded_at"] = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
@@ -692,16 +716,21 @@ class RefWatcher:
         # R134 — snapshot dos mtimes de um ficheiro que falhou a mineração.
         # Enquanto o ficheiro on-disk não mudar, não voltamos a tentar minerar
         # (evita martelar o miner em cada scan com um ficheiro corrupto).
-        self._failed_mtimes: tuple[float, float, float, float, float] | None = None
+        self._failed_mtimes: tuple[float, float, float, float, float, float] | None = None
 
-    def _current_mtimes(self) -> tuple[float, float, float, float, float]:
+    def _current_mtimes(self) -> tuple[float, float, float, float, float, float]:
         sap_m = self.sap_path.stat().st_mtime if self.sap_path.exists() else 0.0
         plan_m = self.plan_path.stat().st_mtime if self.plan_path.exists() else 0.0
         colab_m = self.colab_path.stat().st_mtime if self.colab_path.exists() else 0.0
         maq_m = self.maq_path.stat().st_mtime if self.maq_path.exists() else 0.0
-        aliases_path = _REPO_ROOT / "lexicons" / "operador_aliases.json"
+        aliases_path = self.repo_root / "lexicons" / "operador_aliases.json"
         aliases_m = aliases_path.stat().st_mtime if aliases_path.exists() else 0.0
-        return sap_m, plan_m, colab_m, maq_m, aliases_m
+        cliente_aliases_path = self.repo_root / "lexicons" / "cliente_aliases.json"
+        cliente_aliases_m = (
+            cliente_aliases_path.stat().st_mtime
+            if cliente_aliases_path.exists() else 0.0
+        )
+        return sap_m, plan_m, colab_m, maq_m, aliases_m, cliente_aliases_m
 
     def _needs_reload(self) -> bool:
         current = self._current_mtimes()
@@ -709,13 +738,14 @@ class RefWatcher:
         # não voltar a tentar (só re-tenta quando o conteúdo/mtime muda).
         if self._failed_mtimes is not None and current == self._failed_mtimes:
             return False
-        sap_m, plan_m, colab_m, maq_m, aliases_m = current
+        sap_m, plan_m, colab_m, maq_m, aliases_m, cliente_aliases_m = current
         return (
             sap_m != self._refs.get("sap_mtime", 0.0)
             or plan_m != self._refs.get("plan_mtime", 0.0)
             or colab_m != self._refs.get("colab_mtime", 0.0)
             or maq_m != self._refs.get("maquinas_mtime", 0.0)
             or aliases_m != self._refs.get("aliases_mtime", 0.0)
+            or cliente_aliases_m != self._refs.get("cliente_aliases_mtime", 0.0)
         )
 
     def _reload_locked(self) -> None:
@@ -731,7 +761,8 @@ class RefWatcher:
         )
         try:
             new_refs = _mine_from_excel(
-                self.sap_path, self.plan_path, self.colab_path, self.maq_path
+                self.sap_path, self.plan_path, self.colab_path, self.maq_path,
+                self.repo_root,
             )
         except Exception:  # noqa: BLE001
             self._failed_mtimes = self._current_mtimes()

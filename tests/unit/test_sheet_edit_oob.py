@@ -66,7 +66,7 @@ def isolate(monkeypatch):
     monkeypatch.setattr(main, "cross_check_sheet", lambda *a, **k: {})
     monkeypatch.setattr(main, "store_cross_check", lambda **k: None)
     monkeypatch.setattr(main, "_spawn_shadow_scoring", lambda *a, **k: None)
-    monkeypatch.setattr(main, "_build_cc_maps", lambda sid: ({}, {}, {}, {}, {}))
+    monkeypatch.setattr(main, "_build_cc_maps", lambda sid: ({}, {}, {}, {}, {}, {}))
     monkeypatch.setattr(main, "_apply_auto_overwrites", lambda *a, **k: 0)
     monkeypatch.setattr(main, "_apply_codmaq_fill", lambda *a, **k: 0)
     monkeypatch.setattr(main, "_maybe_record_operador_alias", lambda sid: None)

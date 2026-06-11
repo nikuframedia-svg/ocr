@@ -149,7 +149,8 @@ CREATE TABLE IF NOT EXISTS shadow_runs (
     started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     finished_at TIMESTAMP,
     cells_total INTEGER,
-    cells_snapped INTEGER,        -- motor escolheu candidato != OCR raw
+    cells_snapped INTEGER,        -- correção suave/autofill aplicada pelo motor
+    cells_very_different INTEGER, -- proposta longe do OCR; revisão humana
     cells_confirmed INTEGER,      -- motor escolheu candidato == OCR raw
     cells_na INTEGER,             -- campo sem pool de referência
     duration_ms INTEGER,
@@ -340,6 +341,9 @@ def init_db() -> None:
             c.execute("ALTER TABLE sheets ADD COLUMN shadow_scoring_json TEXT")
         if "shadow_scored_at" not in cols:
             c.execute("ALTER TABLE sheets ADD COLUMN shadow_scored_at TIMESTAMP")
+        shadow_cols = {r["name"] for r in c.execute("PRAGMA table_info(shadow_runs)").fetchall()}
+        if "cells_very_different" not in shadow_cols:
+            c.execute("ALTER TABLE shadow_runs ADD COLUMN cells_very_different INTEGER")
 
 
 def insert_sheet(image_path: str) -> int:
@@ -400,19 +404,26 @@ def finish_shadow_run(
 ) -> None:
     """Mark a shadow_runs row as done and persist the scoring on the sheet."""
     payload = json.dumps(scoring, ensure_ascii=False)
+    try:
+        cells_very_different = int(
+            (scoring.get("summary") or {}).get("very_different", 0) or 0
+        )
+    except (TypeError, ValueError):
+        cells_very_different = 0
     with conn() as c:
         c.execute(
             """UPDATE shadow_runs
                SET finished_at = CURRENT_TIMESTAMP,
                    cells_total = ?,
                    cells_snapped = ?,
+                   cells_very_different = ?,
                    cells_confirmed = ?,
                    cells_na = ?,
                    duration_ms = ?,
                    status = 'done'
                WHERE id = ?""",
-            (cells_total, cells_snapped, cells_confirmed, cells_na,
-             duration_ms, run_id),
+            (cells_total, cells_snapped, cells_very_different,
+             cells_confirmed, cells_na, duration_ms, run_id),
         )
         c.execute(
             """UPDATE sheets
@@ -618,7 +629,7 @@ def list_proposals(
                        shadow_eval_results, created_at, decided_at, decided_by
                 FROM proposals
                 {where_sql}
-                ORDER BY created_at DESC
+                ORDER BY created_at DESC, id DESC
                 LIMIT ?""",
             params,
         ).fetchall()

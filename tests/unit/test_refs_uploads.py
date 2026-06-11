@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
 from app.cross_check import ref_watcher, refs_uploads, storage
-from app.pipeline.scoring_engine import normalize_of
+from app.pipeline.scoring_engine import ENGINE_VERSION, normalize_of
 from app.web import main
 
 
@@ -432,6 +432,658 @@ def test_cross_check_storage_persists_refs_snapshot(tmp_path, monkeypatch):
     assert payload["refs_snapshot"] == snap
 
 
+def test_cross_check_index_ok_rate_ignores_na_cells(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "_base_dir", lambda: tmp_path)
+
+    storage.store_cross_check(
+        sheet_id=1,
+        image_path="images/a.jpg",
+        operador="OPERADOR",
+        date_iso="2026-06-03",
+        sheet_status="extracted",
+        cross_check_result={
+            "checked_at": "2026-06-03T10:01:00+00:00",
+            "summary": {"match": 8, "no_match": 2, "na": 10, "total": 20},
+            "rows": [],
+            "header": {},
+            "footer": {},
+            "to_analisar": [],
+        },
+    )
+
+    index = json.loads((tmp_path / "_index.json").read_text(encoding="utf-8"))
+    sheet = index["sheets"]["1"]
+    assert sheet["summary"]["total"] == 20
+    assert sheet["ok_rate"] == 0.8
+
+
+def test_cross_check_index_rewrites_stale_ok_rates(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "_base_dir", lambda: tmp_path)
+    stale = {
+        "updated_at": "2026-06-03T10:00:00+00:00",
+        "sheets": {
+            "1": {
+                "sheet_id": 1,
+                "operador": "OPERADOR",
+                "date": "2026-06-03",
+                "sheet_status": "extracted",
+                "summary": {"match": 8, "no_match": 2, "na": 10, "total": 20},
+                "engine_version": ENGINE_VERSION,
+                "ok_rate": 0.0,
+                "file": "2026-06-03/old.json",
+            },
+        },
+    }
+    (tmp_path / "_index.json").write_text(json.dumps(stale), encoding="utf-8")
+
+    storage.store_cross_check(
+        sheet_id=2,
+        image_path="images/b.jpg",
+        operador="OPERADOR",
+        date_iso="2026-06-03",
+        sheet_status="extracted",
+        cross_check_result={
+            "checked_at": "2026-06-03T10:01:00+00:00",
+            "summary": {"match": 1, "no_match": 0, "na": 0, "total": 1},
+            "rows": [],
+            "header": {},
+            "footer": {},
+            "to_analisar": [],
+        },
+    )
+
+    index = json.loads((tmp_path / "_index.json").read_text(encoding="utf-8"))
+    assert index["sheets"]["1"]["ok_rate"] == 0.8
+    assert index["sheets"]["2"]["ok_rate"] == 1.0
+
+
+def test_cross_check_summary_tolerates_string_counts(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "_base_dir", lambda: tmp_path)
+    sheet_dir = tmp_path / "2026-06-03"
+    sheet_dir.mkdir()
+    (sheet_dir / "old.json").write_text(json.dumps({
+        "sheet_id": 1,
+        "engine_version": ENGINE_VERSION,
+        "summary": {"match": "8", "no_match": "2", "na": "10", "total": "20"},
+        "rows": [],
+        "header": {},
+        "footer": {},
+        "to_analisar": [],
+    }), encoding="utf-8")
+    stale = {
+        "updated_at": "2026-06-03T10:00:00+00:00",
+        "sheets": {
+            "1": {
+                "sheet_id": 1,
+                "operador": "OPERADOR",
+                "date": "2026-06-03",
+                "sheet_status": "extracted",
+                "summary": {"match": "8", "no_match": "2", "na": "10", "total": "20"},
+                "engine_version": ENGINE_VERSION,
+                "ok_rate": 0.0,
+                "file": "2026-06-03/old.json",
+            },
+        },
+    }
+    (tmp_path / "_index.json").write_text(json.dumps(stale), encoding="utf-8")
+
+    storage.store_cross_check(
+        sheet_id=2,
+        image_path="images/b.jpg",
+        operador="OPERADOR",
+        date_iso="2026-06-03",
+        sheet_status="extracted",
+        cross_check_result={
+            "checked_at": "2026-06-03T10:01:00+00:00",
+            "summary": {"match": 1, "no_match": 0, "na": 0, "total": 1},
+            "rows": [],
+            "header": {},
+            "footer": {},
+            "to_analisar": [],
+        },
+    )
+
+    summary = json.loads((tmp_path / "_summary.json").read_text(encoding="utf-8"))
+    assert summary["totals"] == {"match": 9, "no_match": 2, "na": 10, "total": 21}
+    index = json.loads((tmp_path / "_index.json").read_text(encoding="utf-8"))
+    assert index["sheets"]["1"]["summary"] == {"match": 8, "no_match": 2, "na": 10, "total": 20}
+
+
+def test_cross_check_summary_excludes_stale_engine_entries(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "_base_dir", lambda: tmp_path)
+    stale = {
+        "updated_at": "2026-06-03T10:00:00+00:00",
+        "sheets": {
+            "1": {
+                "sheet_id": 1,
+                "operador": "OPERADOR_ANTIGO",
+                "date": "2026-06-02",
+                "sheet_status": "extracted",
+                "summary": {"match": 8, "no_match": 2, "na": 10, "total": 20},
+                "engine_version": "v-old",
+                "ok_rate": 0.8,
+                "file": "2026-06-02/old.json",
+            },
+        },
+    }
+    (tmp_path / "_index.json").write_text(json.dumps(stale), encoding="utf-8")
+
+    storage.store_cross_check(
+        sheet_id=2,
+        image_path="images/b.jpg",
+        operador="OPERADOR",
+        date_iso="2026-06-03",
+        sheet_status="extracted",
+        cross_check_result={
+            "checked_at": "2026-06-03T10:01:00+00:00",
+            "engine_version": ENGINE_VERSION,
+            "summary": {"match": 1, "no_match": 0, "na": 0, "total": 1},
+            "rows": [],
+            "header": {},
+            "footer": {},
+            "to_analisar": [],
+        },
+    )
+
+    summary = storage.load_summary()
+
+    assert summary["engine_version"] == ENGINE_VERSION
+    assert summary["totals"] == {"match": 1, "no_match": 0, "na": 0, "total": 1}
+    assert summary["n_sheets"] == 1
+    assert summary["stale_sheets"] == 1
+
+
+def test_iter_sheet_cross_checks_can_include_stale_entries(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "_base_dir", lambda: tmp_path)
+    stale_dir = tmp_path / "2026-06-02"
+    stale_dir.mkdir()
+    (stale_dir / "old.json").write_text(
+        json.dumps({"sheet_id": 1, "engine_version": "v-old", "rows": []}),
+        encoding="utf-8",
+    )
+    index = {
+        "updated_at": "2026-06-03T10:00:00+00:00",
+        "sheets": {
+            "1": {
+                "sheet_id": 1,
+                "operador": "OPERADOR_ANTIGO",
+                "date": "2026-06-02",
+                "sheet_status": "extracted",
+                "summary": {"match": 1, "no_match": 0, "na": 0, "total": 1},
+                "engine_version": "v-old",
+                "ok_rate": 1.0,
+                "file": "2026-06-02/old.json",
+            },
+        },
+    }
+    (tmp_path / "_index.json").write_text(json.dumps(index), encoding="utf-8")
+
+    current = storage.iter_sheet_cross_checks()
+    all_engines = storage.iter_sheet_cross_checks(include_stale=True)
+
+    assert current == []
+    assert [item["sheet_id"] for item in all_engines] == [1]
+
+
+def test_load_sheet_cross_check_excludes_stale_by_default(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "_base_dir", lambda: tmp_path)
+    stale_dir = tmp_path / "2026-06-02"
+    stale_dir.mkdir()
+    (stale_dir / "old.json").write_text(
+        json.dumps({
+            "sheet_id": 1,
+            "engine_version": "v-old",
+            "rows": [{"row_index": 0, "fields": {}}],
+        }),
+        encoding="utf-8",
+    )
+    (tmp_path / "_index.json").write_text(json.dumps({
+        "updated_at": "2026-06-03T10:00:00+00:00",
+        "sheets": {
+            "1": {
+                "sheet_id": 1,
+                "operador": "OPERADOR_ANTIGO",
+                "date": "2026-06-02",
+                "sheet_status": "extracted",
+                "summary": {"match": 1, "no_match": 0, "na": 0, "total": 1},
+                "engine_version": "v-old",
+                "ok_rate": 1.0,
+                "file": "2026-06-02/old.json",
+            },
+        },
+    }), encoding="utf-8")
+
+    assert storage.load_sheet_cross_check(1) is None
+    assert storage.load_sheet_cross_check(1, include_stale=True)["engine_version"] == "v-old"
+
+
+def test_load_sheet_cross_check_rejects_stale_payload_even_when_index_is_current(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(storage, "_base_dir", lambda: tmp_path)
+    sheet_dir = tmp_path / "2026-06-03"
+    sheet_dir.mkdir()
+    (sheet_dir / "mismatched.json").write_text(
+        json.dumps({
+            "sheet_id": 2,
+            "engine_version": "v-old",
+            "rows": [{"row_index": 0, "fields": {}}],
+            "to_analisar": [{
+                "section": "rows",
+                "row_index": 0,
+                "field": "modelo",
+                "value": "OLD",
+                "ref": "CURRENT",
+            }],
+        }),
+        encoding="utf-8",
+    )
+    (tmp_path / "_index.json").write_text(json.dumps({
+        "updated_at": "2026-06-03T10:00:00+00:00",
+        "sheets": {
+            "2": {
+                "sheet_id": 2,
+                "operador": "OPERADOR",
+                "date": "2026-06-03",
+                "sheet_status": "extracted",
+                "summary": {"match": 1, "no_match": 0, "na": 0, "total": 1},
+                "engine_version": ENGINE_VERSION,
+                "ok_rate": 1.0,
+                "file": "2026-06-03/mismatched.json",
+            },
+        },
+    }), encoding="utf-8")
+
+    assert storage.load_sheet_cross_check(2) is None
+    assert storage.load_sheet_cross_check(2, include_stale=True)["engine_version"] == "v-old"
+    assert storage.iter_sheet_cross_checks() == []
+    assert storage.iter_sheet_cross_checks(include_stale=True)[0]["engine_version"] == "v-old"
+    inbox = storage.load_to_analisar()
+    assert inbox["items"] == []
+    assert inbox["stale_sheets"] == 1
+    summary = storage.load_summary()
+    assert summary["totals"] == {"match": 0, "no_match": 0, "na": 0, "total": 0}
+    assert summary["n_sheets"] == 0
+    assert summary["stale_sheets"] == 1
+
+
+def test_cross_check_readers_skip_index_entries_without_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "_base_dir", lambda: tmp_path)
+    (tmp_path / "_index.json").write_text(json.dumps({
+        "updated_at": "2026-06-03T10:00:00+00:00",
+        "sheets": {
+            "3": {
+                "sheet_id": 3,
+                "operador": "OPERADOR",
+                "date": "2026-06-03",
+                "sheet_status": "extracted",
+                "summary": {"match": 1, "no_match": 0, "na": 0, "total": 1},
+                "engine_version": ENGINE_VERSION,
+                "ok_rate": 1.0,
+            },
+        },
+    }), encoding="utf-8")
+
+    assert storage.load_sheet_cross_check(3) is None
+    assert storage.iter_sheet_cross_checks() == []
+    inbox = storage.load_to_analisar()
+    assert inbox["items"] == []
+    assert inbox["stale_sheets"] == 1
+    summary = storage.load_summary()
+    assert summary["totals"] == {"match": 0, "no_match": 0, "na": 0, "total": 0}
+    assert summary["n_sheets"] == 0
+    assert summary["stale_sheets"] == 1
+
+
+def test_cross_check_readers_reject_payload_for_different_sheet_id(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "_base_dir", lambda: tmp_path)
+    sheet_dir = tmp_path / "2026-06-03"
+    sheet_dir.mkdir()
+    (sheet_dir / "wrong-sheet.json").write_text(json.dumps({
+        "sheet_id": 99,
+        "engine_version": ENGINE_VERSION,
+        "summary": {"match": 5, "no_match": 0, "na": 0, "total": 5},
+        "rows": [],
+        "header": {},
+        "footer": {},
+        "to_analisar": [{
+            "section": "rows",
+            "row_index": 0,
+            "field": "modelo",
+            "value": "WRONG",
+            "ref": "PLAN",
+        }],
+    }), encoding="utf-8")
+    (tmp_path / "_index.json").write_text(json.dumps({
+        "updated_at": "2026-06-03T10:00:00+00:00",
+        "sheets": {
+            "4": {
+                "sheet_id": 4,
+                "operador": "OPERADOR",
+                "date": "2026-06-03",
+                "sheet_status": "extracted",
+                "summary": {"match": 5, "no_match": 0, "na": 0, "total": 5},
+                "engine_version": ENGINE_VERSION,
+                "ok_rate": 1.0,
+                "file": "2026-06-03/wrong-sheet.json",
+            },
+        },
+    }), encoding="utf-8")
+
+    assert storage.load_sheet_cross_check(4) is None
+    assert storage.load_sheet_cross_check(4, include_stale=True)["sheet_id"] == 99
+    assert storage.iter_sheet_cross_checks() == []
+    inbox = storage.load_to_analisar()
+    assert inbox["items"] == []
+    assert inbox["stale_sheets"] == 1
+    summary = storage.load_summary()
+    assert summary["totals"] == {"match": 0, "no_match": 0, "na": 0, "total": 0}
+    assert summary["n_sheets"] == 0
+    assert summary["stale_sheets"] == 1
+
+
+def test_remove_sheet_cross_check_handles_wrapped_index(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "_base_dir", lambda: tmp_path)
+    stored = storage.store_cross_check(
+        sheet_id=1,
+        image_path="images/a.jpg",
+        operador="OPERADOR",
+        date_iso="2026-06-03",
+        sheet_status="extracted",
+        cross_check_result={
+            "checked_at": "2026-06-03T10:01:00+00:00",
+            "summary": {"match": 1, "no_match": 0, "na": 0, "total": 1},
+            "rows": [],
+            "header": {},
+            "footer": {},
+            "to_analisar": [],
+        },
+    )
+    assert Path(stored["file"]).exists()
+
+    storage.remove_sheet_cross_check(1)
+
+    assert not Path(stored["file"]).exists()
+    index = json.loads((tmp_path / "_index.json").read_text(encoding="utf-8"))
+    assert index["sheets"] == {}
+    summary = json.loads((tmp_path / "_summary.json").read_text(encoding="utf-8"))
+    assert summary["n_sheets"] == 0
+
+
+def test_to_analisar_preserves_section_and_field_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "_base_dir", lambda: tmp_path)
+
+    storage.store_cross_check(
+        sheet_id=1,
+        image_path="images/a.jpg",
+        operador="OPERADOR",
+        date_iso="2026-06-03",
+        sheet_status="extracted",
+        cross_check_result={
+            "checked_at": "2026-06-03T10:01:00+00:00",
+            "summary": {"match": 0, "no_match": 1, "na": 0, "total": 1},
+            "rows": [],
+            "header": {},
+            "footer": {},
+            "to_analisar": [{
+                "section": "header",
+                "row_index": None,
+                "field": "operador",
+                "field_path": "header.operador",
+                "value": "OPERADOR DESCONHECIDO",
+                "ref": "",
+                "ref_source": "ocr_raw",
+                "reason": "Motor propõe valor muito diferente do OCR",
+            }],
+        },
+    )
+
+    inbox = storage.load_to_analisar()
+    assert inbox["total"] == 1
+    assert inbox["items"][0]["section"] == "header"
+    assert inbox["items"][0]["field_path"] == "header.operador"
+    assert inbox["items"][0]["ref_source"] == "ocr_raw"
+    assert inbox["items"][0]["ref_value"] is None
+    assert inbox["items"][0]["plan_value"] is None
+
+
+def test_to_analisar_excludes_stale_engine_entries(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "_base_dir", lambda: tmp_path)
+    old_dir = tmp_path / "2026-06-02"
+    old_dir.mkdir()
+    (old_dir / "old.json").write_text(json.dumps({
+        "engine_version": "v-old",
+        "to_analisar": [{
+            "section": "rows",
+            "row_index": 0,
+            "field": "modelo",
+            "field_path": "rows[0].modelo",
+            "value": "OLD",
+            "ref": "PLAN_OLD",
+            "ref_source": "plan",
+            "reason": "old",
+        }],
+    }), encoding="utf-8")
+    stale = {
+        "updated_at": "2026-06-03T10:00:00+00:00",
+        "sheets": {
+            "1": {
+                "sheet_id": 1,
+                "operador": "OPERADOR_ANTIGO",
+                "date": "2026-06-02",
+                "sheet_status": "extracted",
+                "summary": {"match": 0, "no_match": 1, "na": 0, "total": 1},
+                "engine_version": "v-old",
+                "ok_rate": 0.0,
+                "file": "2026-06-02/old.json",
+            },
+        },
+    }
+    (tmp_path / "_index.json").write_text(json.dumps(stale), encoding="utf-8")
+
+    storage.store_cross_check(
+        sheet_id=2,
+        image_path="images/b.jpg",
+        operador="OPERADOR",
+        date_iso="2026-06-03",
+        sheet_status="extracted",
+        cross_check_result={
+            "checked_at": "2026-06-03T10:01:00+00:00",
+            "engine_version": ENGINE_VERSION,
+            "summary": {"match": 0, "no_match": 1, "na": 0, "total": 1},
+            "rows": [],
+            "header": {},
+            "footer": {},
+            "to_analisar": [{
+                "section": "rows",
+                "row_index": 0,
+                "field": "modelo",
+                "field_path": "rows[0].modelo",
+                "value": "CURRENT",
+                "ref": "PLAN_CURRENT",
+                "ref_source": "plan",
+                "reason": "current",
+            }],
+        },
+    )
+
+    inbox = storage.load_to_analisar()
+
+    assert inbox["engine_version"] == ENGINE_VERSION
+    assert inbox["total"] == 1
+    assert inbox["stale_sheets"] == 1
+    assert inbox["items"][0]["value"] == "CURRENT"
+    assert inbox["items"][0]["ref_value"] == "PLAN_CURRENT"
+    assert inbox["items"][0]["plan_value"] == "PLAN_CURRENT"
+
+
+def test_to_analisar_tolerates_legacy_index_missing_metadata(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "_base_dir", lambda: tmp_path)
+    sheet_dir = tmp_path / "2026-06-03"
+    sheet_dir.mkdir()
+    (sheet_dir / "current.json").write_text(json.dumps({
+        "sheet_id": 9,
+        "operador": "OPERADOR_PAYLOAD",
+        "date": "2026-06-03",
+        "engine_version": ENGINE_VERSION,
+        "to_analisar": [{
+            "section": "rows",
+            "row_index": 0,
+            "field": "modelo",
+            "field_path": "rows[0].modelo",
+            "value": "OCR",
+            "ref": "PLAN",
+            "ref_source": "plan",
+            "reason": "current",
+        }],
+    }), encoding="utf-8")
+    (tmp_path / "_index.json").write_text(json.dumps({
+        "updated_at": "2026-06-03T10:00:00+00:00",
+        "sheets": {
+            "9": {
+                "engine_version": ENGINE_VERSION,
+                "file": "2026-06-03/current.json",
+                "summary": {"match": 0, "no_match": 1, "na": 0, "total": 1},
+            },
+        },
+    }), encoding="utf-8")
+
+    inbox = storage.load_to_analisar()
+
+    assert inbox["total"] == 1
+    assert inbox["items"][0]["sheet_id"] == 9
+    assert inbox["items"][0]["operador"] == "OPERADOR_PAYLOAD"
+    assert inbox["items"][0]["date"] == "2026-06-03"
+    assert inbox["items"][0]["ref_value"] == "PLAN"
+
+
+def test_load_summary_normalizes_legacy_string_counts(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "_base_dir", lambda: tmp_path)
+    (tmp_path / "_summary.json").write_text(json.dumps({
+        "totals": {"match": "8", "no_match": "2", "na": "10", "total": "20"},
+        "by_day": {
+            "2026-06-03": {"match": "8", "no_match": "2", "na": "10", "total": "20"},
+        },
+        "by_operador": {
+            "OPERADOR": {"match": "8", "no_match": "2", "na": "10", "total": "20"},
+        },
+        "n_sheets": "1",
+    }), encoding="utf-8")
+
+    summary = storage.load_summary()
+
+    assert summary["totals"] == {"match": 8, "no_match": 2, "na": 10, "total": 20}
+    assert summary["by_day"]["2026-06-03"] == {
+        "match": 8, "no_match": 2, "na": 10, "total": 20,
+    }
+    assert summary["by_operador"]["OPERADOR"] == {
+        "match": 8, "no_match": 2, "na": 10, "total": 20,
+    }
+    assert summary["n_sheets"] == 1
+
+
+def test_load_summary_ignores_stale_cache_when_index_is_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "_base_dir", lambda: tmp_path)
+    (tmp_path / "_summary.json").write_text(json.dumps({
+        "engine_version": "v-old",
+        "totals": {"match": "8", "no_match": "2", "na": "10", "total": "20"},
+        "by_day": {
+            "2026-06-03": {"match": "8", "no_match": "2", "na": "10", "total": "20"},
+        },
+        "by_operador": {
+            "OPERADOR": {"match": "8", "no_match": "2", "na": "10", "total": "20"},
+        },
+        "n_sheets": "1",
+    }), encoding="utf-8")
+
+    summary = storage.load_summary()
+
+    assert summary["engine_version"] == ENGINE_VERSION
+    assert summary["totals"] == {"match": 0, "no_match": 0, "na": 0, "total": 0}
+    assert summary["by_day"] == {}
+    assert summary["by_operador"] == {}
+    assert summary["n_sheets"] == 0
+    assert summary["stale_sheets"] == 1
+
+
+def test_load_to_analisar_normalizes_legacy_items(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "_base_dir", lambda: tmp_path)
+    (tmp_path / "_to_analisar.json").write_text(json.dumps({
+        "total": 1,
+        "items": [{
+            "sheet_id": 1,
+            "operador": "OPERADOR",
+            "date": "2026-06-03",
+            "row_index": 2,
+            "field": "modelo",
+            "value": "OCR",
+            "plan_value": "PLAN",
+            "reason": "legacy",
+        }],
+    }), encoding="utf-8")
+
+    inbox = storage.load_to_analisar()
+
+    assert inbox["total"] == 1
+    assert inbox["items"][0]["section"] == "rows"
+    assert inbox["items"][0]["field_path"] == "rows[2].modelo"
+    assert inbox["items"][0]["ref_value"] == "PLAN"
+    assert inbox["items"][0]["plan_value"] == "PLAN"
+
+
+def test_load_to_analisar_ignores_stale_cache_when_index_is_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "_base_dir", lambda: tmp_path)
+    (tmp_path / "_to_analisar.json").write_text(json.dumps({
+        "engine_version": "v-old",
+        "total": 2,
+        "items": [{
+            "sheet_id": 1,
+            "operador": "OPERADOR",
+            "date": "2026-06-03",
+            "row_index": 2,
+            "field": "modelo",
+            "value": "OCR",
+            "plan_value": "PLAN",
+            "reason": "legacy",
+        }],
+    }), encoding="utf-8")
+
+    inbox = storage.load_to_analisar()
+
+    assert inbox["engine_version"] == ENGINE_VERSION
+    assert inbox["total"] == 0
+    assert inbox["items"] == []
+    assert inbox["stale_sheets"] == 2
+
+
+def test_load_to_analisar_keeps_legacy_plan_value_when_ref_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "_base_dir", lambda: tmp_path)
+    (tmp_path / "_to_analisar.json").write_text(json.dumps({
+        "total": 1,
+        "items": [{
+            "sheet_id": 1,
+            "operador": "OPERADOR",
+            "date": "2026-06-03",
+            "section": "rows",
+            "row_index": 0,
+            "field": "modelo",
+            "field_path": "rows[0].modelo",
+            "value": "OCR",
+            "ref": "",
+            "plan_value": "PLAN",
+            "source": "plan",
+            "reason": "legacy with empty ref",
+        }],
+    }), encoding="utf-8")
+
+    inbox = storage.load_to_analisar()
+
+    assert inbox["items"][0]["plan_value"] == "PLAN"
+    assert inbox["items"][0]["ref_value"] == "PLAN"
+    assert inbox["items"][0]["ref_source"] == "plan"
+
+
 def test_update_script_protects_all_uploaded_refs():
     script = Path("scripts/ops/update.ps1").read_text(encoding="utf-8")
 
@@ -483,6 +1135,26 @@ def test_force_reload_clears_scoring_index_cache(tmp_path):
     watcher = ref_watcher.RefWatcher(doc_dir=doc_dir, repo_root=tmp_path)
     watcher.force_reload()
     assert 424242 not in scoring_engine._INDEX_CACHE
+
+
+def test_ref_watcher_loads_cliente_aliases_from_repo_root(tmp_path):
+    doc_dir = tmp_path / "docs"
+    doc_dir.mkdir()
+    _write_plan(doc_dir / "plan_colunas_cpis.xlsx", [
+        ["MTG", "2603977", "263348", "CAC4E10B", 1, 0, 0, 0, 0, 0, 0, 0, 4, 659, 242, 11050],
+    ])
+    lexicons = tmp_path / "lexicons"
+    lexicons.mkdir()
+    (lexicons / "cliente_aliases.json").write_text(
+        json.dumps({"HTG": "MTG", "_comment": "ignored"}),
+        encoding="utf-8",
+    )
+
+    watcher = ref_watcher.RefWatcher(doc_dir=doc_dir, repo_root=tmp_path)
+    refs = watcher.force_reload()
+
+    assert refs["cliente_aliases"] == {"HTG": "MTG"}
+    assert refs["cliente_aliases_mtime"] > 0
 
 
 def test_get_refs_degrades_on_corrupt_file_without_crashing(tmp_path):

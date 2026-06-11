@@ -152,9 +152,15 @@ def _cross_check_dossier(user_message: str = "") -> dict:
         out["no_match_sample"] = [
             {
                 "sheet_id": it.get("sheet_id"),
+                "section": it.get("section"),
                 "field": it.get("field"),
+                "field_path": it.get("field_path"),
                 "ocr_value": it.get("value"),
+                "ref_value": it.get("ref_value") or it.get("plan_value"),
+                # Compatibilidade com instruções antigas; `ref_source` diz se
+                # isto veio de plan, SAP, máquinas, colaboradores ou sintaxe.
                 "sap_value": it.get("plan_value"),
+                "ref_source": it.get("ref_source"),
                 "reason": it.get("reason"),
             }
             for it in inbox.get("items", [])
@@ -246,10 +252,11 @@ Respondes SEMPRE e SÓ com um objeto JSON com esta estrutura exata:
 
 DADOS REAIS — como ler o dossier:
 - A EXATIDÃO REAL do OCR está em "cross_check": "match_rate" é a taxa de
-  acerto (célula a célula contra as refs SAP). A taxa de erro real é
+  acerto (célula a célula contra as referências). A taxa de erro real é
   1 − match_rate (tipicamente <1%). "no_match_sample" traz as células que
-  o OCR leu mal — com o valor lido ("ocr_value") e o valor certo do plano
-  SAP ("sap_value").
+  o OCR leu mal ou que precisam de revisão — com o valor lido ("ocr_value"),
+  a referência correta quando existe ("ref_value") e a origem
+  ("ref_source": plan, sap, maquinas, colaboradores ou syntax).
 - "cross_check.plan_db" é a BD REAL de fabrico, minerada dos ficheiros
   plan_colunas_cpis.xlsx e StockSAP.xlsx: número de OFs, OVs, clientes,
   lotes e linhas do plano, com uma amostra de clientes.
