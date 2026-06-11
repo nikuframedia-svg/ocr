@@ -1,6 +1,9 @@
 """R110.C — Tests do policy_engine + eval gate + circuit breaker."""
 from __future__ import annotations
 
+import json
+import uuid
+
 import pytest
 
 from app.pipeline import policy_engine
@@ -23,9 +26,11 @@ def init_db():
 
 class TestPromote:
     def test_promote_rule_proposal(self):
+        fr = f"AAA_{uuid.uuid4().hex}"
+        to = f"BBB_{uuid.uuid4().hex}"
         result = propose_rule(
             kind="cliente_alias",
-            payload={"from": "AAA", "to": "BBB"},
+            payload={"from": fr, "to": to},
             qwen_confidence=0.9,
         )
         assert result["status"] == "ok"
@@ -35,16 +40,21 @@ class TestPromote:
         assert version_id is not None
         active = policy_engine.get_active_policy()
         assert active["version"] == version_id
+        policy = json.loads(active["yaml_blob"])
+        assert policy["rules"][-1]["kind"] == "cliente_alias"
+        assert policy["rules"][-1]["payload"]["from"] == fr
+        assert policy["rules"][-1]["payload"]["to"] == to
 
         # Proposta marcada como accepted
         p = db.get_proposal(result["proposal_id"])
         assert p["status"] == "accepted"
 
     def test_promote_template_creates_overlay(self):
+        field_name = f"zz_test_{uuid.uuid4().hex}"
         result = propose_template_change(
             template_name="quinadora_pav8",
             change_type="add_field",
-            field_name="ov",
+            field_name=field_name,
             justification="test",
         )
         assert result["status"] == "ok"
@@ -55,10 +65,79 @@ class TestPromote:
         overlays = db.get_active_template_overlays(template_name="quinadora_pav8")
         assert len(overlays) >= 1
         assert overlays[-1]["change_type"] == "add_field"
+        assert overlays[-1]["payload"]["field_name"] == field_name
+
+    def test_promote_rejects_when_eval_gate_fails(self, monkeypatch):
+        base_version = db.save_policy_version(
+            parent_version=None,
+            yaml_blob=json.dumps({}),
+            diff_summary="baseline",
+            created_by="test",
+            eval_results={},
+        )
+        db.activate_policy_version(base_version)
+        result = propose_rule(
+            kind="cliente_alias",
+            payload={
+                "from": f"BAD_{uuid.uuid4().hex}",
+                "to": f"WORSE_{uuid.uuid4().hex}",
+            },
+            qwen_confidence=0.9,
+        )
+        monkeypatch.setattr(
+            policy_engine,
+            "run_eval_gate",
+            lambda proposal: {
+                "decision": "failed",
+                "edits_per_sheet_baseline": 2.0,
+                "edits_per_sheet_with_proposal": 5.0,
+                "note": "regression",
+            },
+        )
+
+        version_id = policy_engine.promote_policy_from_proposal(
+            result["proposal_id"], created_by="test"
+        )
+
+        assert version_id == base_version
+        active = policy_engine.get_active_policy()
+        assert active["version"] == base_version
+        assert json.loads(active["yaml_blob"]) == {}
+        proposal = db.get_proposal(result["proposal_id"])
+        assert proposal["status"] == "rejected"
+        assert proposal["shadow_eval_results"]["decision"] == "failed"
 
     def test_promote_nonexistent_proposal_returns_none(self):
         v = policy_engine.promote_policy_from_proposal(99999)
         assert v is None
+
+    def test_duplicate_template_change_is_noop_in_policy(self):
+        policy = {
+            "template_overlays": {
+                "quinadora_pav8": [
+                    {
+                        "change_type": "add_field",
+                        "field_name": "ov",
+                        "field_position": "end",
+                        "from_proposal": 1,
+                    }
+                ]
+            }
+        }
+        proposal = {
+            "id": 2,
+            "kind": "template",
+            "payload": {
+                "template_name": "quinadora_pav8",
+                "change_type": "add_field",
+                "field_name": "ov",
+                "field_position": "end",
+            },
+        }
+
+        new_policy = policy_engine._apply_proposal_to_policy(policy, proposal)
+
+        assert new_policy == policy
 
     def test_reject_proposal(self):
         result = propose_rule(
@@ -75,12 +154,15 @@ class TestPromote:
 
 class TestVersioningChain:
     def test_versions_chain_via_parent(self):
+        suffix = uuid.uuid4().hex
         r1 = propose_rule(kind="cliente_alias",
-                          payload={"from": "X1", "to": "Y1"})
+                          payload={"from": f"X1_{suffix}",
+                                   "to": f"Y1_{suffix}"})
         v1 = policy_engine.promote_policy_from_proposal(r1["proposal_id"])
 
         r2 = propose_rule(kind="cliente_alias",
-                          payload={"from": "X2", "to": "Y2"})
+                          payload={"from": f"X2_{suffix}",
+                                   "to": f"Y2_{suffix}"})
         v2 = policy_engine.promote_policy_from_proposal(r2["proposal_id"])
 
         active = policy_engine.get_active_policy()
@@ -99,6 +181,120 @@ class TestEvalGate:
         assert eval_result["decision"] in {"passed_dry_run", "error"}
         if eval_result["decision"] == "passed_dry_run":
             assert "edits_per_sheet_baseline" in eval_result
+
+    def test_cliente_alias_simulation_does_not_create_fake_plan_ref(self):
+        """Alias simulation cannot invent a cliente plan pool with no entries."""
+        from app.pipeline.scoring_engine import shadow_score
+
+        refs = {
+            "available": True,
+            "loaded_at": "base",
+            "of_to_entries": {},
+            "clientes_plan": frozenset(),
+            "lotes_sap_full": {},
+        }
+        proposal = {
+            "id": 11,
+            "kind": "rule",
+            "payload": {"kind": "cliente_alias", "from": "AAA", "to": "ACME"},
+        }
+
+        simulated = policy_engine._apply_proposal_to_refs(proposal, refs)
+
+        assert simulated is not None
+        assert simulated.get("cliente_aliases") == {"AAA": "ACME"}
+        assert "ACME" not in set(simulated.get("clientes_plan") or frozenset())
+
+        sheet_data = {
+            "template_name": "bobine_formato",
+            "header": {},
+            "footer": {},
+            "rows": [{"cliente": "ACME"}],
+        }
+        scoring, *_ = shadow_score(sheet_data, None, simulated)
+
+        assert scoring["rows"][0]["fields"]["cliente"]["status"] == "NA"
+
+    def test_stored_rule_shape_is_simulable(self):
+        refs = {
+            "available": True,
+            "loaded_at": "base",
+            "of_to_entries": {},
+            "clientes_plan": frozenset(),
+            "lotes_sap_full": {},
+        }
+        proposal = {
+            "id": 15,
+            "kind": "cliente_alias",
+            "payload": {"from": "AAA", "to": "ACME"},
+        }
+
+        simulated_refs = policy_engine._apply_proposal_to_refs(proposal, refs)
+        simulated_sheet, changed = policy_engine._apply_proposal_to_sheet_data(
+            proposal,
+            {"rows": [{"cliente": "AAA"}]},
+        )
+
+        assert simulated_refs is not None
+        assert simulated_refs["cliente_aliases"] == {"AAA": "ACME"}
+        assert changed is True
+        assert simulated_sheet["rows"][0]["cliente"] == "ACME"
+
+    def test_cliente_alias_sheet_simulation_rewrites_matching_rows(self):
+        sheet_data = {
+            "template_name": "bobine_formato",
+            "header": {},
+            "footer": {},
+            "rows": [
+                {"cliente": "aaa"},
+                {"cliente": "OTHER"},
+            ],
+        }
+        proposal = {
+            "id": 12,
+            "kind": "rule",
+            "payload": {"kind": "cliente_alias", "from": "AAA", "to": "ACME"},
+        }
+
+        simulated, changed = policy_engine._apply_proposal_to_sheet_data(
+            proposal,
+            sheet_data,
+        )
+
+        assert changed is True
+        assert simulated["rows"][0]["cliente"] == "ACME"
+        assert simulated["rows"][1]["cliente"] == "OTHER"
+        assert sheet_data["rows"][0]["cliente"] == "aaa"
+
+    def test_modelo_alias_sheet_simulation_rewrites_matching_rows(self):
+        sheet_data = {
+            "template_name": "bobine_formato",
+            "header": {},
+            "footer": {},
+            "rows": [
+                {"modelo": "CGC2E1OD"},
+                {"modelo": "OTHER"},
+            ],
+        }
+        proposal = {
+            "id": 13,
+            "kind": "rule",
+            "payload": {
+                "kind": "modelo_alias",
+                "from": "CGC2E1OD",
+                "to": "CGC2E10D",
+            },
+        }
+
+        simulated, changed = policy_engine._apply_proposal_to_sheet_data(
+            proposal,
+            sheet_data,
+        )
+
+        assert changed is True
+        assert simulated["rows"][0]["modelo"] == "CGC2E10D"
+        assert simulated["rows"][1]["modelo"] == "OTHER"
+        assert sheet_data["rows"][0]["modelo"] == "CGC2E1OD"
 
 
 # ----- Eval gate real (R117) ------------------------------------------
@@ -238,6 +434,57 @@ class TestEvalGateShadow:
         assert "insufficient validated sheets" in out["note"]
         assert out["n_sheets_evaluated"] == 2
 
+    def test_cliente_alias_eval_gate_rejects_cross_alias_improvement(self, monkeypatch):
+        """Cliente aliases no longer count as cross evidence."""
+        sheet = {
+            "template_name": "bobine_formato",
+            "header": {},
+            "footer": {},
+            "rows": [{"cliente": "AAA"}],
+        }
+        sheets = [
+            {"id": i, "sheet_data": sheet, "dq_audit": {}}
+            for i in range(5)
+        ]
+        monkeypatch.setattr(
+            policy_engine, "_load_validated_sheets_for_eval",
+            lambda window: sheets,
+        )
+
+        refs = {
+            "available": True,
+            "loaded_at": "base",
+            "of_to_entries": {
+                "262300": [
+                    {
+                        "ov": "2410300",
+                        "cliente": "ACME",
+                        "designacao": "MOD-A",
+                    }
+                ]
+            },
+            "clientes_plan": frozenset({"ACME"}),
+            "lotes_sap_full": {},
+        }
+
+        class _FakeWatcher:
+            def get_refs(self):
+                return refs
+
+        import app.cross_check.ref_watcher as _rw
+        monkeypatch.setattr(_rw, "get_watcher", lambda: _FakeWatcher())
+
+        proposal = {
+            "id": 14,
+            "kind": "cliente_alias",
+            "payload": {"from": "AAA", "to": "ACME"},
+        }
+        out = policy_engine.run_eval_gate(proposal, window=10)
+
+        assert out["decision"] == "failed", out
+        assert out["edits_per_sheet_baseline"] == 1.0
+        assert out["edits_per_sheet_with_proposal"] > out["edits_per_sheet_baseline"]
+
 
 # ----- Circuit breaker -------------------------------------------------
 
@@ -280,7 +527,7 @@ class TestCircuitBreaker:
 class TestEndpointsBasic:
     def test_list_proposals_endpoint(self):
         from fastapi.testclient import TestClient
-        from backend.app.web.main import app
+        from app.web.main import app
         client = TestClient(app)
         r = client.get("/agent/proposals?limit=5")
         assert r.status_code == 200
@@ -290,7 +537,7 @@ class TestEndpointsBasic:
 
     def test_approve_endpoint(self):
         from fastapi.testclient import TestClient
-        from backend.app.web.main import app
+        from app.web.main import app
         client = TestClient(app)
         proposal_result = propose_rule(
             kind="cliente_alias",
@@ -304,7 +551,7 @@ class TestEndpointsBasic:
 
     def test_reject_endpoint(self):
         from fastapi.testclient import TestClient
-        from backend.app.web.main import app
+        from app.web.main import app
         client = TestClient(app)
         proposal_result = propose_rule(
             kind="cliente_alias",
@@ -317,14 +564,14 @@ class TestEndpointsBasic:
 
     def test_approve_nonexistent_404(self):
         from fastapi.testclient import TestClient
-        from backend.app.web.main import app
+        from app.web.main import app
         client = TestClient(app)
         r = client.post("/agent/proposals/999999/approve")
         assert r.status_code == 404
 
     def test_circuit_breaker_endpoint(self):
         from fastapi.testclient import TestClient
-        from backend.app.web.main import app
+        from app.web.main import app
         client = TestClient(app)
         r = client.get("/agent/circuit-breaker")
         assert r.status_code == 200
