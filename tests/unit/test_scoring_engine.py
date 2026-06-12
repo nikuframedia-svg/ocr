@@ -1974,11 +1974,20 @@ class TestGlobalWinnerScoring:
                 }],
                 "257093": [{
                     "ov": "2511344",
-                    "cliente": "MTG BELUX",
+                    "cliente": "STOCK MTG BELUX",
                     "designacao": "CBCBE06DI - 2 SC",
                 }],
+                "257098": [{
+                    "ov": "2511344",
+                    "cliente": "MTG BELUX",
+                    "designacao": "CIBCE05D - TR AB 177 125",
+                }],
             },
-            "clientes_plan": frozenset({"ASVITAE TECNOLOGIAS", "MTG BELUX"}),
+            "clientes_plan": frozenset({
+                "ASVITAE TECNOLOGIAS",
+                "STOCK MTG BELUX",
+                "MTG BELUX",
+            }),
             "lotes_sap_full": {},
         }
         sheet_data = {
@@ -2055,10 +2064,13 @@ class TestGlobalWinnerScoring:
         ("ocr_cliente", "plan_cliente", "matches"),
         [
             ("MTGBELUX", "MTG BELUX", True),
+            ("MTGBELUX", "STOCK MTG BELUX", True),
+            ("MTG BELUX", "STOCK MTG BELUX", True),
             ("TECPOLES", "TECPOLES GMBH", True),
             ("LUMIERE", "WE EF LUMIERE", False),
             ("SOVEC", "SOVEC ENTREPRISES", False),
             ("MTG", "MTG BELUX", False),
+            ("MTG", "STOCK MTG BELUX", False),
             ("HTG", "MTG", False),
         ],
     )
@@ -2079,7 +2091,7 @@ class TestGlobalWinnerScoring:
         assert _cliente_values_match("MTGBELUX", "MTG BELUX", _REFS)
         assert not _cliente_values_match("SOVEC", "SOVEC ENTREPRISES", _REFS)
 
-    def test_cliente_does_not_use_token_subset_or_aliases(self):
+    def test_cliente_does_not_use_token_subset_or_aliases_but_ignores_stock_prefix(self):
         refs = {
             **_REFS,
             "cliente_aliases": {
@@ -2088,8 +2100,8 @@ class TestGlobalWinnerScoring:
             },
         }
 
-        assert not _cliente_values_match("MTG", "STOCK MTG", refs)
-        assert not _cliente_values_match("MTG BELUX", "STOCK MTG BELUX", refs)
+        assert _cliente_values_match("MTG", "STOCK MTG", refs)
+        assert _cliente_values_match("MTG BELUX", "STOCK MTG BELUX", refs)
         assert not _cliente_values_match("HTG BELUX", "STOCK MTG BELUX", refs)
         assert _cliente_values_match("STOCK MTG", "STOCK MTG GMBH", refs)
         assert not _cliente_values_match("SK-T-BELUX", "STOCK MTG BELUX", refs)

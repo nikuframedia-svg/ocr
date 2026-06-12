@@ -34,7 +34,7 @@ from app.dq.machines import machine_phase_from_setor, resolve_machine_from_setor
 
 _CLIENTE_STOPWORDS = frozenset({
     "GMBH", "SAS", "SARL", "SA", "S.A", "LDA", "LTD", "SL", "BV", "NV",
-    "LIMITED", "UNIPESSOAL",
+    "LIMITED", "UNIPESSOAL", "STOCK",
 })
 
 
@@ -399,13 +399,14 @@ _STATUS_LABELS = {
 # METALOGALVA/COMPANHIA).
 # R206 — remove regras casuísticas recentes: o cross volta a depender de
 # aliases explícitos e equivalências gerais, não de correções por amostra.
-# R207 — remove a exceção STOCK em cliente; STOCK segue a mesma regra geral
-# de tokens que qualquer outro termo do nome.
+# R207 — remove travas por STOCK em cliente; R210 trata STOCK como prefixo
+# operacional do plan, não como parte do nome do cliente.
 # R208 — winner global puro: todos os candidatos desde início, sem âncoras
 # OF/OV, sem aliases/abreviações de cliente, sem variantes opinativas de modelo.
 # R209 — winner por votação de campos credíveis; score=1 já não puxa linha toda.
+# R210 — cliente por compacto normalizado também encontra linhas STOCK <cliente>.
 # BUMP obrigatório: força regeneração dos cross-check JSON antigos.
-ENGINE_VERSION = "v14_R209"
+ENGINE_VERSION = "v14_R210"
 
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
@@ -835,11 +836,42 @@ def _candidates_for_field(field: str, row: dict, refs: dict, idx: dict) -> list[
         pool = set(clientes_plan)
         if "clientes_lexicon" in refs:
             pool |= set(refs.get("clientes_lexicon") or [])
-        for k, s in _topk_keys_by_sim(ocr_u, list(pool), _TOP_K):
+
+        seen_clientes: set[str] = set()
+
+        def _append_cliente_candidate(key: str, sim: float) -> None:
+            key = str(key or "").strip().upper()
+            if not key or key in seen_clientes:
+                return
+            seen_clientes.add(key)
             out.append({
-                "value": k, "sim": s,
-                "plan_entries": plan_by_cliente.get(k, []),
+                "value": key, "sim": sim,
+                "plan_entries": plan_by_cliente.get(key, []),
             })
+
+        # R210 — o Plan usa frequentemente "STOCK <cliente>" como etiqueta
+        # operacional. Procurar primeiro por compacto normalizado para que
+        # MTG BELUX e STOCK MTG BELUX concorram em igualdade, sem aliases nem
+        # subset matching.
+        target_compact = _cliente_compact(ocr_u)
+        if target_compact:
+            for k in sorted(pool):
+                compact = _cliente_compact(k)
+                if not compact:
+                    continue
+                if compact == target_compact:
+                    _append_cliente_candidate(k, 100.0)
+                elif (
+                    max(len(compact), len(target_compact)) >= 4
+                    and abs(len(compact) - len(target_compact)) == 1
+                    and _lev_distance(compact, target_compact) <= 1
+                ):
+                    _append_cliente_candidate(k, 95.0)
+
+        for k, s in _topk_keys_by_sim(ocr_u, list(pool), _TOP_K):
+            _append_cliente_candidate(k, s)
+            if len(out) >= _TOP_K:
+                break
         return out[:_TOP_K]
 
     if field == "lote":
