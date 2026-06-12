@@ -349,7 +349,7 @@ class TestEvalGateShadow:
 
         proposal = {
             "id": 1, "kind": "rule",
-            "payload": {"kind": "cliente_alias", "from": "AAA", "to": "BBB"},
+            "payload": {"kind": "modelo_alias", "from": "AAA", "to": "BBB"},
         }
         out = policy_engine.run_eval_gate(proposal, window=10)
         assert out["decision"] == "passed", out
@@ -382,7 +382,7 @@ class TestEvalGateShadow:
 
         proposal = {
             "id": 2, "kind": "rule",
-            "payload": {"kind": "cliente_alias", "from": "C", "to": "D"},
+            "payload": {"kind": "modelo_alias", "from": "C", "to": "D"},
         }
         out = policy_engine.run_eval_gate(proposal, window=10)
         assert out["decision"] == "failed", out
@@ -483,7 +483,8 @@ class TestEvalGateShadow:
 
         assert out["decision"] == "failed", out
         assert out["edits_per_sheet_baseline"] == 1.0
-        assert out["edits_per_sheet_with_proposal"] > out["edits_per_sheet_baseline"]
+        assert out["edits_per_sheet_with_proposal"] == out["edits_per_sheet_baseline"]
+        assert "cliente_alias ignored by row cross" in out["note"]
 
 
 # ----- Circuit breaker -------------------------------------------------

@@ -454,8 +454,10 @@ def run_eval_gate(
             "note": f"shadow_score/refs unavailable: {e}",
         }
 
+    sub_kind, _payload = _rule_kind_and_payload(proposal)
     proposal_refs = _apply_proposal_to_refs(proposal, refs)
-    simulable = proposal_refs is not None
+    cliente_alias_disabled_for_cross = sub_kind == "cliente_alias"
+    simulable = proposal_refs is not None and not cliente_alias_disabled_for_cross
 
     # Baseline pass — sempre corre, mesmo quando não simulável (dá número
     # informativo no histórico de versões).
@@ -497,6 +499,16 @@ def run_eval_gate(
         }
 
     baseline_avg = sum(baseline_attn) / len(baseline_attn)
+
+    if cliente_alias_disabled_for_cross:
+        return {
+            "decision": "failed",
+            "window_size": window,
+            "n_sheets_evaluated": n,
+            "edits_per_sheet_baseline": round(baseline_avg, 3),
+            "edits_per_sheet_with_proposal": round(baseline_avg, 3),
+            "note": "cliente_alias ignored by row cross; aliases cannot pass as cross evidence",
+        }
 
     if not simulable:
         return {

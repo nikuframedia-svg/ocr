@@ -71,6 +71,22 @@ def _cliente_values_match(
     return bool(ocr_compact and ocr_compact == plan_compact)
 
 
+def _cliente_vote_matches(ocr_value: object, plan_value: object) -> bool:
+    """Cliente pode votar por igualdade compacta ou erro OCR de 1 char."""
+    if _cliente_values_match(ocr_value, plan_value, None):
+        return True
+
+    ocr_compact = _cliente_compact(ocr_value)
+    plan_compact = _cliente_compact(plan_value)
+    if not ocr_compact or not plan_compact:
+        return False
+    if max(len(ocr_compact), len(plan_compact)) < 4:
+        return False
+    if abs(len(ocr_compact) - len(plan_compact)) != 1:
+        return False
+    return _lev_distance(ocr_compact, plan_compact) <= 1
+
+
 def normalize_of(value: object) -> str:
     """6 dígitos canónico. Pure-digit OFs < 6 chars são zero-padded; o
     resto fica intocado para coabitar com snap_of."""
@@ -250,6 +266,9 @@ _PLAN_FIELDS = ("of", "ov", "modelo", "cliente", "comp_mm", "larg_mm",
                 "lbase", "ltopo", "esp", "dbase", "dtopo")
 
 _TOP_K = 10
+_MIN_WINNER_FIELD_VOTES = 2
+_IDENTIFIER_VOTE_MIN_SIM = 80.0
+_MODEL_VOTE_MIN_SIM = 75.0
 
 # Thresholds de "muito diferente" — abaixo destes níveis, vermelho.
 _VERY_DIFF_STR_SIM = 50.0          # se sim < 50, é muito diferente
@@ -384,8 +403,9 @@ _STATUS_LABELS = {
 # de tokens que qualquer outro termo do nome.
 # R208 — winner global puro: todos os candidatos desde início, sem âncoras
 # OF/OV, sem aliases/abreviações de cliente, sem variantes opinativas de modelo.
+# R209 — winner por votação de campos credíveis; score=1 já não puxa linha toda.
 # BUMP obrigatório: força regeneração dos cross-check JSON antigos.
-ENGINE_VERSION = "v14_R208"
+ENGINE_VERSION = "v14_R209"
 
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
@@ -884,40 +904,159 @@ def _entry_key(entry: dict) -> tuple:
     )
 
 
+def _candidate_is_credible_for_field(
+    field: str,
+    cand: dict,
+    row: dict,
+    refs: dict,
+) -> bool:
+    """True quando o candidato é evidência suficiente para o campo votar."""
+    if not cand.get("plan_entries"):
+        return False
+    sim = float(cand.get("sim") or 0.0)
+    value = cand.get("value")
+
+    if field in ("of", "ov"):
+        return sim >= _IDENTIFIER_VOTE_MIN_SIM
+
+    if field == "cliente":
+        return _cliente_vote_matches(row.get("cliente"), value)
+
+    if field == "modelo":
+        ocr_model = row.get("modelo")
+        if _model_matches_designacao(ocr_model, value):
+            return True
+        for entry in cand.get("plan_entries") or []:
+            if _model_matches_designacao(ocr_model, entry.get("designacao")):
+                return True
+        return sim >= _MODEL_VOTE_MIN_SIM
+
+    if field in ("comp_mm", "larg_mm", "lbase", "ltopo", "esp", "dbase", "dtopo"):
+        # Estes candidatos já vêm filtrados por tolerância numérica.
+        return True
+
+    return False
+
+
+def _best_credible_candidates_for_field(
+    field: str,
+    candidates: list[dict],
+    row: dict,
+    refs: dict,
+) -> list[dict]:
+    credible = [
+        cand for cand in candidates or []
+        if _candidate_is_credible_for_field(field, cand, row, refs)
+    ]
+    if not credible:
+        return []
+    best_sim = max(float(cand.get("sim") or 0.0) for cand in credible)
+    return [
+        cand for cand in credible
+        if abs(float(cand.get("sim") or 0.0) - best_sim) <= 1e-9
+    ]
+
+
+def _candidate_vote_maps(
+    candidates_by_field: dict[str, list[dict]],
+    row: dict,
+    refs: dict,
+) -> tuple[dict[tuple, dict], dict[tuple, set[str]]]:
+    entries_by_key: dict[tuple, dict] = {}
+    field_votes: dict[tuple, set[str]] = {}
+
+    for field in _PLAN_FIELDS:
+        best_candidates = _best_credible_candidates_for_field(
+            field, candidates_by_field.get(field, []), row, refs
+        )
+        for cand in best_candidates:
+            for entry in cand.get("plan_entries", []):
+                key = _entry_key(entry)
+                entries_by_key.setdefault(key, entry)
+                field_votes.setdefault(key, set()).add(field)
+
+    return entries_by_key, field_votes
+
+
+def _entry_tie_value(entry: dict, field: str) -> object:
+    if field == "of":
+        return normalize_of(entry.get("_of") or entry.get("of"))
+    if field in ("comp", "larg", "lbase", "ltopo", "esp", "dbase", "dtopo"):
+        return _num(entry.get(field))
+    return str(entry.get(field) or "").strip().upper()
+
+
+def _entries_equivalent_for_tie(left: dict, right: dict) -> bool:
+    for field in (
+        "of", "ov", "cliente", "designacao",
+        "comp", "larg", "lbase", "ltopo", "esp", "dbase", "dtopo",
+    ):
+        lv = _entry_tie_value(left, field)
+        rv = _entry_tie_value(right, field)
+        if isinstance(lv, float) or isinstance(rv, float):
+            if lv is None or rv is None:
+                if lv != rv:
+                    return False
+                continue
+            if abs(float(lv) - float(rv)) > 1e-9:
+                return False
+        elif lv != rv:
+            return False
+    return True
+
+
 def _best_scored_entry(
     entries_by_key: dict[tuple, dict],
     row: dict,
     refs: dict,
     current_phase: str | None,
     *,
-    min_score: int = 1,
+    field_votes: dict[tuple, set[str]] | None = None,
+    min_votes: int = _MIN_WINNER_FIELD_VOTES,
 ) -> dict | None:
-    """Pick the best plan entry from an already-filtered candidate pool."""
+    """Pick the winner by credible field votes, not by a single weak score."""
     from app.pipeline.of_consumption import remaining as _remaining
 
-    # Tuple (-score, phase_full, remaining_sortable, insertion_order, entry):
-    # 1) maior score primeiro, 2) sectores ainda com espaço primeiro,
-    # 3) menor remaining, 4) ordem estável de recolha dos candidatos.
-    eligible: list[tuple[float, int, float, int, dict]] = []
+    field_votes = field_votes or {}
+    # Tuple (-votes, -exact_score, phase_full, remaining_sortable, order, entry):
+    # 1) mais campos independentes, 2) maior score exato, 3+) desempate legado.
+    eligible: list[tuple[int, int, int, float, int, dict]] = []
     for order, (k, e) in enumerate(entries_by_key.items()):
         if "_of" not in e:
             e = dict(e)
             e["_of"] = k[0]
-        score = score_entry(e, row, refs)
-        if score < min_score:
+        votes = len(field_votes.get(k, set()))
+        if votes < min_votes:
             continue
+        exact_score = score_entry(e, row, refs)
         phase_full = 1 if (current_phase and _phase_is_full(e, current_phase)) else 0
         # R138 — remaining consciente do setor (mesma medida do wizard).
         rem = _remaining(e, phase=current_phase)
         rem_sort = 9e9 if rem == float("inf") else rem
-        eligible.append((-float(score), phase_full, rem_sort, order, e))
+        eligible.append((-votes, -exact_score, phase_full, rem_sort, order, e))
 
     if not eligible:
         return None
     eligible.sort()
-    best_neg_score, _best_phase_full, best_rem_sort, _best_order, best_entry = eligible[0]
+    best_votes = -eligible[0][0]
+    best_exact_score = -eligible[0][1]
+    tied = [
+        item for item in eligible
+        if -item[0] == best_votes and -item[1] == best_exact_score
+    ]
+    if len(tied) > 1:
+        first_entry = tied[0][5]
+        if any(
+            not _entries_equivalent_for_tie(first_entry, item[5])
+            for item in tied[1:]
+        ):
+            return None
+
+    _best_neg_votes, _best_neg_exact, _best_phase_full, best_rem_sort, _best_order, best_entry = eligible[0]
     winner = dict(best_entry)
-    winner["_score"] = int(-best_neg_score)
+    winner["_score"] = int(best_votes)
+    winner["_exact_score"] = int(best_exact_score)
+    winner["_vote_fields"] = sorted(field_votes.get(_entry_key(winner), set()))
     if best_rem_sort < 9e9:
         winner["_remaining"] = best_rem_sort
     return winner
@@ -954,31 +1093,22 @@ def _find_winner_entry(
     refs: dict,
     current_phase: str | None = None,
 ) -> dict | None:
-    """R108 v5 + R113 + R123 + R125 — escolhe a entry do plan com melhor
-    score.
+    """Escolhe a entry do plan por votação de campos credíveis.
 
-    R123: já não se exige que o lote esteja no SAP (o lote passou a ser
-    um campo pontuado por `score_entry`), nem se filtram entries já
-    produzidas — a folha é fotografada *depois* de produzir, pelo que a
-    peça certa tem quase sempre `remaining ≤ 0` e era erradamente
-    eliminada. O `remaining` fica só como desempate entre scores iguais.
-
-    R125: quando `current_phase` é dado (etapa em curso do kanban,
-    derivada de `setor_maquina → colunaexcel`), desempate intermédio
-    favorece linhas com espaço na etapa actual (`fases[phase] < quanttrp`).
-    Linhas concluídas nessa etapa não são excluídas — vão só para o fim
-    da lista entre empates de score.
+    Cada campo lido dá no máximo um voto à(s) linha(s) do melhor candidato
+    credível desse campo. Uma linha com apenas um campo a favor não pode
+    puxar os restantes campos da folha.
     """
-    entries_by_key: dict[tuple, dict] = {}
-    for field in _PLAN_FIELDS:
-        for cand in candidates_by_field.get(field, []):
-            for e in cand.get("plan_entries", []):
-                k = _entry_key(e)
-                entries_by_key.setdefault(k, e)
-
+    entries_by_key, field_votes = _candidate_vote_maps(candidates_by_field, row, refs)
     if not entries_by_key:
         return None
-    return _best_scored_entry(entries_by_key, row, refs, current_phase)
+    return _best_scored_entry(
+        entries_by_key,
+        row,
+        refs,
+        current_phase,
+        field_votes=field_votes,
+    )
 
 
 def _all_eligible_phase_full(
@@ -986,34 +1116,13 @@ def _all_eligible_phase_full(
     row: dict,
     refs: dict,
     current_phase: str | None,
+    winner: dict | None = None,
 ) -> bool:
-    """R125 — True se TODAS as entries elegíveis (score≥1) para esta
-    linha estão concluídas em `current_phase`. Sinaliza "obra concluída"
-    no plan: o operador está a registar produção numa OF/peça já fechada
-    naquele sector. False quando `current_phase` é None, não há
-    candidatos elegíveis, ou pelo menos uma linha ainda tem espaço.
-    """
-    if not current_phase:
+    """R125 — aviso de obra concluída só existe depois de winner válido."""
+    _ = (candidates_by_field, row, refs)
+    if not current_phase or not winner:
         return False
-    entries_by_key: dict[tuple, dict] = {}
-    for field in _PLAN_FIELDS:
-        for cand in candidates_by_field.get(field, []):
-            for e in cand.get("plan_entries", []):
-                k = _entry_key(e)
-                entries_by_key.setdefault(k, e)
-    if not entries_by_key:
-        return False
-    found_eligible = False
-    for k, e in entries_by_key.items():
-        if "_of" not in e:
-            e = dict(e)
-            e["_of"] = k[0]
-        if score_entry(e, row, refs) < 1:
-            continue
-        found_eligible = True
-        if not _phase_is_full(e, current_phase):
-            return False
-    return found_eligible
+    return _phase_is_full(winner, current_phase)
 
 
 # Detecção de "muito diferente" ---------------------------------------------
@@ -1190,6 +1299,38 @@ def _identifier_values_match(field: str, ocr_value: object, proposed: object) ->
     return False
 
 
+def _local_candidate_proposal(
+    field: str,
+    ocr_value: str,
+    candidates: list[dict],
+    row: dict,
+    refs: dict,
+) -> str | None:
+    """Validação local de uma célula quando ainda não há winner global."""
+    if not ocr_value:
+        return None
+    best_candidates = _best_credible_candidates_for_field(field, candidates, row, refs)
+    if not best_candidates:
+        return None
+
+    proposals: list[str] = []
+    for cand in best_candidates:
+        value = cand.get("value")
+        if value is None or value == "":
+            continue
+        proposed = str(value).strip()
+        if proposed:
+            proposals.append(proposed)
+
+    if not proposals:
+        return None
+
+    first_fmt = _format_value(field, proposals[0])
+    if any(_format_value(field, value) != first_fmt for value in proposals[1:]):
+        return None
+    return proposals[0]
+
+
 def _has_plan_reference_pool(refs: dict) -> bool:
     return bool(refs.get("of_to_entries"))
 
@@ -1357,6 +1498,8 @@ def _apply_winner_to_field(
             v = winner.get(plan_attr)
             if v is not None and v != "":
                 proposed = str(v)
+    elif ocr_value:
+        proposed = _local_candidate_proposal(field, ocr_value, candidates, row, refs)
 
     if not proposed:
         if field == "cliente" and ocr_value:
@@ -1423,7 +1566,7 @@ def _apply_winner_to_field(
 
     return _finish_cell(
         field, ocr_value, proposed,
-        source="plan" if winner else "lexicon",
+        source="plan",
         score=score,
     )
 
@@ -1466,7 +1609,7 @@ def _score_row(
     winner = _find_winner_entry(candidates_by_field, row, refs, current_phase)
 
     obra_concluida = _all_eligible_phase_full(
-        candidates_by_field, row, refs, current_phase
+        candidates_by_field, row, refs, current_phase, winner
     )
 
     fields_out: dict[str, dict] = {}
