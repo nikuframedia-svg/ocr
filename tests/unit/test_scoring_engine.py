@@ -2012,6 +2012,36 @@ class TestGlobalWinnerScoring:
         assert fields["of"]["proposed"] == "257093"
         assert fields["modelo"]["status"] == "snapped"
 
+    def test_two_fuzzy_identifiers_without_exact_support_do_not_select_winner(self):
+        refs = {
+            "available": True,
+            "of_to_entries": {
+                "257093": [{
+                    "ov": "2511344",
+                    "cliente": "STOCK MTG BELUX",
+                    "designacao": "CBCBE06DI - 2 SC",
+                }],
+            },
+            "clientes_plan": frozenset({"STOCK MTG BELUX"}),
+            "lotes_sap_full": {},
+        }
+        sheet_data = {
+            "template_name": "robot", "header": {}, "footer": {},
+            "rows": [{
+                "cliente": "RELUX",
+                "ov": "2517344",
+                "of": "252093",
+                "modelo": "CFC R606Di",
+                "qtd": "101",
+            }],
+        }
+
+        scoring, *_ = shadow_score(sheet_data, None, refs)
+        row = scoring["rows"][0]
+
+        assert row["winner_of"] is None
+        assert row["winner_score"] is None
+
     def test_cliente_leading_ocr_character_can_vote_with_support(self):
         refs = {
             "available": True,

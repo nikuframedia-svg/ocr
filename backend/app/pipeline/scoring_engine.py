@@ -405,8 +405,9 @@ _STATUS_LABELS = {
 # OF/OV, sem aliases/abreviações de cliente, sem variantes opinativas de modelo.
 # R209 — winner por votação de campos credíveis; score=1 já não puxa linha toda.
 # R210 — cliente por compacto normalizado também encontra linhas STOCK <cliente>.
+# R211 — winner não pode nascer só de votos fuzzy; exige ao menos 1 match exato.
 # BUMP obrigatório: força regeneração dos cross-check JSON antigos.
-ENGINE_VERSION = "v14_R210"
+ENGINE_VERSION = "v14_R211"
 
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
@@ -1045,6 +1046,7 @@ def _best_scored_entry(
     *,
     field_votes: dict[tuple, set[str]] | None = None,
     min_votes: int = _MIN_WINNER_FIELD_VOTES,
+    min_exact_score: int = 1,
 ) -> dict | None:
     """Pick the winner by credible field votes, not by a single weak score."""
     from app.pipeline.of_consumption import remaining as _remaining
@@ -1061,6 +1063,8 @@ def _best_scored_entry(
         if votes < min_votes:
             continue
         exact_score = score_entry(e, row, refs)
+        if exact_score < min_exact_score:
+            continue
         phase_full = 1 if (current_phase and _phase_is_full(e, current_phase)) else 0
         # R138 — remaining consciente do setor (mesma medida do wizard).
         rem = _remaining(e, phase=current_phase)
