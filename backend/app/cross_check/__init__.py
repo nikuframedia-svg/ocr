@@ -8,6 +8,8 @@ don't change.
 Responsibilities:
 - ``ref_watcher``: detect StockSAP.xlsx / plan_colunas_cpis.xlsx changes
   and load refs into memory.
+- ``ref_importer``: import validated refs from a shared folder into the
+  watched canonical files.
 - ``refs_uploads``: web UI for uploading new ref files (R106).
 - ``storage``: persist cross-check JSON to disk for downstream tools.
 - ``cross_check_sheet``: re-exported from scoring_engine (R109 motor).

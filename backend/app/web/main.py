@@ -41,6 +41,7 @@ from app.cross_check import (  # noqa: E402
     load_to_analisar,
     store_cross_check,
 )
+from app.cross_check import ref_importer  # noqa: E402
 from app.dq.machines import resolve_machine_from_setor  # noqa: E402
 from app.dq.operador_snap import snap_operador  # noqa: E402
 from app.learning import (  # noqa: E402
@@ -197,6 +198,16 @@ def _startup() -> None:
     )
     if n_recovered:
         print(f"[R71 startup] re-enqueued {n_recovered} pending sheet(s)", file=sys.stderr)
+    try:
+        if ref_importer.start_background_importer():
+            st = ref_importer.status()
+            print(
+                "[refs-import] watching "
+                f"{st.get('source_dir')} every {st.get('interval_seconds')}s",
+                file=sys.stderr,
+            )
+    except Exception as e:  # noqa: BLE001
+        print(f"[refs-import startup] {e}", file=sys.stderr)
 
 
 _MOBILE_UA_PATTERNS = ("mobile", "iphone", "android", "ipad", "ipod")
@@ -1432,8 +1443,16 @@ def admin_refs_status() -> JSONResponse:
     when, n_lotes/n_ofs counts). Plus aggregate cross-check summary."""
     return JSONResponse({
         "refs": get_watcher().status(),
+        "refs_importer": ref_importer.status(),
         "summary": load_summary(),
     })
+
+
+@app.post("/admin/import-refs")
+def admin_import_refs() -> JSONResponse:
+    """Manually import refs from the configured shared folder."""
+    result = ref_importer.import_refs_from_config()
+    return JSONResponse(result, status_code=200 if result.get("ok") else 400)
 
 
 @app.get("/admin/queue-status")
@@ -1652,136 +1671,7 @@ def _inspect_refs_xlsx(path: Path, kind: str) -> tuple[str | None, dict]:
 
     Defensive: a bad upload must never replace a good live refs file.
     """
-    import openpyxl
-    from app.pipeline.scoring_engine import normalize_of
-
-    info = {
-        "n_rows": 0, "n_ofs": 0, "n_ovs": 0, "n_lotes": 0,
-        "n_maquinas": 0, "n_colaboradores": 0,
-        "size": path.stat().st_size,
-    }
-    try:
-        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-    except Exception as e:  # noqa: BLE001
-        return f"não consegui abrir o Excel ({e})", info
-    try:
-        if kind == "plan":
-            ws = (wb["plan_colunas_cpis"]
-                  if "plan_colunas_cpis" in wb.sheetnames else wb.active)
-            first = next(ws.iter_rows(values_only=True), None)
-            hdrs = {
-                str(h).strip().lower(): i
-                for i, h in enumerate(first or ())
-                if h
-            }
-            required = {"of", "ov", "quanttrp"}
-            missing = sorted(required - set(hdrs))
-            if missing:
-                return (
-                    "falta a coluna "
-                    + ", ".join(repr(m) for m in missing)
-                    + " — não parece o plan_colunas_cpis"
-                ), info
-            ofs: set[str] = set()
-            ovs: set[str] = set()
-            for row in ws.iter_rows(min_row=2, values_only=True):
-                if not row:
-                    continue
-                of_raw = row[hdrs["of"]] if hdrs["of"] < len(row) else None
-                ov_raw = row[hdrs["ov"]] if hdrs["ov"] < len(row) else None
-                if of_raw in (None, "") and ov_raw in (None, ""):
-                    continue
-                info["n_rows"] += 1
-                of_norm = normalize_of(of_raw)
-                if of_norm:
-                    ofs.add(of_norm)
-                ov = str(ov_raw or "").strip()
-                if ov:
-                    ovs.add(ov)
-            info["n_ofs"] = len(ofs)
-            info["n_ovs"] = len(ovs)
-            info["n_plan_rows"] = info["n_rows"]
-            if info["n_rows"] <= 0:
-                return "sem linhas de plano — ficheiro vazio", info
-            if info["n_ofs"] <= 0:
-                return "sem OFs válidas — não parece o plan_colunas_cpis", info
-        elif kind == "stocksap":
-            rows = (wb["Folha1"] if "Folha1" in wb.sheetnames
-                    else wb.active).iter_rows(values_only=True)
-            header = next(rows, None) or ()
-            col0 = str(header[0] or "").strip().lower() if header else ""
-            if "lote" not in col0:
-                return "1ª coluna não é 'Lote' — não parece o StockSAP", info
-            for row in rows:
-                if row and row[0] not in (None, ""):
-                    info["n_rows"] += 1
-            info["n_lotes"] = info["n_rows"]
-            if info["n_rows"] <= 0:
-                return "sem linhas de lote — não parece o StockSAP", info
-        elif kind == "maquinas":
-            ws = wb.active
-            rows = ws.iter_rows(values_only=True)
-            first = next(rows, None)
-            hdrs = {
-                str(h).strip().lower(): i
-                for i, h in enumerate(first or ())
-                if h
-            }
-            required = {"codmaq", "desmaq", "codsec", "dessec", "colunaexcel"}
-            missing = sorted(required - set(hdrs))
-            if missing:
-                return (
-                    "falta a coluna "
-                    + ", ".join(repr(m) for m in missing)
-                    + " — não parece o maquinas.xlsx"
-                ), info
-            for row in rows:
-                if not row:
-                    continue
-                cod_idx = hdrs["codmaq"]
-                codmaq = row[cod_idx] if cod_idx < len(row) else None
-                if codmaq not in (None, ""):
-                    info["n_rows"] += 1
-            info["n_maquinas"] = info["n_rows"]
-            if info["n_maquinas"] <= 0:
-                return "sem máquinas válidas — não parece o maquinas.xlsx", info
-        elif kind == "colaboradores":
-            ws = wb["Export"] if "Export" in wb.sheetnames else wb.active
-            rows = ws.iter_rows(values_only=True)
-            first = next(rows, None)
-            hdrs = {
-                str(h).strip().lower(): i
-                for i, h in enumerate(first or ())
-                if h
-            }
-            required = {"pernr", "sname", "cod"}
-            missing = sorted(required - set(hdrs))
-            if missing:
-                return (
-                    "falta a coluna "
-                    + ", ".join(repr(m) for m in missing)
-                    + " — não parece a ListaColaboradores"
-                ), info
-            for row in rows:
-                if not row:
-                    continue
-                cod_idx = hdrs["cod"]
-                sname_idx = hdrs["sname"]
-                cod = row[cod_idx] if cod_idx < len(row) else None
-                sname = row[sname_idx] if sname_idx < len(row) else None
-                if cod not in (None, "") and sname not in (None, ""):
-                    info["n_rows"] += 1
-            info["n_colaboradores"] = info["n_rows"]
-            if info["n_colaboradores"] <= 0:
-                return (
-                    "sem colaboradores válidos — não parece a ListaColaboradores",
-                    info,
-                )
-        else:
-            return "tipo de refs inválido", info
-    finally:
-        wb.close()
-    return None, info
+    return ref_importer.inspect_refs_xlsx(path, kind)
 
 
 def _validate_refs_xlsx(path: Path, kind: str) -> str | None:
@@ -1926,6 +1816,7 @@ def refs_page(request: Request) -> Response:
         "uploads": refs_uploads.recent(),
         "refs_cards": refs_cards,
         "upload_cards": upload_cards,
+        "refs_importer": ref_importer.status(),
         "refs_kind_labels": _REFS_LABELS,
         "revalidation": dict(_revalidation_state),
         "sap_file_date": _fmt_mtime(sap_status.get("mtime")),
@@ -2096,6 +1987,29 @@ async def refs_upload(
         traceback.print_exc()
         msg = str(e)[:80].replace("\n", " ")
         return _refs_redirect("err", f"erro inesperado: {msg}")
+
+
+@app.post("/refs/import-folder")
+def refs_import_folder() -> Response:
+    """Importa refs da pasta partilhada configurada."""
+    result = ref_importer.import_refs_from_config()
+    if result.get("ok"):
+        imported = result.get("imported") or []
+        skipped = result.get("skipped") or []
+        if imported:
+            kinds = ", ".join(i.get("kind", "?") for i in imported)
+            return _refs_redirect(
+                "ok",
+                f"importação da pasta: {len(imported)} ficheiro(s) atualizado(s) ({kinds})",
+            )
+        return _refs_redirect(
+            "ok",
+            f"importação da pasta: sem alterações ({len(skipped)} já iguais)",
+        )
+    errors = result.get("error") or "; ".join(
+        str(e.get("error")) for e in result.get("errors", []) if e.get("error")
+    )
+    return _refs_redirect("err", f"importação da pasta falhou: {errors or 'erro desconhecido'}")
 
 
 @app.post("/refs/revalidate")

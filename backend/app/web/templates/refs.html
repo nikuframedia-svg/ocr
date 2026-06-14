@@ -44,6 +44,33 @@
     </div>
   </div>
 
+  <div class="card" style="margin-bottom:14px;">
+    <div class="card-h">
+      <div class="card-h-title">Importação automática</div>
+      <div class="card-h-sub" title="{{ refs_importer.source_dir }}">
+        {{ refs_importer.source_dir or '—' }}
+      </div>
+    </div>
+    <div class="card-b">
+      <div class="muted tiny">
+        estado:
+        {% if refs_importer.enabled and refs_importer.thread_alive %}
+          ativa
+        {% else %}
+          inativa
+        {% endif %}
+        · intervalo: {{ refs_importer.interval_seconds or '—' }}s
+        · última execução: {{ refs_importer.last_run_at or '—' }}
+        {% if refs_importer.last_error %}
+          · erro: {{ refs_importer.last_error }}
+        {% endif %}
+      </div>
+      <form method="post" action="/refs/import-folder" style="margin-top:10px;">
+        <button class="btn" type="submit">Importar pasta agora</button>
+      </form>
+    </div>
+  </div>
+
   {# ---- Re-validação em curso ---- #}
   {% include "_refs_revalidation.html" %}
 

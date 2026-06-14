@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
-from app.cross_check import ref_watcher, refs_uploads, storage
+from app.cross_check import ref_importer, ref_watcher, refs_uploads, storage
 from app.pipeline.scoring_engine import ENGINE_VERSION, normalize_of
 from app.web import main
 
@@ -192,6 +193,105 @@ def test_ref_watcher_tracks_all_ref_workbook_hashes_and_snapshot(tmp_path):
     assert status["sap"]["sha256"] == ref_watcher.file_sha256(sap)
     assert status["maquinas"]["n_maquinas"] == 2
     assert status["colaboradores"]["n_colaboradores"] == 2
+
+
+def test_ref_importer_imports_latest_valid_refs_by_content(tmp_path, log_path):
+    doc_dir = tmp_path / "docs"
+    source_dir = tmp_path / "source"
+    doc_dir.mkdir()
+    source_dir.mkdir()
+    _write_plan(doc_dir / "plan_colunas_cpis.xlsx", [
+        ["OLD", "2600000", "260000", "OLDMODEL", 1, 0, 0, 0, 0, 0, 0, 0, 4, 600, 200, 9000],
+    ])
+    _write_stocksap(doc_dir / "StockSAP.xlsx", [["M26B001", 1, 2.6, 1250, "old"]])
+    _write_maquinas(doc_dir / "maquinas.xlsx", [
+        ["M001", "OLD", "OLD", "A", 1, 1, "", "", "OLD", "a"],
+    ])
+    _write_colaboradores(doc_dir / "ListaColaboradores.xlsx", [
+        ["0000000001", "OLD USER", 1],
+    ])
+    _write_plan(source_dir / "plan_colunas_cpis (4).xlsx", [
+        ["MTG GMBH", "2602568", "222414", "SCD301J07", 1, 0, 0, 0, 0, 0, 0, 0, 3, 610, 210, 9100],
+        ["LE HAVRE", "2512130", "260108", "CFH2F07RI", 9, 0, 0, 0, 0, 0, 0, 0, 4, 659, 242, 11050],
+    ])
+    _write_stocksap(source_dir / "stock_export_noite.xlsx", [
+        ["M26B999", 1, 3.0, 1500, "new"],
+    ])
+    _write_maquinas(source_dir / "mapa_maquinas.xlsx", [
+        ["M030", "LASER", "LASER", "C", 1, 2, "", "", "CORTE", "c"],
+    ])
+    _write_colaboradores(source_dir / "lista_pessoas.xlsx", [
+        ["0000000537", "JULIO LIMA", 537],
+        ["0000000123", "ANA SILVA", 123],
+    ])
+    watcher = ref_watcher.RefWatcher(doc_dir=doc_dir, repo_root=tmp_path)
+    watcher.force_reload()
+
+    result = ref_importer.import_refs_from_dir(source_dir, watcher=watcher)
+
+    assert result["ok"] is True
+    assert {item["kind"] for item in result["imported"]} == {
+        "plan", "stocksap", "maquinas", "colaboradores",
+    }
+    refs = watcher.get_refs()
+    assert refs["plan_sha256"] == ref_watcher.file_sha256(source_dir / "plan_colunas_cpis (4).xlsx")
+    assert refs["sap_sha256"] == ref_watcher.file_sha256(source_dir / "stock_export_noite.xlsx")
+    assert refs["maquinas_sha256"] == ref_watcher.file_sha256(source_dir / "mapa_maquinas.xlsx")
+    assert refs["colab_sha256"] == ref_watcher.file_sha256(source_dir / "lista_pessoas.xlsx")
+    assert refs["stats"]["n_plan_rows"] == 2
+    assert refs["stats"]["n_ofs"] == 2
+    assert refs["stats"]["n_lotes"] == 2
+    assert refs["stats"]["n_maquinas"] == 1
+    assert refs["stats"]["n_colaboradores"] == 2
+    assert {u["kind"] for u in refs_uploads.recent()[:4]} == {
+        "plan", "stocksap", "maquinas", "colaboradores",
+    }
+
+
+def test_ref_importer_rejects_invalid_refs_without_replacing_active(tmp_path, log_path):
+    doc_dir = tmp_path / "docs"
+    source_dir = tmp_path / "source"
+    doc_dir.mkdir()
+    source_dir.mkdir()
+    active_plan = doc_dir / "plan_colunas_cpis.xlsx"
+    _write_plan(active_plan, [
+        ["ACTIVE", "2600000", "260000", "ACTIVE_MODEL", 1, 0, 0, 0, 0, 0, 0, 0, 4, 600, 200, 9000],
+    ])
+    bad = Workbook()
+    bad.active.append(["of", "cliente"])
+    bad.active.append(["222414", "MTG GMBH"])
+    bad.save(source_dir / "plan_colunas_cpis.xlsx")
+    watcher = ref_watcher.RefWatcher(doc_dir=doc_dir, repo_root=tmp_path)
+    before_sha = ref_watcher.file_sha256(active_plan)
+
+    result = ref_importer.import_refs_from_dir(source_dir, watcher=watcher)
+
+    assert result["ok"] is True
+    assert result["imported"] == []
+    assert result["rejected"]
+    assert ref_watcher.file_sha256(active_plan) == before_sha
+    refs = watcher.force_reload()
+    assert refs["plan_sha256"] == before_sha
+    assert refs["stats"]["n_plan_rows"] == 1
+
+
+def test_ref_importer_skips_same_hash(tmp_path, log_path):
+    doc_dir = tmp_path / "docs"
+    source_dir = tmp_path / "source"
+    doc_dir.mkdir()
+    source_dir.mkdir()
+    rows = [
+        ["A", "2603977", "263348", "CAC4E10B", 1, 0, 0, 0, 0, 0, 0, 0, 4, 659, 242, 11050],
+    ]
+    _write_plan(doc_dir / "plan_colunas_cpis.xlsx", rows)
+    shutil.copy2(doc_dir / "plan_colunas_cpis.xlsx", source_dir / "plan_noite.xlsx")
+    watcher = ref_watcher.RefWatcher(doc_dir=doc_dir, repo_root=tmp_path)
+
+    result = ref_importer.import_refs_from_dir(source_dir, watcher=watcher)
+
+    assert result["ok"] is True
+    assert result["imported"] == []
+    assert result["skipped"][0]["kind"] == "plan"
 
 
 def test_plan_inspection_rejects_missing_required_columns(tmp_path):
