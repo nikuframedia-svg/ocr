@@ -13,7 +13,7 @@ import time
 import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from app.config import _dotenv_value
@@ -111,9 +111,15 @@ def _config_value(name: str) -> str | None:
     return os.environ.get(name) or _dotenv_value(_REPO_ROOT, name)
 
 
+def _is_windows_absolute(raw: str | Path) -> bool:
+    return PureWindowsPath(str(raw)).is_absolute()
+
+
 def _resolve_path(raw: str | Path) -> Path:
     path = Path(raw)
-    return path if path.is_absolute() else _REPO_ROOT / path
+    if path.is_absolute() or _is_windows_absolute(raw):
+        return path
+    return _REPO_ROOT / path
 
 
 def configured_import_dir() -> Path:

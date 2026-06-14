@@ -294,6 +294,14 @@ def test_ref_importer_skips_same_hash(tmp_path, log_path):
     assert result["skipped"][0]["kind"] == "plan"
 
 
+def test_ref_importer_preserves_windows_configured_paths(monkeypatch):
+    monkeypatch.setenv("KANBAN_REFS_IMPORT_DIR", r"F:\ocr\files")
+    assert str(ref_importer.configured_import_dir()) == r"F:\ocr\files"
+
+    monkeypatch.setenv("KANBAN_REFS_IMPORT_DIR", r"\\srv-planeamento\ocr\files")
+    assert str(ref_importer.configured_import_dir()) == r"\\srv-planeamento\ocr\files"
+
+
 def test_plan_inspection_rejects_missing_required_columns(tmp_path):
     bad = tmp_path / "bad_plan.xlsx"
     wb = Workbook()
