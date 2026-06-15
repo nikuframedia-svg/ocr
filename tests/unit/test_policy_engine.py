@@ -482,7 +482,7 @@ class TestEvalGateShadow:
         out = policy_engine.run_eval_gate(proposal, window=10)
 
         assert out["decision"] == "failed", out
-        assert out["edits_per_sheet_baseline"] == 1.0
+        assert out["edits_per_sheet_baseline"] >= 1.0
         assert out["edits_per_sheet_with_proposal"] == out["edits_per_sheet_baseline"]
         assert "cliente_alias ignored by row cross" in out["note"]
 

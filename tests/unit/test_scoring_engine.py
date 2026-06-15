@@ -158,14 +158,15 @@ class TestCandidates:
         assert cands[0]["value"] == "M26B0307"
         assert cands[0]["sim"] == 100.0
 
-    def test_dim_candidates_filter_by_delta(self):
+    def test_dim_candidates_include_nearest_outside_delta(self):
         row = {"comp_mm": "1210"}
         idx = _get_indices(_REFS)
         cands = _candidates_for_field("comp_mm", row, _REFS, idx)
-        # plan has 1200 (delta 10) and 1500 (delta 290, > 100 max)
+        # R213: o campo numérico também traz o mais próximo fora da tolerância,
+        # para o winner global poder escolher sempre a melhor linha possível.
         values = [c["value"] for c in cands if not c.get("is_ocr_raw")]
         assert 1200 in values
-        assert 1500 not in values
+        assert 1500 in values
 
     def test_no_ref_field_returns_empty(self):
         row = {"qtd": "12"}
@@ -274,7 +275,7 @@ class TestShadowScore:
         assert esp["status"] == "snapped"
         assert esp["source"] == "plan"
 
-    def test_unrelated_esp_digits_stay_for_review(self):
+    def test_unrelated_esp_digits_fills_plan_value_but_stays_review(self):
         sheet_data = {
             "template_name": "bobine_formato",
             "header": {},
@@ -288,7 +289,7 @@ class TestShadowScore:
         scoring, *_ = shadow_score(sheet_data, None, _REFS)
         esp = scoring["rows"][0]["fields"]["esp"]
 
-        assert esp["value"] == "66"
+        assert esp["value"] == "2,6"
         assert esp["status"] == "very_different"
         assert esp["proposed"] == "2,6"
 
@@ -442,16 +443,16 @@ class TestShadowScore:
                 "reason": "Motor propõe valor muito diferente do OCR",
             } in result["to_analisar"]
         else:
-            assert "ref" not in cell
+            assert cell["ref"] == ref_value
             assert {
                 "section": "rows",
                 "row_index": 0,
                 "field": field,
                 "field_path": f"rows[0].{field}",
                 "value": "ABC",
-                "ref": "",
+                "ref": ref_value,
                 "ref_source": ref_source,
-                "reason": "Valor não encontrado no plan",
+                "reason": "Motor propõe valor muito diferente do OCR",
             } in result["to_analisar"]
 
     def test_larg_mm_stocksap_over_10mm_goes_to_review(self):
@@ -539,19 +540,19 @@ class TestShadowScore:
         result = cross_check_sheet(sheet_data, None, refs)
         larg = result["rows"][0]["fields"]["larg_mm"]
 
-        assert larg["value"] == "261"
+        assert larg["value"] == "250"
         assert larg["status"] == "NO_MATCH"
         assert larg["ref_source"] == "plan"
-        assert "ref" not in larg
+        assert larg["ref"] == "250"
         assert {
             "section": "rows",
             "row_index": 0,
             "field": "larg_mm",
             "field_path": "rows[0].larg_mm",
             "value": "261",
-            "ref": "",
+            "ref": "250",
             "ref_source": "plan",
-            "reason": "Valor não encontrado no plan",
+            "reason": "Motor propõe valor muito diferente do OCR",
         } in result["to_analisar"]
 
     def test_larg_mm_prefers_stocksap_over_plan_when_lote_present(self):
@@ -607,30 +608,19 @@ class TestShadowScore:
         result = cross_check_sheet(sheet_data, None, _REFS)
         cell = result["rows"][0]["fields"][field]
 
-        if field == "lbase":
-            assert cell["value"] == "60"
-            assert cell["status"] == "MATCH"
-            assert cell["ref"] == "60"
-            return
-        if field == "ltopo":
-            assert cell["value"] == "40"
-            assert cell["status"] == "MATCH"
-            assert cell["ref"] == "40"
-            return
-
-        assert cell["value"] == ocr_value
+        assert cell["value"] == ref_value
         assert cell["status"] == "NO_MATCH"
         assert cell["ref_source"] == "plan"
-        assert "ref" not in cell
+        assert cell["ref"] == ref_value
         assert {
             "section": "rows",
             "row_index": 0,
             "field": field,
             "field_path": f"rows[0].{field}",
             "value": ocr_value,
-            "ref": "",
+            "ref": ref_value,
             "ref_source": "plan",
-            "reason": "Valor não encontrado no plan",
+            "reason": "Motor propõe valor muito diferente do OCR",
         } in result["to_analisar"]
 
     @pytest.mark.parametrize(
@@ -657,9 +647,9 @@ class TestShadowScore:
         cell = result["rows"][0]["fields"][field]
 
         if field in ("lbase", "ltopo"):
-            assert cell["value"] == ocr_value
-            assert cell["status"] == "confirmed"
-            assert result["rows"][0]["winner_of"] is None
+            assert cell["value"] == ref_value
+            assert cell["status"] == "snapped"
+            assert result["rows"][0]["winner_of"] == "262107"
             return
 
         assert cell["value"] == ref_value
@@ -706,7 +696,8 @@ class TestShadowScore:
         )
 
         assert scoring["summary"]["very_different"] == 1
-        assert snapped == scoring["summary"]["snapped"] == 0
+        assert snapped == scoring["summary"]["snapped"]
+        assert snapped > 0
         assert total == snapped + confirmed + na + scoring["summary"]["very_different"]
 
     def test_unknown_cliente_with_plan_pool_goes_to_review(self):
@@ -721,7 +712,7 @@ class TestShadowScore:
 
         assert scoring["rows"][0]["fields"]["cliente"]["status"] == "very_different"
 
-    def test_known_cliente_alone_does_not_select_global_winner(self):
+    def test_known_cliente_alone_selects_best_global_winner(self):
         sheet_data = {
             "template_name": "bobine_formato",
             "header": {},
@@ -739,14 +730,17 @@ class TestShadowScore:
         row = scoring["rows"][0]
         cliente = row["fields"]["cliente"]
 
-        assert row["winner_of"] is None
-        assert row["winner_score"] is None
+        assert row["winner_of"] == "262107"
+        assert row["winner_score"] is not None
         assert cliente["status"] == "confirmed"
         assert cliente["value"] == "ELECNOR"
         assert cliente["source"] == "ocr_raw"
         assert cliente["proposed"] == "ELECNOR"
+        assert row["fields"]["of"]["value"] == "262107"
         assert row["fields"]["of"]["status"] == "very_different"
+        assert row["fields"]["ov"]["value"] == "2410001"
         assert row["fields"]["ov"]["status"] == "very_different"
+        assert row["fields"]["modelo"]["value"] == "OMEGA 1200 H"
         assert row["fields"]["modelo"]["status"] == "very_different"
         assert result["rows"][0]["fields"]["cliente"]["status"] == "MATCH"
 
@@ -770,8 +764,8 @@ class TestShadowScore:
         assert scoring["rows"][0]["winner_of"] is None
         assert scoring["rows"][0]["fields"]["cliente"]["status"] == "NA"
 
-    def test_existing_cliente_alone_does_not_autofill_row_when_client_index_is_missing(self):
-        """Cliente existente valida a célula, mas sozinho não preenche a linha."""
+    def test_existing_cliente_alone_selects_and_autofills_best_row(self):
+        """Cliente existente sozinho já pode escolher a melhor linha global."""
         refs = {
             "available": True,
             "of_to_entries": {
@@ -795,12 +789,13 @@ class TestShadowScore:
         scoring, *_ = shadow_score(sheet_data, None, refs)
         fields = scoring["rows"][0]["fields"]
 
-        assert scoring["rows"][0]["winner_of"] is None
-        assert scoring["rows"][0]["winner_score"] is None
+        assert scoring["rows"][0]["winner_of"] == "262107"
+        assert scoring["rows"][0]["winner_score"] is not None
         assert fields["cliente"]["status"] == "confirmed"
         assert fields["cliente"]["value"] == "ELECNOR"
         for field in ("of", "ov", "modelo", "comp_mm"):
-            assert fields[field]["status"] == "NA"
+            assert fields[field]["status"] == "snapped"
+            assert fields[field]["source"] == "plan"
 
     def test_lote_without_stocksap_pool_is_na(self):
         refs = {
@@ -1546,7 +1541,7 @@ class TestShadowScore:
             "reason": "Valor não encontrado no SAP",
         }
 
-    def test_numeric_very_different_preserves_ocr_and_exposes_ref(self):
+    def test_numeric_very_different_fills_plan_value_and_exposes_ref(self):
         from app.pipeline.scoring_engine import cross_check_sheet
 
         sheet_data = {
@@ -1565,12 +1560,12 @@ class TestShadowScore:
         cell = scoring["rows"][0]["fields"]["comp_mm"]
         legacy = result["rows"][0]["fields"]["comp_mm"]
 
-        assert cell["value"] == "9999"
+        assert cell["value"] == "1200"
         assert cell["status"] == "very_different"
-        assert cell["source"] == "ocr_raw"
+        assert cell["source"] == "plan"
         assert cell["proposed"] == "1200"
         assert cell["ref_source"] == "plan"
-        assert legacy["value"] == "9999"
+        assert legacy["value"] == "1200"
         assert legacy["ref"] == "1200"
         assert legacy["ref_source"] == "plan"
         assert {
@@ -1600,8 +1595,8 @@ class TestShadowScore:
         assert row["winner_of"] == "262108"
         assert row["winner_score"] >= 3  # cliente + of + modelo + comp + esp
 
-    def test_weak_dimension_only_validates_cell_without_autofilling_row(self):
-        """Uma só dimensão valida a célula, mas não escolhe winner global."""
+    def test_weak_dimension_only_can_select_and_autofill_row(self):
+        """R213: uma dimensão com candidatos já escolhe a melhor linha global."""
         sheet_data = {
             "template_name": "bobine_formato", "header": {}, "footer": {},
             "rows": [{"comp_mm": "1200"}],
@@ -1610,11 +1605,12 @@ class TestShadowScore:
         scoring, *_ = shadow_score(sheet_data, None, _REFS)
         fields = scoring["rows"][0]["fields"]
 
-        assert scoring["rows"][0]["winner_of"] is None
-        assert scoring["rows"][0]["winner_score"] is None
+        assert scoring["rows"][0]["winner_of"] == "262107"
+        assert scoring["rows"][0]["winner_score"] == 1
         assert fields["comp_mm"]["status"] == "confirmed"
         for field in ("cliente", "ov", "of", "modelo", "esp", "lbase", "ltopo"):
-            assert fields[field]["status"] == "NA"
+            assert fields[field]["status"] == "snapped"
+            assert fields[field]["source"] == "plan"
 
     def test_sap_lote_and_width_are_evidence_without_special_anchor(self):
         """Lote/largura SAP validam SAP, mas não criam uma âncora especial.
@@ -1715,7 +1711,7 @@ class TestShadowScore:
         fields = row["fields"]
 
         assert row["winner_of"] == "262108"
-        assert row["winner_score"] == 3  # cliente + modelo + esp; medidas fora não contam.
+        assert row["winner_score"] > 5  # score contínuo inclui semelhança parcial.
         assert fields["of"]["status"] == "snapped"
         assert fields["ov"]["status"] == "snapped"
         assert fields["cliente"]["status"] == "confirmed"
@@ -1725,7 +1721,7 @@ class TestShadowScore:
             ("lbase", "60"),
             ("ltopo", "40"),
         ):
-            assert fields[field]["value"] == sheet_data["rows"][0][field]
+            assert fields[field]["value"] == ref
             assert fields[field]["status"] == "very_different"
             assert fields[field]["proposed"] == ref
 
@@ -1749,24 +1745,23 @@ class TestFindWinner:
             {"cliente": "ELECNOR"},
             _REFS,
             current_phase=None,
-            field_votes={("262107", "2410001", "OMEGA 1200 H"): {"cliente", "of"}},
         )
 
         assert winner is not None
         assert winner["_of"] == "262107"
-        assert winner["_score"] == 2
+        assert winner["_score"] == 1
+        assert winner["_exact_score"] == 1
 
 
 class TestGlobalWinnerScoring:
     """O winner é sempre o maior score global, sem âncoras especiais OF/OV.
 
-    Cada campo lido vale 1 quando bate. Campos divergentes continuam a expor
-    a proposta canónica em `proposed/ref` para revisão visual.
+    Cada campo lido vale no máximo 1. Campos divergentes mostram a proposta
+    canónica como valor principal e mantêm o estado vermelho/amarelo.
     """
 
-    def test_of_mismatch_preserves_ocr_and_exposes_winner_ref(self):
-        """OCR de OF que não existe mas OV existe no plan → OV ancora o winner
-        e a OF escrita fica para revisão com ref da entry dessa OV."""
+    def test_of_mismatch_fills_winner_ref_and_marks_review(self):
+        """OCR de OF que não existe não bloqueia o winner global."""
         from app.pipeline.scoring_engine import cross_check_sheet
 
         sheet_data = {
@@ -1779,13 +1774,13 @@ class TestGlobalWinnerScoring:
         }
         scoring, *_ = shadow_score(sheet_data, None, _REFS)
         of_cell = scoring["rows"][0]["fields"]["of"]
-        assert of_cell["value"] == "999999"
+        assert of_cell["value"] == "262108"
         assert of_cell["status"] == "very_different"
-        assert of_cell["source"] == "ocr_raw"
+        assert of_cell["source"] == "plan"
         assert of_cell["proposed"] == "262108"
         result = cross_check_sheet(sheet_data, None, _REFS)
         legacy = result["rows"][0]["fields"]["of"]
-        assert legacy["value"] == "999999"
+        assert legacy["value"] == "262108"
         assert legacy["ref"] == "262108"
         assert legacy["ref_source"] == "plan"
         assert {
@@ -1863,8 +1858,8 @@ class TestGlobalWinnerScoring:
         assert ov_cell["ref"] == "2600885"
         assert result["to_analisar"] == []
 
-    def test_ov_mismatch_preserves_ocr_and_exposes_winner_ref(self):
-        """OV diferente do winner → preserva OCR e mostra ref do winner."""
+    def test_ov_mismatch_fills_winner_ref_and_marks_review(self):
+        """OV diferente do winner mostra a OV da melhor linha."""
         sheet_data = {
             "template_name": "bobine_formato", "header": {}, "footer": {},
             "rows": [{
@@ -1874,9 +1869,9 @@ class TestGlobalWinnerScoring:
         }
         scoring, *_ = shadow_score(sheet_data, None, _REFS)
         ov_cell = scoring["rows"][0]["fields"]["ov"]
-        assert ov_cell["value"] == "9999999"
+        assert ov_cell["value"] == "2410001"
         assert ov_cell["status"] == "very_different"
-        assert ov_cell["source"] == "ocr_raw"
+        assert ov_cell["source"] == "plan"
         assert ov_cell["proposed"] == "2410001"
 
     def test_of_ov_conflict_uses_global_winner_when_rest_agrees(self):
@@ -1907,8 +1902,8 @@ class TestGlobalWinnerScoring:
             assert fields[field]["status"] == "snapped"
             assert fields[field]["source"] == "plan"
 
-    def test_of_ov_conflict_without_support_has_no_global_winner(self):
-        """Se só OF/OV discordam, não há linha global segura."""
+    def test_of_ov_conflict_without_support_still_chooses_best_global_winner(self):
+        """Se só OF/OV discordam, ganha a linha com maior score global."""
         sheet_data = {
             "template_name": "bobine_formato", "header": {}, "footer": {},
             "rows": [{"of": "262107", "ov": "2410002"}],
@@ -1917,18 +1912,18 @@ class TestGlobalWinnerScoring:
         scoring, *_ = shadow_score(sheet_data, None, _REFS)
         fields = scoring["rows"][0]["fields"]
 
-        assert scoring["rows"][0]["winner_of"] is None
-        assert scoring["rows"][0]["winner_score"] is None
+        assert scoring["rows"][0]["winner_of"] == "262107"
+        assert scoring["rows"][0]["winner_score"] is not None
         assert scoring["rows"][0]["identity_conflict"] is False
         assert fields["of"]["value"] == "262107"
         assert fields["of"]["status"] == "confirmed"
-        assert fields["ov"]["value"] == "2410002"
-        assert fields["ov"]["status"] == "confirmed"
+        assert fields["ov"]["value"] == "2410001"
+        assert fields["ov"]["status"] == "snapped"
         for field in ("cliente", "modelo", "comp_mm", "esp", "lbase", "ltopo"):
-            assert fields[field]["status"] == "NA"
+            assert fields[field]["status"] == "snapped"
 
-    def test_single_exact_of_does_not_pull_wrong_expedicao_row(self):
-        """Caso tipo ASVITAE/MTGBELUX: uma OF isolada não puxa a linha toda."""
+    def test_single_exact_of_selects_best_expedicao_row(self):
+        """R213: uma OF isolada também escolhe a melhor linha disponível."""
         refs = {
             "available": True,
             "of_to_entries": {
@@ -1955,14 +1950,13 @@ class TestGlobalWinnerScoring:
         row = scoring["rows"][0]
         fields = row["fields"]
 
-        assert row["winner_of"] is None
-        assert row["winner_score"] is None
+        assert row["winner_of"] == "257083"
+        assert row["winner_score"] is not None
         assert fields["of"]["status"] == "confirmed"
         for field in ("cliente", "ov", "modelo"):
-            assert fields[field]["status"] == "very_different"
-            assert "proposed" not in fields[field]
+            assert fields[field]["source"] == "plan"
 
-    def test_wrong_of_loses_to_cliente_ov_model_votes(self):
+    def test_wrong_of_loses_to_stronger_global_score(self):
         refs = {
             "available": True,
             "of_to_entries": {
@@ -2003,7 +1997,7 @@ class TestGlobalWinnerScoring:
         fields = row["fields"]
 
         assert row["winner_of"] == "257093"
-        assert row["winner_score"] == 3
+        assert row["winner_score"] > 3
         assert fields["cliente"]["status"] == "confirmed"
         assert fields["ov"]["status"] == "confirmed"
         assert fields["of"]["value"] == "257093"
@@ -2040,7 +2034,7 @@ class TestGlobalWinnerScoring:
         fields = row["fields"]
 
         assert row["winner_of"] == "257504"
-        assert row["winner_score"] == 4
+        assert row["winner_score"] > 3
         assert fields["ov"]["value"] == "250010"
         assert fields["ov"]["status"] == "snapped"
         assert fields["of"]["value"] == "257504"
@@ -2049,7 +2043,7 @@ class TestGlobalWinnerScoring:
         assert fields["qtd"]["status"] == "NA"
         assert fields["cesta_n"]["status"] == "NA"
 
-    def test_duplicate_plan_entries_with_same_voted_fields_use_tiebreak(self):
+    def test_duplicate_plan_entries_with_same_score_use_tiebreak(self):
         refs = {
             "available": True,
             "of_to_entries": {
@@ -2092,7 +2086,7 @@ class TestGlobalWinnerScoring:
         assert row["winner_score"] == 4
         assert row["fields"]["modelo"]["status"] == "snapped"
 
-    def test_two_fuzzy_identifiers_without_exact_support_do_not_select_winner(self):
+    def test_two_fuzzy_identifiers_without_exact_support_select_best_winner(self):
         refs = {
             "available": True,
             "of_to_entries": {
@@ -2119,10 +2113,10 @@ class TestGlobalWinnerScoring:
         scoring, *_ = shadow_score(sheet_data, None, refs)
         row = scoring["rows"][0]
 
-        assert row["winner_of"] is None
-        assert row["winner_score"] is None
+        assert row["winner_of"] == "257093"
+        assert row["winner_score"] is not None
 
-    def test_cliente_leading_ocr_character_can_vote_with_support(self):
+    def test_cliente_leading_ocr_character_contributes_to_global_score(self):
         refs = {
             "available": True,
             "of_to_entries": {
@@ -2149,25 +2143,25 @@ class TestGlobalWinnerScoring:
         row = scoring["rows"][0]
 
         assert row["winner_of"] == "262414"
-        assert row["winner_score"] == 4
+        assert row["winner_score"] > 3
         assert row["fields"]["cliente"]["value"] == "MTG GMBH"
         assert row["fields"]["cliente"]["status"] == "snapped"
         assert row["fields"]["of"]["value"] == "262414"
         assert row["fields"]["of"]["status"] == "snapped"
 
-    def test_cliente_mismatch_preserves_ocr_and_exposes_winner_ref(self):
-        """Cliente diferente sem apoio global preserva OCR sem puxar winner."""
+    def test_cliente_mismatch_fills_winner_ref_and_marks_review(self):
+        """Cliente diferente também usa a melhor linha quando há candidatos."""
         sheet_data = {
             "template_name": "bobine_formato", "header": {}, "footer": {},
             "rows": [{"cliente": "SUNNA", "of": "262107"}],  # OF da ELECNOR
         }
         scoring, *_ = shadow_score(sheet_data, None, _REFS)
         cli = scoring["rows"][0]["fields"]["cliente"]
-        assert cli["value"] == "SUNNA"
+        assert cli["value"] == "ELECNOR"
         assert cli["status"] == "very_different"
-        assert cli["source"] == "ocr_raw"
-        assert "proposed" not in cli
-        assert scoring["rows"][0]["winner_of"] is None
+        assert cli["source"] == "plan"
+        assert cli["proposed"] == "ELECNOR"
+        assert scoring["rows"][0]["winner_of"] == "262107"
 
     @pytest.mark.parametrize(
         ("ocr_cliente", "plan_cliente", "matches"),
@@ -2215,7 +2209,7 @@ class TestGlobalWinnerScoring:
         assert _cliente_values_match("STOCK MTG", "STOCK MTG GMBH", refs)
         assert not _cliente_values_match("SK-T-BELUX", "STOCK MTG BELUX", refs)
 
-    def test_cliente_alias_is_ignored_without_global_winner(self):
+    def test_cliente_alias_is_ignored_but_of_still_selects_winner(self):
         refs = {
             **_REFS,
             "of_to_entries": {
@@ -2239,14 +2233,13 @@ class TestGlobalWinnerScoring:
         cli = scoring["rows"][0]["fields"]["cliente"]
 
         assert not _cliente_values_match("HTG", "MTG", refs)
-        assert scoring["rows"][0]["winner_of"] is None
-        assert cli["value"] == "HTG"
-        assert cli["status"] == "very_different"
-        assert cli["source"] == "ocr_raw"
-        assert "proposed" not in cli
-        assert result["rows"][0]["fields"]["cliente"]["status"] == "NO_MATCH"
+        assert scoring["rows"][0]["winner_of"] == "262301"
+        assert cli["value"] == "MTG"
+        assert cli["status"] == "snapped"
+        assert cli["source"] == "plan"
+        assert result["rows"][0]["fields"]["cliente"]["status"] == "MATCH"
 
-    def test_cliente_token_alias_is_ignored_without_global_winner(self):
+    def test_cliente_token_alias_is_ignored_but_of_still_selects_winner(self):
         refs = {
             **_REFS,
             "of_to_entries": {
@@ -2270,12 +2263,11 @@ class TestGlobalWinnerScoring:
         cli = scoring["rows"][0]["fields"]["cliente"]
 
         assert not _cliente_values_match("HTG BELUX", "MTG BELUX", refs)
-        assert scoring["rows"][0]["winner_of"] is None
-        assert cli["value"] == "HTG BELUX"
-        assert cli["status"] == "very_different"
-        assert cli["source"] == "ocr_raw"
-        assert "proposed" not in cli
-        assert result["rows"][0]["fields"]["cliente"]["status"] == "NO_MATCH"
+        assert scoring["rows"][0]["winner_of"] == "262302"
+        assert cli["value"] == "MTG BELUX"
+        assert cli["status"] == "snapped"
+        assert cli["source"] == "plan"
+        assert result["rows"][0]["fields"]["cliente"]["status"] == "MATCH"
 
     def test_cliente_token_alias_different_suffix_is_not_a_match(self):
         refs = {
@@ -2300,11 +2292,10 @@ class TestGlobalWinnerScoring:
         cli = scoring["rows"][0]["fields"]["cliente"]
 
         assert not _cliente_values_match("HTG BELGIUM", "MTG BELUX", refs)
-        assert scoring["rows"][0]["winner_of"] is None
-        assert cli["value"] == "HTG BELGIUM"
-        assert cli["status"] == "very_different"
-        assert cli["source"] == "ocr_raw"
-        assert "proposed" not in cli
+        assert scoring["rows"][0]["winner_of"] == "262303"
+        assert cli["value"] == "MTG BELUX"
+        assert cli["status"] == "snapped"
+        assert cli["source"] == "plan"
 
     def test_dimensional_only_can_select_global_winner(self):
         """Medidas fortes podem escolher a linha mesmo com identidade OCR errada."""
@@ -2320,12 +2311,12 @@ class TestGlobalWinnerScoring:
         scoring, *_ = shadow_score(sheet_data, None, _REFS)
         fields = scoring["rows"][0]["fields"]
         assert scoring["rows"][0]["winner_of"] == "262108"
-        assert scoring["rows"][0]["winner_score"] == 5
+        assert scoring["rows"][0]["winner_score"] > 5
         assert scoring["rows"][0]["identity_conflict"] is False
-        assert fields["of"]["value"] == "111111"
+        assert fields["of"]["value"] == "262108"
         assert fields["of"]["status"] == "very_different"
         assert fields["of"]["proposed"] == "262108"
-        assert fields["ov"]["value"] == "8888888"
+        assert fields["ov"]["value"] == "2410002"
         assert fields["ov"]["status"] == "very_different"
         assert fields["ov"]["proposed"] == "2410002"
         for field in ("comp_mm", "larg_mm", "lbase", "ltopo", "esp"):
@@ -2349,9 +2340,9 @@ class TestGlobalWinnerScoring:
         assert row["winner_of"] == "262108"
         assert row["winner_score"] >= 4
         assert row["identity_conflict"] is False
-        assert fields["of"]["value"] == "999999"
+        assert fields["of"]["value"] == "262108"
         assert fields["of"]["status"] == "very_different"
-        assert fields["of"]["source"] == "ocr_raw"
+        assert fields["of"]["source"] == "plan"
         assert fields["of"]["proposed"] == "262108"
         assert fields["cliente"]["status"] == "confirmed"
         assert fields["modelo"]["status"] == "confirmed"
@@ -2517,7 +2508,7 @@ class TestGlobalWinnerScoring:
         assert row["identity_conflict"] is False
         assert fields["of"]["status"] == "very_different"
         assert fields["modelo"]["status"] == "very_different"
-        assert fields["modelo"]["value"] == "CLCAF06DV"
+        assert fields["modelo"]["value"] == "CLCAF06DI_V - PONTEIRA"
         assert fields["modelo"]["proposed"] == "CLCAF06DI_V - PONTEIRA"
 
     def test_close_non_identity_delta_snaps_after_global_winner(self):
@@ -2567,11 +2558,11 @@ class TestGlobalWinnerScoring:
         scoring, *_ = shadow_score(sheet_data, None, refs)
         fields = scoring["rows"][0]["fields"]
         assert scoring["rows"][0]["winner_of"] == "232976"
-        assert scoring["rows"][0]["winner_score"] == 5
-        assert fields["of"]["value"] == "263348"
+        assert scoring["rows"][0]["winner_score"] > 5
+        assert fields["of"]["value"] == "232976"
         assert fields["of"]["status"] == "very_different"
         assert fields["of"]["proposed"] == "232976"
-        assert fields["ov"]["value"] == "2603977"
+        assert fields["ov"]["value"] == "2305550"
         assert fields["ov"]["status"] == "very_different"
         for field in ("comp_mm", "lbase", "ltopo", "esp"):
             assert fields[field]["status"] == "confirmed"
@@ -2609,7 +2600,7 @@ class TestGlobalWinnerScoring:
         scoring, *_ = shadow_score(sheet_data, None, refs)
         row = scoring["rows"][0]
         assert row["winner_of"] == "232976"
-        assert row["winner_score"] == 5
+        assert row["winner_score"] > 5
         assert row["obra_concluida"] is True
         assert all(
             cell.get("source") != "obra_concluida"
@@ -2746,7 +2737,7 @@ class TestGlobalWinnerScoring:
         modelo = scoring["rows"][0]["fields"]["modelo"]
 
         assert modelo["status"] == "very_different"
-        assert modelo["value"] == "CGCAE05D1"
+        assert modelo["value"] == "CGCAE05DI - FURACAO"
         assert modelo["proposed"] == "CGCAE05DI - FURACAO"
 
     def test_modelo_i_one_does_not_cross_digit_context(self):
@@ -2775,7 +2766,7 @@ class TestGlobalWinnerScoring:
         modelo = scoring["rows"][0]["fields"]["modelo"]
 
         assert modelo["status"] == "very_different"
-        assert modelo["value"] == "CGC2E06D1-2ªPRIORIDADE"
+        assert modelo["value"] == "CGC2E06DI - 1 PRIORIDADE"
         assert modelo["proposed"] == "CGC2E06DI - 1 PRIORIDADE"
 
     def test_modelo_missing_i_before_v_is_very_different(self):
@@ -2804,7 +2795,7 @@ class TestGlobalWinnerScoring:
         modelo = scoring["rows"][0]["fields"]["modelo"]
 
         assert modelo["status"] == "very_different"
-        assert modelo["value"] == "CLCAF06DV"
+        assert modelo["value"] == "CLCAF06DI_V - PONTEIRA"
         assert modelo["proposed"] == "CLCAF06DI_V - PONTEIRA"
 
     def test_modelo_missing_i_before_v_keeps_numeric_conflict_review(self):
@@ -2833,7 +2824,7 @@ class TestGlobalWinnerScoring:
         modelo = scoring["rows"][0]["fields"]["modelo"]
 
         assert modelo["status"] == "very_different"
-        assert modelo["value"] == "CFC5F05RiV"
+        assert modelo["value"] == "CFC5F45RI_V"
         assert modelo["proposed"] == "CFC5F45RI_V"
 
     @pytest.mark.parametrize(
@@ -2888,7 +2879,7 @@ class TestGlobalWinnerScoring:
         modelo = scoring["rows"][0]["fields"]["modelo"]
 
         assert modelo["status"] == "very_different"
-        assert modelo["value"] == ocr_modelo
+        assert modelo["value"] == "OMEGA 1500 H"
         assert modelo["proposed"] == "OMEGA 1500 H"
         assert modelo["ref_source"] == "plan"
         legacy = result["rows"][0]["fields"]["modelo"]
@@ -2937,18 +2928,14 @@ class TestGlobalWinnerScoring:
         modelo = scoring["rows"][0]["fields"]["modelo"]
 
         assert modelo["status"] == "very_different"
-        assert modelo["value"] == "B713U503"
+        assert modelo["value"] == "B713UP01 - COLUNA"
         assert modelo["proposed"] == "B713UP01 - COLUNA"
 
 
 class TestAcabamentoPreservesOperatorReference:
-    """Acabamento TPL086 usa `modelo` como REFERÊNCIA / PEÇA escrita no papel.
+    """Acabamento TPL086 também segue o winner global R213."""
 
-    Sem winner forte preserva a referência não-vazia. Com OF+modelo a
-    apontarem para a mesma linha, corrige para o código curto do plan.
-    """
-
-    def test_acabamento_keeps_non_empty_of_and_modelo(self):
+    def test_acabamento_fills_non_empty_modelo_from_global_winner(self):
         sheet_data = {
             "template_name": "acabamento", "header": {}, "footer": {},
             "rows": [{
@@ -2960,32 +2947,31 @@ class TestAcabamentoPreservesOperatorReference:
         scoring, *_ = shadow_score(sheet_data, None, _REFS)
         fields = scoring["rows"][0]["fields"]
 
-        # of/modelo não-vazios pertencem ao papel de Acabamento: preservar OCR.
         assert fields["of"]["value"] == "262108"
         assert fields["of"]["source"] == "ocr_raw"
 
-        assert fields["modelo"]["value"] == "PEÇA-X"
-        assert fields["modelo"]["source"] == "ocr_raw"
+        assert fields["modelo"]["value"] == "OMEGA 1500 H"
+        assert fields["modelo"]["source"] == "plan"
         assert fields["modelo"]["status"] == "very_different"
-        assert "proposed" not in fields["modelo"]
-        assert scoring["rows"][0]["winner_of"] is None
+        assert fields["modelo"]["proposed"] == "OMEGA 1500 H"
+        assert scoring["rows"][0]["winner_of"] == "262108"
 
         from app.pipeline.scoring_engine import cross_check_sheet
 
         result = cross_check_sheet(sheet_data, None, _REFS)
         modelo = result["rows"][0]["fields"]["modelo"]
-        assert modelo["source"] == "ocr_raw"
+        assert modelo["source"] == "plan"
         assert modelo["ref_source"] == "plan"
-        assert "ref" not in modelo
+        assert modelo["ref"] == "OMEGA 1500 H"
         assert {
             "section": "rows",
             "row_index": 0,
             "field": "modelo",
             "field_path": "rows[0].modelo",
             "value": "PEÇA-X",
-            "ref": "",
+            "ref": "OMEGA 1500 H",
             "ref_source": "plan",
-            "reason": "Valor não encontrado no plan",
+            "reason": "Motor propõe valor muito diferente do OCR",
         } in result["to_analisar"]
 
     def test_acabamento_soft_of_and_model_errors_snap_with_winner(self):
@@ -3011,15 +2997,15 @@ class TestAcabamentoPreservesOperatorReference:
         fields = row["fields"]
 
         assert row["winner_of"] == "257504"
-        assert row["winner_score"] == 2
+        assert row["winner_score"] > 1
         assert fields["of"]["value"] == "257504"
         assert fields["of"]["status"] == "snapped"
         assert fields["modelo"]["value"] == "CAO8E10B"
         assert fields["modelo"]["status"] == "snapped"
         assert fields["qtd"]["status"] == "NA"
 
-    def test_bobine_preserves_written_identity(self):
-        """Sanidade: Bobine também preserva OF escrita quando a OV ancora."""
+    def test_bobine_fills_written_identity_from_winner(self):
+        """Sanidade: Bobine também mostra a OF da melhor linha."""
         sheet_data = {
             "template_name": "bobine_formato", "header": {}, "footer": {},
             "rows": [{
@@ -3029,7 +3015,7 @@ class TestAcabamentoPreservesOperatorReference:
         }
         scoring, *_ = shadow_score(sheet_data, None, _REFS)
         cell = scoring["rows"][0]["fields"]["of"]
-        assert cell["value"] == "999999"
+        assert cell["value"] == "262108"
         assert cell["status"] == "very_different"
         assert cell["proposed"] == "262108"
 

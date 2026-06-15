@@ -71,22 +71,6 @@ def _cliente_values_match(
     return bool(ocr_compact and ocr_compact == plan_compact)
 
 
-def _cliente_vote_matches(ocr_value: object, plan_value: object) -> bool:
-    """Cliente pode votar por igualdade compacta ou erro OCR de 1 char."""
-    if _cliente_values_match(ocr_value, plan_value, None):
-        return True
-
-    ocr_compact = _cliente_compact(ocr_value)
-    plan_compact = _cliente_compact(plan_value)
-    if not ocr_compact or not plan_compact:
-        return False
-    if max(len(ocr_compact), len(plan_compact)) < 4:
-        return False
-    if abs(len(ocr_compact) - len(plan_compact)) != 1:
-        return False
-    return _lev_distance(ocr_compact, plan_compact) <= 1
-
-
 def normalize_of(value: object) -> str:
     """6 dígitos canónico. Pure-digit OFs < 6 chars são zero-padded; o
     resto fica intocado para coabitar com snap_of."""
@@ -157,10 +141,10 @@ def score_entry(
         entry do plan e por isso não pontua o winner.
       - `material` saiu (R123 B2): não é um campo da folha do operador.
     """
-    op_of = normalize_of(row.get("of"))
-    op_cli = (row.get("cliente") or "").strip()
-    op_ov = str(row.get("ov") or "").strip()
-    op_mod = (row.get("modelo") or "").strip().upper()
+    op_of = "" if _is_missing_ocr(row.get("of")) else _identifier_compact(row.get("of"), pad_of=True)
+    op_cli = "" if _is_missing_ocr(row.get("cliente")) else (row.get("cliente") or "").strip()
+    op_ov = "" if _is_missing_ocr(row.get("ov")) else _identifier_compact(row.get("ov"))
+    op_mod = "" if _is_missing_ocr(row.get("modelo")) else (row.get("modelo") or "").strip().upper()
     op_comp = _num(row.get("comp_mm"))
     op_lb = _num(row.get("lbase"))
     op_lt = _num(row.get("ltopo"))
@@ -171,14 +155,14 @@ def score_entry(
 
     s = 0
     # of — OF do operador == OF da entry (tolerância 0/O)
-    entry_of = normalize_of(entry.get("_of") or entry.get("of"))
+    entry_of = _identifier_compact(entry.get("_of") or entry.get("of"), pad_of=True)
     if op_of and entry_of and entry_of in _o_zero_variants(op_of):
         s += 1
     # cliente
     if op_cli and _cliente_values_match(op_cli, entry.get("cliente"), refs):
         s += 1
     # ov (tolerância 0/O)
-    entry_ov = str(entry.get("ov") or "").strip()
+    entry_ov = _identifier_compact(entry.get("ov"))
     if op_ov and entry_ov and entry_ov in _o_zero_variants(op_ov):
         s += 1
     # modelo — o código do operador aparece na designação da entry, ou bate
@@ -266,9 +250,6 @@ _PLAN_FIELDS = ("of", "ov", "modelo", "cliente", "comp_mm", "larg_mm",
                 "lbase", "ltopo", "esp", "dbase", "dtopo")
 
 _TOP_K = 10
-_MIN_WINNER_FIELD_VOTES = 2
-_IDENTIFIER_VOTE_MIN_SIM = 80.0
-_MODEL_VOTE_MIN_SIM = 75.0
 
 # Thresholds de "muito diferente" — abaixo destes níveis, vermelho.
 _VERY_DIFF_STR_SIM = 50.0          # se sim < 50, é muito diferente
@@ -403,14 +384,16 @@ _STATUS_LABELS = {
 # operacional do plan, não como parte do nome do cliente.
 # R208 — winner global puro: todos os candidatos desde início, sem âncoras
 # OF/OV, sem aliases/abreviações de cliente, sem variantes opinativas de modelo.
-# R209 — winner por votação de campos credíveis; score=1 já não puxa linha toda.
+# R209 — legado: winner por votação de campos credíveis removido em R213.
 # R210 — cliente por compacto normalizado também encontra linhas STOCK <cliente>.
 # R211 — winner não pode nascer só de votos fuzzy; exige ao menos 1 match exato.
 # R212 — winner forte aplica correções suaves de OCR; STOCK deixa de ser
 # stopword de cliente; empates do Plan com mesmo código curto podem usar
 # desempate de fase/remaining.
+# R213 — repõe Cross global simples pré-regressão: todos os candidatos entram,
+# score contínuo por campo com peso máximo 1, sem mínimo de votos/exato.
 # BUMP obrigatório: força regeneração dos cross-check JSON antigos.
-ENGINE_VERSION = "v14_R212"
+ENGINE_VERSION = "v15_R213"
 
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
@@ -618,6 +601,120 @@ def _model_numeric_groups_conflict(ocr_value: object, proposed: object) -> bool:
     return bool(ocr_groups and proposed_groups and ocr_groups != proposed_groups)
 
 
+def _is_missing_ocr(value: object) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return True
+    compact = re.sub(r"[\s\-_.:/\\]+", "", text)
+    return bool(compact) and set(compact) <= {"?"}
+
+
+def _identifier_compact(value: object, *, pad_of: bool = False) -> str:
+    raw = _norm_ascii_upper(value)
+    compact = re.sub(r"[^A-Z0-9]+", "", raw)
+    if pad_of and compact.isdigit() and len(compact) < 6:
+        compact = compact.zfill(6)
+    return compact
+
+
+def _identifier_similarity(value: object, candidate: object, *, pad_of: bool = False) -> float:
+    left = _identifier_compact(value, pad_of=pad_of)
+    right = _identifier_compact(candidate, pad_of=pad_of)
+    if not left or not right:
+        return 0.0
+    left_variants = _o_zero_variants(left)
+    right_variants = _o_zero_variants(right)
+    if set(left_variants) & set(right_variants):
+        return 1.0
+    return max(
+        _str_sim(lv, rv) / 100.0
+        for lv in left_variants
+        for rv in right_variants
+    )
+
+
+def _numeric_similarity(field: str, value: object, candidate: object, tolerance: float) -> float:
+    cand = _num(candidate)
+    if cand is None:
+        return 0.0
+    variants = _num_variants(field, value)
+    if not variants:
+        return 0.0
+    best_delta = min(abs(v - cand) for v in variants)
+    if best_delta <= tolerance:
+        return 1.0
+    # Depois da tolerância, ainda há evidência fraca; mas diferenças grandes
+    # em dimensões não podem parecer quase perfeitas.
+    decay_window = max(tolerance, 1.0)
+    return max(0.0, 1.0 - ((best_delta - tolerance) / decay_window))
+
+
+def _entry_field_similarity(field: str, entry: dict, row: dict, refs: dict) -> float | None:
+    value = row.get(field)
+    if _is_missing_ocr(value):
+        return None
+
+    if field == "of":
+        entry_value = entry.get("_of") or entry.get("of")
+        return _identifier_similarity(value, entry_value, pad_of=True)
+
+    if field == "ov":
+        return _identifier_similarity(value, entry.get("ov"))
+
+    if field == "cliente":
+        if _cliente_values_match(value, entry.get("cliente"), refs):
+            return 1.0
+        left = _cliente_compact(value)
+        right = _cliente_compact(entry.get("cliente"))
+        if not left or not right:
+            return None
+        return _str_sim(left, right) / 100.0
+
+    if field == "modelo":
+        designacao = entry.get("designacao")
+        if _model_matches_designacao(value, designacao):
+            return 1.0
+        model = _model_compact(value)
+        if len(model) < 4:
+            return None
+        candidates = [
+            _model_compact(_model_first_token(designacao)),
+            _model_compact(designacao),
+        ]
+        candidates = [c for c in candidates if c]
+        if not candidates:
+            return None
+        return max(_str_sim(model, c) / 100.0 for c in candidates)
+
+    plan_attr = {
+        "comp_mm": "comp",
+        "larg_mm": "larg",
+        "lbase": "lbase",
+        "ltopo": "ltopo",
+        "esp": "esp",
+        "dbase": "dbase",
+        "dtopo": "dtopo",
+    }.get(field)
+    if plan_attr:
+        candidate = entry.get(plan_attr)
+        if candidate in (None, ""):
+            return None
+        tolerance = _VERY_DIFF_NUM_ABS[field]
+        return _numeric_similarity(field, value, candidate, tolerance)
+
+    return None
+
+
+def _entry_global_score(entry: dict, row: dict, refs: dict) -> tuple[float, int]:
+    total = 0.0
+    for field in _PLAN_FIELDS:
+        sim = _entry_field_similarity(field, entry, row, refs)
+        if sim is None:
+            continue
+        total += max(0.0, min(1.0, sim))
+    return total, score_entry(entry, row, refs)
+
+
 # Normalização cosmética (única guarda mantida) -----------------------------
 
 def _format_value(field: str, value: Any) -> str:
@@ -729,7 +826,7 @@ def _topk_keys_by_sim(target: str, pool: list[str], k: int) -> list[tuple[str, f
 def _candidates_for_field(field: str, row: dict, refs: dict, idx: dict) -> list[dict]:
     """Top-K candidatos por campo (puro top-K)."""
     ocr_value = str(row.get(field) or "").strip()
-    if not ocr_value or field in _NO_REF_FIELDS:
+    if _is_missing_ocr(ocr_value) or field in _NO_REF_FIELDS:
         return []
 
     of_to_entries = idx["of_to_entries"]
@@ -745,7 +842,7 @@ def _candidates_for_field(field: str, row: dict, refs: dict, idx: dict) -> list[
     out: list[dict] = []
 
     if field == "of":
-        normalized = normalize_of(ocr_value)
+        normalized = _identifier_compact(ocr_value, pad_of=True)
         seen: set[str] = set()
         for v in _o_zero_variants(normalized):
             if v in of_to_entries and v not in seen:
@@ -768,12 +865,13 @@ def _candidates_for_field(field: str, row: dict, refs: dict, idx: dict) -> list[
 
     if field == "ov":
         seen: set[str] = set()
-        for v in _lote_variants(ocr_value):
+        normalized = _identifier_compact(ocr_value)
+        for v in _o_zero_variants(normalized):
             if v in ov_to_entries and v not in seen:
                 seen.add(v)
-                out.append({"value": v, "sim": _str_sim(ocr_value, v), "plan_entries": ov_to_entries[v]})
+                out.append({"value": v, "sim": _str_sim(normalized, v), "plan_entries": ov_to_entries[v]})
         if len(out) < _TOP_K:
-            for k, s in _topk_keys_by_sim(ocr_value, idx["ov_keys"], _TOP_K):
+            for k, s in _topk_keys_by_sim(normalized, idx["ov_keys"], _TOP_K):
                 if k not in seen:
                     seen.add(k)
                     out.append({"value": k, "sim": s, "plan_entries": ov_to_entries[k]})
@@ -914,15 +1012,15 @@ def _candidates_for_field(field: str, row: dict, refs: dict, idx: dict) -> list[
             "dbase": _VERY_DIFF_NUM_ABS["dbase"],
             "dtopo": _VERY_DIFF_NUM_ABS["dtopo"],
         }[field]
-        in_range = [
-            (val, entries) for val, entries in dim_indices[plan_attr].items()
-            if any(abs(val - ocr_num) <= max_delta for ocr_num in ocr_nums)
+        nearest = [
+            (min(abs(val - ocr_num) for ocr_num in ocr_nums), val, entries)
+            for val, entries in dim_indices[plan_attr].items()
         ]
-        in_range.sort(key=lambda kv: min(abs(kv[0] - ocr_num) for ocr_num in ocr_nums))
-        for v, entries in in_range[:_TOP_K]:
+        nearest.sort(key=lambda kv: kv[0])
+        for _delta, v, entries in nearest[:_TOP_K]:
             out.append({
                 "value": v,
-                "sim": _best_num_sim(field, ocr_value, v, max_delta),
+                "sim": _numeric_similarity(field, ocr_value, v, max_delta) * 100.0,
                 "plan_entries": entries,
             })
         return out[:_TOP_K]
@@ -940,194 +1038,39 @@ def _entry_key(entry: dict) -> tuple:
     )
 
 
-def _candidate_is_credible_for_field(
-    field: str,
-    cand: dict,
-    row: dict,
-    refs: dict,
-) -> bool:
-    """True quando o candidato é evidência suficiente para o campo votar."""
-    if not cand.get("plan_entries"):
-        return False
-    sim = float(cand.get("sim") or 0.0)
-    value = cand.get("value")
-
-    if field in ("of", "ov"):
-        return sim >= _IDENTIFIER_VOTE_MIN_SIM
-
-    if field == "cliente":
-        return _cliente_vote_matches(row.get("cliente"), value)
-
-    if field == "modelo":
-        ocr_model = row.get("modelo")
-        if _model_matches_designacao(ocr_model, value):
-            return True
-        for entry in cand.get("plan_entries") or []:
-            if _model_matches_designacao(ocr_model, entry.get("designacao")):
-                return True
-        return sim >= _MODEL_VOTE_MIN_SIM
-
-    if field in ("comp_mm", "larg_mm", "lbase", "ltopo", "esp", "dbase", "dtopo"):
-        # Estes candidatos já vêm filtrados por tolerância numérica.
-        return True
-
-    return False
-
-
-def _best_credible_candidates_for_field(
-    field: str,
-    candidates: list[dict],
-    row: dict,
-    refs: dict,
-) -> list[dict]:
-    credible = [
-        cand for cand in candidates or []
-        if _candidate_is_credible_for_field(field, cand, row, refs)
-    ]
-    if not credible:
-        return []
-    best_sim = max(float(cand.get("sim") or 0.0) for cand in credible)
-    return [
-        cand for cand in credible
-        if abs(float(cand.get("sim") or 0.0) - best_sim) <= 1e-9
-    ]
-
-
-def _candidate_vote_maps(
-    candidates_by_field: dict[str, list[dict]],
-    row: dict,
-    refs: dict,
-) -> tuple[dict[tuple, dict], dict[tuple, set[str]]]:
-    entries_by_key: dict[tuple, dict] = {}
-    field_votes: dict[tuple, set[str]] = {}
-
-    for field in _PLAN_FIELDS:
-        best_candidates = _best_credible_candidates_for_field(
-            field, candidates_by_field.get(field, []), row, refs
-        )
-        for cand in best_candidates:
-            for entry in cand.get("plan_entries", []):
-                key = _entry_key(entry)
-                entries_by_key.setdefault(key, entry)
-                field_votes.setdefault(key, set()).add(field)
-
-    return entries_by_key, field_votes
-
-
-def _entry_tie_value(entry: dict, field: str) -> object:
-    if field == "of":
-        return normalize_of(entry.get("_of") or entry.get("of"))
-    if field in ("comp", "larg", "lbase", "ltopo", "esp", "dbase", "dtopo"):
-        return _num(entry.get(field))
-    return str(entry.get(field) or "").strip().upper()
-
-
-def _entry_vote_tie_value(entry: dict, field: str) -> object:
-    if field == "of":
-        return normalize_of(entry.get("_of") or entry.get("of"))
-    if field == "ov":
-        return str(entry.get("ov") or "").strip().upper()
-    if field == "cliente":
-        return _cliente_compact(entry.get("cliente"))
-    if field == "modelo":
-        first = _model_first_token(entry.get("designacao"))
-        return _model_compact(first or entry.get("designacao"))
-    plan_attr = {
-        "comp_mm": "comp",
-        "larg_mm": "larg",
-        "lbase": "lbase",
-        "ltopo": "ltopo",
-        "esp": "esp",
-        "dbase": "dbase",
-        "dtopo": "dtopo",
-    }.get(field)
-    if plan_attr:
-        return _num(entry.get(plan_attr))
-    return _entry_tie_value(entry, field)
-
-
-def _entries_equivalent_for_tie(
-    left: dict,
-    right: dict,
-    vote_fields: set[str] | frozenset[str] | None = None,
-) -> bool:
-    fields: tuple[str, ...] | set[str] | frozenset[str]
-    fields = vote_fields or (
-        "of", "ov", "cliente", "modelo",
-        "comp_mm", "larg_mm", "lbase", "ltopo", "esp", "dbase", "dtopo",
-    )
-    for field in fields:
-        lv = _entry_vote_tie_value(left, field)
-        rv = _entry_vote_tie_value(right, field)
-        if isinstance(lv, float) or isinstance(rv, float):
-            if lv is None or rv is None:
-                if lv != rv:
-                    return False
-                continue
-            if abs(float(lv) - float(rv)) > 1e-9:
-                return False
-        elif lv != rv:
-            return False
-    return True
-
-
 def _best_scored_entry(
     entries_by_key: dict[tuple, dict],
     row: dict,
     refs: dict,
     current_phase: str | None,
-    *,
-    field_votes: dict[tuple, set[str]] | None = None,
-    min_votes: int = _MIN_WINNER_FIELD_VOTES,
-    min_exact_score: int = 1,
 ) -> dict | None:
-    """Pick the winner by credible field votes, not by a single weak score."""
+    """Pick the global best plan entry.
+
+    R213: no field can veto the winner. Each non-empty field contributes a
+    continuous score between 0 and 1, and the largest total wins. Exact/tolerant
+    matches are only a tie-breaker after the global score.
+    """
     from app.pipeline.of_consumption import remaining as _remaining
 
-    field_votes = field_votes or {}
-    # Tuple (-votes, -exact_score, phase_full, remaining_sortable, order, entry):
-    # 1) mais campos independentes, 2) maior score exato, 3+) desempate legado.
-    eligible: list[tuple[int, int, int, float, int, dict]] = []
+    eligible: list[tuple[float, int, int, float, int, dict]] = []
     for order, (k, e) in enumerate(entries_by_key.items()):
         if "_of" not in e:
             e = dict(e)
             e["_of"] = k[0]
-        votes = len(field_votes.get(k, set()))
-        if votes < min_votes:
-            continue
-        exact_score = score_entry(e, row, refs)
-        if exact_score < min_exact_score:
-            continue
+        global_score, exact_score = _entry_global_score(e, row, refs)
         phase_full = 1 if (current_phase and _phase_is_full(e, current_phase)) else 0
         # R138 — remaining consciente do setor (mesma medida do wizard).
         rem = _remaining(e, phase=current_phase)
         rem_sort = 9e9 if rem == float("inf") else rem
-        eligible.append((-votes, -exact_score, phase_full, rem_sort, order, e))
+        eligible.append((-global_score, -exact_score, phase_full, rem_sort, order, e))
 
     if not eligible:
         return None
     eligible.sort()
-    best_votes = -eligible[0][0]
-    best_exact_score = -eligible[0][1]
-    tied = [
-        item for item in eligible
-        if -item[0] == best_votes and -item[1] == best_exact_score
-    ]
-    if len(tied) > 1:
-        first_entry = tied[0][5]
-        first_votes = field_votes.get(_entry_key(first_entry), set())
-        for item in tied[1:]:
-            item_votes = field_votes.get(_entry_key(item[5]), set())
-            if item_votes != first_votes:
-                return None
-            if not _entries_equivalent_for_tie(first_entry, item[5], first_votes):
-                return None
-
-    _best_neg_votes, _best_neg_exact, _best_phase_full, best_rem_sort, _best_order, best_entry = eligible[0]
+    best_neg_score, best_neg_exact, _best_phase_full, best_rem_sort, _best_order, best_entry = eligible[0]
     winner = dict(best_entry)
-    winner["_score"] = int(best_votes)
-    winner["_exact_score"] = int(best_exact_score)
-    winner["_vote_fields"] = sorted(field_votes.get(_entry_key(winner), set()))
+    winner["_score"] = round(float(-best_neg_score), 3)
+    winner["_exact_score"] = int(-best_neg_exact)
     if best_rem_sort < 9e9:
         winner["_remaining"] = best_rem_sort
     return winner
@@ -1164,22 +1107,16 @@ def _find_winner_entry(
     refs: dict,
     current_phase: str | None = None,
 ) -> dict | None:
-    """Escolhe a entry do plan por votação de campos credíveis.
-
-    Cada campo lido dá no máximo um voto à(s) linha(s) do melhor candidato
-    credível desse campo. Uma linha com apenas um campo a favor não pode
-    puxar os restantes campos da folha.
-    """
-    entries_by_key, field_votes = _candidate_vote_maps(candidates_by_field, row, refs)
+    """Escolhe a entry do plan por melhor score global simples."""
+    entries_by_key: dict[tuple, dict] = {}
+    for field in _PLAN_FIELDS:
+        for cand in candidates_by_field.get(field, []):
+            for entry in cand.get("plan_entries", []):
+                key = _entry_key(entry)
+                entries_by_key.setdefault(key, entry)
     if not entries_by_key:
         return None
-    return _best_scored_entry(
-        entries_by_key,
-        row,
-        refs,
-        current_phase,
-        field_votes=field_votes,
-    )
+    return _best_scored_entry(entries_by_key, row, refs, current_phase)
 
 
 def _all_eligible_phase_full(
@@ -1289,7 +1226,9 @@ def _finish_cell(
     ocr_value: str,
     proposed: str,
     source: str,
-    score: int | None,
+    score: float | int | None,
+    *,
+    fill_different: bool = False,
 ) -> dict:
     """Formata o valor proposto, decide o estado vs o OCR, devolve a célula.
 
@@ -1312,6 +1251,15 @@ def _finish_cell(
     elif not ocr_value:
         status = "snapped"  # autofill
     elif _is_very_different(field, ocr_value, proposed):
+        if fill_different:
+            return _make_cell(
+                proposed_fmt,
+                "very_different",
+                source=source,
+                proposed=proposed_fmt,
+                ref_source=source,
+                score=score,
+            )
         return _preserve_ocr_with_ref(field, ocr_value, proposed, source, score)
     else:
         status = "snapped"
@@ -1323,7 +1271,7 @@ def _preserve_ocr_with_ref(
     ocr_value: str,
     proposed: str,
     ref_source: str,
-    score: int | None,
+    score: float | int | None,
 ) -> dict:
     proposed_fmt = _format_value(field, proposed)
     ocr_fmt = _format_value(field, ocr_value)
@@ -1336,23 +1284,6 @@ def _preserve_ocr_with_ref(
         ref_source=ref_source,
         score=score,
     )
-
-
-def _winner_can_autosnap_field(
-    winner: dict | None,
-    field: str,
-    template_name: str | None,
-) -> bool:
-    if not winner:
-        return False
-    try:
-        score = int(winner.get("_score") or 0)
-        exact = int(winner.get("_exact_score") or 0)
-    except (TypeError, ValueError):
-        return False
-    if template_name == "acabamento":
-        return field in ("of", "modelo") and score >= 2 and exact >= 1
-    return score >= 3 and exact >= 2
 
 
 def _identifier_values_match(field: str, ocr_value: object, proposed: object) -> bool:
@@ -1397,7 +1328,14 @@ def _local_candidate_proposal(
     """Validação local de uma célula quando ainda não há winner global."""
     if not ocr_value:
         return None
-    best_candidates = _best_credible_candidates_for_field(field, candidates, row, refs)
+    _ = (field, row, refs)
+    if not candidates:
+        return None
+    best_sim = max(float(cand.get("sim") or 0.0) for cand in candidates)
+    best_candidates = [
+        cand for cand in candidates
+        if abs(float(cand.get("sim") or 0.0) - best_sim) <= 1e-9
+    ]
     if not best_candidates:
         return None
 
@@ -1544,12 +1482,13 @@ def _apply_winner_to_field(
             return _finish_cell(field, ocr_value, str(sap_esp), "sap", None)
 
     # --- Campos resolvidos pela entry vencedora do plan -----------------
+    if winner is None and not has_field_reference:
+        return _make_cell(ocr_value, "NA", "ocr_raw")
+
     if winner is None and not candidates:
         # R120 — operador escreveu algo num campo validável e o motor não
         # achou candidato nem winner: vermelho (very_different) em vez de
         # cinza. OCR vazio continua NA (sem dado para validar).
-        if not has_field_reference:
-            return _make_cell(ocr_value, "NA", "ocr_raw")
         if ocr_value:
             return _make_cell(
                 ocr_value, "very_different", "ocr_raw",
@@ -1619,7 +1558,10 @@ def _apply_winner_to_field(
                 ref_source="plan",
                 score=score,
             )
-        return _finish_cell(field, ocr_value, proposed, "plan", score)
+        return _finish_cell(
+            field, ocr_value, proposed, "plan", score,
+            fill_different=winner is not None,
+        )
 
     if field in ("of", "ov") and ocr_value:
         if _identifier_values_match(field, ocr_value, proposed):
@@ -1631,19 +1573,17 @@ def _apply_winner_to_field(
                 ref_source="plan",
                 score=score,
             )
-        if _winner_can_autosnap_field(winner, field, template_name):
-            return _finish_cell(field, ocr_value, proposed, "plan", score)
-        return _preserve_ocr_with_ref(
+        return _finish_cell(
             field, ocr_value, proposed, "plan", score,
+            fill_different=winner is not None,
         )
 
-    # Acabamento TPL086: sem winner forte preservamos a referência escrita;
-    # com winner forte corrigimos apenas para o código curto do Plan.
+    # Acabamento TPL086: com winner global também mostra/aplica a referência
+    # da melhor linha; se estiver distante, fica vermelho para revisão.
     if template_name == "acabamento" and field in ("of", "modelo") and ocr_value:
-        if _winner_can_autosnap_field(winner, field, template_name):
-            return _finish_cell(field, ocr_value, proposed, "plan", score)
-        return _preserve_ocr_with_ref(
+        return _finish_cell(
             field, ocr_value, proposed, "plan", score,
+            fill_different=winner is not None,
         )
 
     proposed_fmt = _format_value(field, proposed)
@@ -1655,6 +1595,7 @@ def _apply_winner_to_field(
         field, ocr_value, proposed,
         source="plan",
         score=score,
+        fill_different=winner is not None,
     )
 
 
