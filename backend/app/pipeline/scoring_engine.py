@@ -6,10 +6,10 @@ Fluxo atual:
   O motor classifica a distância entre OCR e proposta; a camada web só
   aplica automaticamente propostas `snapped` (suaves/autofill).
 
-  Guardas principais:
+    Guardas principais:
     - Todos os campos lidos têm o mesmo peso na escolha da linha do plan.
     - `very_different` fica para revisão humana.
-    - Acabamento preserva OF/REFERÊNCIA-PEÇA não-vazias do operador.
+    - Winner global forte pode corrigir OCR suave em OF/OV/modelo.
 
   Estados de célula (com legendas para a UI):
     - confirmed:      "Confirmado"          — motor escolheu valor igual ao OCR
@@ -34,7 +34,7 @@ from app.dq.machines import machine_phase_from_setor, resolve_machine_from_setor
 
 _CLIENTE_STOPWORDS = frozenset({
     "GMBH", "SAS", "SARL", "SA", "S.A", "LDA", "LTD", "SL", "BV", "NV",
-    "LIMITED", "UNIPESSOAL", "STOCK",
+    "LIMITED", "UNIPESSOAL",
 })
 
 
@@ -406,8 +406,11 @@ _STATUS_LABELS = {
 # R209 — winner por votação de campos credíveis; score=1 já não puxa linha toda.
 # R210 — cliente por compacto normalizado também encontra linhas STOCK <cliente>.
 # R211 — winner não pode nascer só de votos fuzzy; exige ao menos 1 match exato.
+# R212 — winner forte aplica correções suaves de OCR; STOCK deixa de ser
+# stopword de cliente; empates do Plan com mesmo código curto podem usar
+# desempate de fase/remaining.
 # BUMP obrigatório: força regeneração dos cross-check JSON antigos.
-ENGINE_VERSION = "v14_R211"
+ENGINE_VERSION = "v14_R212"
 
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
@@ -1019,13 +1022,43 @@ def _entry_tie_value(entry: dict, field: str) -> object:
     return str(entry.get(field) or "").strip().upper()
 
 
-def _entries_equivalent_for_tie(left: dict, right: dict) -> bool:
-    for field in (
-        "of", "ov", "cliente", "designacao",
-        "comp", "larg", "lbase", "ltopo", "esp", "dbase", "dtopo",
-    ):
-        lv = _entry_tie_value(left, field)
-        rv = _entry_tie_value(right, field)
+def _entry_vote_tie_value(entry: dict, field: str) -> object:
+    if field == "of":
+        return normalize_of(entry.get("_of") or entry.get("of"))
+    if field == "ov":
+        return str(entry.get("ov") or "").strip().upper()
+    if field == "cliente":
+        return _cliente_compact(entry.get("cliente"))
+    if field == "modelo":
+        first = _model_first_token(entry.get("designacao"))
+        return _model_compact(first or entry.get("designacao"))
+    plan_attr = {
+        "comp_mm": "comp",
+        "larg_mm": "larg",
+        "lbase": "lbase",
+        "ltopo": "ltopo",
+        "esp": "esp",
+        "dbase": "dbase",
+        "dtopo": "dtopo",
+    }.get(field)
+    if plan_attr:
+        return _num(entry.get(plan_attr))
+    return _entry_tie_value(entry, field)
+
+
+def _entries_equivalent_for_tie(
+    left: dict,
+    right: dict,
+    vote_fields: set[str] | frozenset[str] | None = None,
+) -> bool:
+    fields: tuple[str, ...] | set[str] | frozenset[str]
+    fields = vote_fields or (
+        "of", "ov", "cliente", "modelo",
+        "comp_mm", "larg_mm", "lbase", "ltopo", "esp", "dbase", "dtopo",
+    )
+    for field in fields:
+        lv = _entry_vote_tie_value(left, field)
+        rv = _entry_vote_tie_value(right, field)
         if isinstance(lv, float) or isinstance(rv, float):
             if lv is None or rv is None:
                 if lv != rv:
@@ -1082,11 +1115,13 @@ def _best_scored_entry(
     ]
     if len(tied) > 1:
         first_entry = tied[0][5]
-        if any(
-            not _entries_equivalent_for_tie(first_entry, item[5])
-            for item in tied[1:]
-        ):
-            return None
+        first_votes = field_votes.get(_entry_key(first_entry), set())
+        for item in tied[1:]:
+            item_votes = field_votes.get(_entry_key(item[5]), set())
+            if item_votes != first_votes:
+                return None
+            if not _entries_equivalent_for_tie(first_entry, item[5], first_votes):
+                return None
 
     _best_neg_votes, _best_neg_exact, _best_phase_full, best_rem_sort, _best_order, best_entry = eligible[0]
     winner = dict(best_entry)
@@ -1303,6 +1338,23 @@ def _preserve_ocr_with_ref(
     )
 
 
+def _winner_can_autosnap_field(
+    winner: dict | None,
+    field: str,
+    template_name: str | None,
+) -> bool:
+    if not winner:
+        return False
+    try:
+        score = int(winner.get("_score") or 0)
+        exact = int(winner.get("_exact_score") or 0)
+    except (TypeError, ValueError):
+        return False
+    if template_name == "acabamento":
+        return field in ("of", "modelo") and score >= 2 and exact >= 1
+    return score >= 3 and exact >= 2
+
+
 def _identifier_values_match(field: str, ocr_value: object, proposed: object) -> bool:
     ocr = str(ocr_value or "").strip().upper()
     ref = str(proposed or "").strip().upper()
@@ -1512,14 +1564,11 @@ def _apply_winner_to_field(
         elif field == "ov":
             proposed = str(winner.get("ov") or "").strip()
         elif field == "modelo":
-            # R128 — reverte R123/R124/R126. O canónico do modelo é a
-            # designação COMPLETA do plan (ex: "CGC2E10D - Coluna Tronco-
-            # Cónica 10m"), não o código curto. _finish_cell trata o status
-            # (confirmed se OCR == des, snapped se diferente mas próximo,
-            # very_different se muito diferente).
             des = " ".join(str(winner.get("designacao") or "").split())
             if not des:
                 proposed = ocr_value or None
+            elif template_name == "acabamento":
+                proposed = _model_first_token(des) or des
             else:
                 proposed = des
         elif field == "cliente":
@@ -1582,15 +1631,17 @@ def _apply_winner_to_field(
                 ref_source="plan",
                 score=score,
             )
+        if _winner_can_autosnap_field(winner, field, template_name):
+            return _finish_cell(field, ocr_value, proposed, "plan", score)
         return _preserve_ocr_with_ref(
             field, ocr_value, proposed, "plan", score,
         )
 
-    # R142 — Acabamento TPL086: `modelo` é a REFERÊNCIA / PEÇA escrita no
-    # papel, não uma designação a normalizar para o texto completo do plan.
-    # Validamos contra a entry vencedora, mas preservamos valores não-vazios
-    # para revisão humana. Campos vazios continuam a poder ser preenchidos.
+    # Acabamento TPL086: sem winner forte preservamos a referência escrita;
+    # com winner forte corrigimos apenas para o código curto do Plan.
     if template_name == "acabamento" and field in ("of", "modelo") and ocr_value:
+        if _winner_can_autosnap_field(winner, field, template_name):
+            return _finish_cell(field, ocr_value, proposed, "plan", score)
         return _preserve_ocr_with_ref(
             field, ocr_value, proposed, "plan", score,
         )

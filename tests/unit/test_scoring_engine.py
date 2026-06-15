@@ -1897,9 +1897,8 @@ class TestGlobalWinnerScoring:
 
         assert row["winner_of"] == "262108"
         assert row["identity_conflict"] is False
-        assert fields["of"]["value"] == "262107"
-        assert fields["of"]["status"] == "very_different"
-        assert fields["of"]["proposed"] == "262108"
+        assert fields["of"]["value"] == "262108"
+        assert fields["of"]["status"] == "snapped"
         assert fields["ov"]["status"] == "confirmed"
         assert fields["cliente"]["status"] == "confirmed"
         assert fields["modelo"]["status"] == "confirmed"
@@ -1974,7 +1973,7 @@ class TestGlobalWinnerScoring:
                 }],
                 "257093": [{
                     "ov": "2511344",
-                    "cliente": "STOCK MTG BELUX",
+                    "cliente": "MTG BELUX",
                     "designacao": "CBCBE06DI - 2 SC",
                 }],
                 "257098": [{
@@ -1985,7 +1984,6 @@ class TestGlobalWinnerScoring:
             },
             "clientes_plan": frozenset({
                 "ASVITAE TECNOLOGIAS",
-                "STOCK MTG BELUX",
                 "MTG BELUX",
             }),
             "lotes_sap_full": {},
@@ -2008,9 +2006,91 @@ class TestGlobalWinnerScoring:
         assert row["winner_score"] == 3
         assert fields["cliente"]["status"] == "confirmed"
         assert fields["ov"]["status"] == "confirmed"
-        assert fields["of"]["status"] == "very_different"
-        assert fields["of"]["proposed"] == "257093"
+        assert fields["of"]["value"] == "257093"
+        assert fields["of"]["status"] == "snapped"
         assert fields["modelo"]["status"] == "snapped"
+
+    def test_soft_of_ov_ocr_errors_snap_with_strong_winner(self):
+        refs = {
+            "available": True,
+            "of_to_entries": {
+                "257504": [{
+                    "ov": "250010",
+                    "cliente": "MTG",
+                    "designacao": "CAO8E10B - ESP 3",
+                }],
+            },
+            "clientes_plan": frozenset({"MTG"}),
+            "lotes_sap_full": {},
+        }
+        sheet_data = {
+            "template_name": "expedicao", "header": {}, "footer": {},
+            "rows": [{
+                "cliente": "MTG",
+                "ov": "250410",
+                "of": "257509",
+                "modelo": "CA08E10B",
+                "qtd": "16",
+                "cesta_n": "4554",
+            }],
+        }
+
+        scoring, *_ = shadow_score(sheet_data, None, refs)
+        row = scoring["rows"][0]
+        fields = row["fields"]
+
+        assert row["winner_of"] == "257504"
+        assert row["winner_score"] == 4
+        assert fields["ov"]["value"] == "250010"
+        assert fields["ov"]["status"] == "snapped"
+        assert fields["of"]["value"] == "257504"
+        assert fields["of"]["status"] == "snapped"
+        assert fields["modelo"]["status"] == "snapped"
+        assert fields["qtd"]["status"] == "NA"
+        assert fields["cesta_n"]["status"] == "NA"
+
+    def test_duplicate_plan_entries_with_same_voted_fields_use_tiebreak(self):
+        refs = {
+            "available": True,
+            "of_to_entries": {
+                "262532": [
+                    {
+                        "ov": "2603512",
+                        "cliente": "LE HAVRE",
+                        "designacao": "8661SF00 - 8661S500 + BASE INOX - TOPO",
+                        "quanttrp": 1,
+                        "fases": {"exp": 0},
+                    },
+                    {
+                        "ov": "2603512",
+                        "cliente": "LE HAVRE",
+                        "designacao": "8661SF00 - 8661SF00 + BASE INOX + FL PL - BASE",
+                        "quanttrp": 1,
+                        "fases": {"exp": 0},
+                    },
+                ],
+            },
+            "clientes_plan": frozenset({"LE HAVRE"}),
+            "lotes_sap_full": {},
+        }
+        sheet_data = {
+            "template_name": "expedicao",
+            "header": {"setor_maquina": "EXPEDIÇÃO"},
+            "footer": {},
+            "rows": [{
+                "cliente": "LE HAVRE",
+                "ov": "2603512",
+                "of": "262532",
+                "modelo": "8661SF00",
+            }],
+        }
+
+        scoring, *_ = shadow_score(sheet_data, None, refs)
+        row = scoring["rows"][0]
+
+        assert row["winner_of"] == "262532"
+        assert row["winner_score"] == 4
+        assert row["fields"]["modelo"]["status"] == "snapped"
 
     def test_two_fuzzy_identifiers_without_exact_support_do_not_select_winner(self):
         refs = {
@@ -2072,9 +2152,8 @@ class TestGlobalWinnerScoring:
         assert row["winner_score"] == 4
         assert row["fields"]["cliente"]["value"] == "MTG GMBH"
         assert row["fields"]["cliente"]["status"] == "snapped"
-        assert row["fields"]["of"]["value"] == "222414"
-        assert row["fields"]["of"]["status"] == "very_different"
-        assert row["fields"]["of"]["proposed"] == "262414"
+        assert row["fields"]["of"]["value"] == "262414"
+        assert row["fields"]["of"]["status"] == "snapped"
 
     def test_cliente_mismatch_preserves_ocr_and_exposes_winner_ref(self):
         """Cliente diferente sem apoio global preserva OCR sem puxar winner."""
@@ -2094,8 +2173,8 @@ class TestGlobalWinnerScoring:
         ("ocr_cliente", "plan_cliente", "matches"),
         [
             ("MTGBELUX", "MTG BELUX", True),
-            ("MTGBELUX", "STOCK MTG BELUX", True),
-            ("MTG BELUX", "STOCK MTG BELUX", True),
+            ("MTGBELUX", "STOCK MTG BELUX", False),
+            ("MTG BELUX", "STOCK MTG BELUX", False),
             ("TECPOLES", "TECPOLES GMBH", True),
             ("LUMIERE", "WE EF LUMIERE", False),
             ("SOVEC", "SOVEC ENTREPRISES", False),
@@ -2121,7 +2200,7 @@ class TestGlobalWinnerScoring:
         assert _cliente_values_match("MTGBELUX", "MTG BELUX", _REFS)
         assert not _cliente_values_match("SOVEC", "SOVEC ENTREPRISES", _REFS)
 
-    def test_cliente_does_not_use_token_subset_or_aliases_but_ignores_stock_prefix(self):
+    def test_cliente_does_not_use_token_subset_aliases_or_stock_prefix(self):
         refs = {
             **_REFS,
             "cliente_aliases": {
@@ -2130,8 +2209,8 @@ class TestGlobalWinnerScoring:
             },
         }
 
-        assert _cliente_values_match("MTG", "STOCK MTG", refs)
-        assert _cliente_values_match("MTG BELUX", "STOCK MTG BELUX", refs)
+        assert not _cliente_values_match("MTG", "STOCK MTG", refs)
+        assert not _cliente_values_match("MTG BELUX", "STOCK MTG BELUX", refs)
         assert not _cliente_values_match("HTG BELUX", "STOCK MTG BELUX", refs)
         assert _cliente_values_match("STOCK MTG", "STOCK MTG GMBH", refs)
         assert not _cliente_values_match("SK-T-BELUX", "STOCK MTG BELUX", refs)
@@ -2865,8 +2944,8 @@ class TestGlobalWinnerScoring:
 class TestAcabamentoPreservesOperatorReference:
     """Acabamento TPL086 usa `modelo` como REFERÊNCIA / PEÇA escrita no papel.
 
-    O cross pode validar contra o plan, mas não deve substituir uma referência
-    não-vazia pela designação completa do plan.
+    Sem winner forte preserva a referência não-vazia. Com OF+modelo a
+    apontarem para a mesma linha, corrige para o código curto do plan.
     """
 
     def test_acabamento_keeps_non_empty_of_and_modelo(self):
@@ -2908,6 +2987,36 @@ class TestAcabamentoPreservesOperatorReference:
             "ref_source": "plan",
             "reason": "Valor não encontrado no plan",
         } in result["to_analisar"]
+
+    def test_acabamento_soft_of_and_model_errors_snap_with_winner(self):
+        refs = {
+            "available": True,
+            "of_to_entries": {
+                "257504": [{
+                    "ov": "250010",
+                    "cliente": "MTG",
+                    "designacao": "CAO8E10B - ESP 3",
+                }],
+            },
+            "clientes_plan": frozenset({"MTG"}),
+            "lotes_sap_full": {},
+        }
+        sheet_data = {
+            "template_name": "acabamento", "header": {}, "footer": {},
+            "rows": [{"of": "957504", "modelo": "CA08E10B", "qtd": "4"}],
+        }
+
+        scoring, *_ = shadow_score(sheet_data, None, refs)
+        row = scoring["rows"][0]
+        fields = row["fields"]
+
+        assert row["winner_of"] == "257504"
+        assert row["winner_score"] == 2
+        assert fields["of"]["value"] == "257504"
+        assert fields["of"]["status"] == "snapped"
+        assert fields["modelo"]["value"] == "CAO8E10B"
+        assert fields["modelo"]["status"] == "snapped"
+        assert fields["qtd"]["status"] == "NA"
 
     def test_bobine_preserves_written_identity(self):
         """Sanidade: Bobine também preserva OF escrita quando a OV ancora."""

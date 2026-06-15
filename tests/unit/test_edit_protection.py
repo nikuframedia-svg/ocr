@@ -80,6 +80,53 @@ class TestHumanEditedPaths:
         assert main._human_edited_paths(sid2) == frozenset({"rows[1].cliente"})
 
 
+class TestRebuildFromRaw:
+    def test_rebuild_drops_system_snaps_and_keeps_human_fields(self, tmp_db):
+        sid = db.insert_sheet("test.jpg")
+        raw = {
+            "template_name": "expedicao",
+            "header": {"operador": "OCR"},
+            "footer": {},
+            "rows": [{
+                "cliente": "MTG",
+                "ov": "250410",
+                "of": "257509",
+                "modelo": "CA08E10B",
+            }],
+        }
+        db.update_extraction(sid, raw, {}, raw)
+        db.apply_edit(sid, "rows[0].of", "WRONG_SYSTEM", source="system")
+        db.apply_edit(sid, "rows[0].modelo", "MODELO_HUMANO", source="human")
+
+        changed = main._rebuild_sheet_data_from_raw(sid, db.get_sheet(sid))
+
+        assert changed is True
+        sheet = db.get_sheet(sid)
+        row = sheet["sheet_data"]["rows"][0]
+        assert row["of"] == "257509"
+        assert row["modelo"] == "MODELO_HUMANO"
+        assert row["ov"] == "250410"
+
+    def test_rebuild_skips_when_human_changed_row_structure(self, tmp_db):
+        sid = db.insert_sheet("test.jpg")
+        raw = {
+            "template_name": "expedicao",
+            "header": {},
+            "footer": {},
+            "rows": [{"of": "257509"}],
+        }
+        db.update_extraction(sid, raw, {}, raw)
+        db.add_row(sid)
+        db.apply_edit(sid, "rows[0].of", "WRONG_SYSTEM", source="system")
+
+        changed = main._rebuild_sheet_data_from_raw(sid, db.get_sheet(sid))
+
+        assert changed is False
+        sheet = db.get_sheet(sid)
+        assert len(sheet["sheet_data"]["rows"]) == 2
+        assert sheet["sheet_data"]["rows"][0]["of"] == "WRONG_SYSTEM"
+
+
 class TestMaybeApplySnapProtected:
     """A guarda `protected` em `_maybe_apply_snap` devolve False sem tocar
     na DB (a célula protegida nunca é auto-substituída)."""

@@ -371,6 +371,72 @@ def _human_edited_paths(sheet_id: int) -> frozenset[str]:
     return frozenset(fp for fp, src in last.items() if src == "human")
 
 
+def _last_human_field_edits(sheet_id: int) -> dict[str, str]:
+    """Último valor humano por célula, excluindo edits estruturais de linha."""
+    try:
+        with db.conn() as c:
+            rows = c.execute(
+                "SELECT field_path, new_value, source FROM edits "
+                "WHERE sheet_id = ? ORDER BY id ASC",
+                (sheet_id,),
+            ).fetchall()
+    except Exception:  # noqa: BLE001
+        return {}
+    last: dict[str, tuple[str, str]] = {}
+    for r in rows:
+        path = str(r["field_path"] or "")
+        if not path or "." not in path:
+            continue
+        last[path] = (str(r["source"] or ""), str(r["new_value"] or ""))
+    return {
+        path: value
+        for path, (source, value) in last.items()
+        if source == "human"
+    }
+
+
+def _has_human_row_structure_edits(sheet_id: int) -> bool:
+    """True quando houve add/remove row humano; aí não reconstruímos rows."""
+    try:
+        with db.conn() as c:
+            rows = c.execute(
+                "SELECT field_path, source FROM edits WHERE sheet_id = ?",
+                (sheet_id,),
+            ).fetchall()
+    except Exception:  # noqa: BLE001
+        return False
+    for r in rows:
+        path = str(r["field_path"] or "")
+        if str(r["source"] or "") == "human" and path.startswith("rows[") and "." not in path:
+            return True
+    return False
+
+
+def _rebuild_sheet_data_from_raw(sheet_id: int, sheet: dict) -> bool:
+    """Limpa snaps antigos: raw OCR + últimas edições humanas por campo."""
+    if sheet.get("status") == "validated":
+        return False
+    raw = sheet.get("raw_extraction") or {}
+    current = sheet.get("sheet_data") or {}
+    if not raw or _has_human_row_structure_edits(sheet_id):
+        return False
+    rebuilt = json.loads(json.dumps(raw, ensure_ascii=False))
+    for path, value in _last_human_field_edits(sheet_id).items():
+        try:
+            db._set_by_path(rebuilt, path, value)
+        except Exception:  # noqa: BLE001
+            continue
+    if rebuilt == current:
+        return False
+    with db.conn() as c:
+        c.execute(
+            "UPDATE sheets SET sheet_data = ? WHERE id = ?",
+            (json.dumps(rebuilt, ensure_ascii=False), sheet_id),
+        )
+        db._sync_production_rows(c, sheet_id, rebuilt)
+    return True
+
+
 def _maybe_apply_snap(
     sheet_id: int,
     field_path: str,
@@ -567,7 +633,11 @@ def _apply_codmaq_fill(
         return 0
 
 
-def _run_and_store_cross_check(sheet_id: int) -> dict | None:
+def _run_and_store_cross_check(
+    sheet_id: int,
+    *,
+    rebuild_from_raw: bool = False,
+) -> dict | None:
     """Round 33 — invisible verification inline in /upload pipeline.
 
     R109/R123 — para QUALQUER célula que o motor marque como ``snapped``
@@ -590,6 +660,15 @@ def _run_and_store_cross_check(sheet_id: int) -> dict | None:
     refs = watcher.get_refs()
     if not refs.get("available"):
         return None
+
+    # R212 — quando o JSON antigo fica stale por bump de ENGINE_VERSION,
+    # snaps de versões anteriores podem já ter poluído `sheet_data`.
+    # Recomeçamos do OCR cru e reaplicamos só edições humanas por célula.
+    if rebuild_from_raw and sheet.get("status") != "validated":
+        if _rebuild_sheet_data_from_raw(sheet_id, sheet):
+            refreshed = db.get_sheet(sheet_id)
+            if refreshed is not None:
+                sheet = refreshed
 
     result = cross_check_sheet(sheet["sheet_data"], sheet.get("dq_audit"), refs)
     from app.cross_check.ref_watcher import refs_snapshot
@@ -858,13 +937,24 @@ def _build_cc_maps(sheet_id: int) -> tuple[
     from app.cross_check.storage import load_sheet_cross_check
     from app.pipeline.scoring_engine import ENGINE_VERSION
     cc = load_sheet_cross_check(sheet_id)
+    stale_cc = None
+    if not cc:
+        stale_cc = load_sheet_cross_check(sheet_id, include_stale=True)
     # R123 (D1) — fallback on-demand. A folha nunca teve cross-check
     # (processada antes do R118) ou o JSON é de um motor anterior ao R123:
     # regenera-o agora e relê, para nenhuma folha abrir toda cinza nem com
     # cores de um motor antigo.
     if not cc or cc.get("engine_version") != ENGINE_VERSION:
         try:
-            _run_and_store_cross_check(sheet_id)
+            rebuild_from_raw = bool(
+                stale_cc and stale_cc.get("engine_version") != ENGINE_VERSION
+            )
+            if rebuild_from_raw:
+                _run_and_store_cross_check(
+                    sheet_id, rebuild_from_raw=rebuild_from_raw
+                )
+            else:
+                _run_and_store_cross_check(sheet_id)
             cc = load_sheet_cross_check(sheet_id)
         except Exception:  # noqa: BLE001
             pass
