@@ -558,6 +558,44 @@ def test_refs_page_shows_all_ref_cards(tmp_path, monkeypatch, log_path):
     assert 'value="colaboradores"' in resp.text
 
 
+def test_refs_page_shows_last_external_import_result(tmp_path, monkeypatch, log_path):
+    doc_dir = tmp_path / "docs"
+    doc_dir.mkdir()
+    _write_plan(doc_dir / "plan_colunas_cpis.xlsx", [
+        ["A", "2603977", "263348", "CAC4E10B", 1, 0, 0, 0, 0, 0, 0, 0, 4, 659, 242, 11050],
+    ])
+    watcher = ref_watcher.RefWatcher(doc_dir=doc_dir, repo_root=tmp_path)
+    monkeypatch.setattr(main, "get_watcher", lambda: watcher)
+    monkeypatch.setattr(main.ref_importer, "status", lambda: {
+        "enabled": True,
+        "thread_alive": True,
+        "source_dir": r"F:\ocr\files",
+        "interval_seconds": 900,
+        "last_run_at": "2026-06-16T01:00:00+00:00",
+        "last_error": None,
+        "last_result": {
+            "ok": True,
+            "imported": [{
+                "kind": "plan",
+                "filename": "plan_colunas_cpis.xlsx",
+                "target": str(doc_dir / "plan_colunas_cpis.xlsx"),
+                "sha256": "abcdef123456",
+            }],
+            "skipped": [],
+            "candidates": [{"kind": "plan"}],
+            "refs_loaded_at": "2026-06-16T01:01:00+00:00",
+        },
+    })
+
+    resp = TestClient(main.app).get("/refs")
+
+    assert resp.status_code == 200
+    assert r"F:\ocr\files" in resp.text
+    assert "plan: plan_colunas_cpis.xlsx" in resp.text
+    assert "hash abcdef12" in resp.text
+    assert str(doc_dir / "plan_colunas_cpis.xlsx") in resp.text
+
+
 def test_cross_check_storage_persists_refs_snapshot(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "_base_dir", lambda: tmp_path)
     snap = {

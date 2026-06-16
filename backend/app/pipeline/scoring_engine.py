@@ -10,6 +10,7 @@ Fluxo atual:
     - Todos os campos lidos têm o mesmo peso na escolha da linha do plan.
     - `very_different` fica para revisão humana.
     - Winner global forte pode corrigir OCR suave em OF/OV/modelo.
+    - Um único campo isolado nunca preenche/corrige a linha toda.
 
   Estados de célula (com legendas para a UI):
     - confirmed:      "Confirmado"          — motor escolheu valor igual ao OCR
@@ -31,6 +32,8 @@ from app.dq.machines import machine_phase_from_setor, resolve_machine_from_setor
 
 
 # Inline deps (R109 — motor self-contained) ----------------------------------
+
+_MIN_GLOBAL_WINNER_SCORE = 2.0
 
 _CLIENTE_STOPWORDS = frozenset({
     "GMBH", "SAS", "SARL", "SA", "S.A", "LDA", "LTD", "SL", "BV", "NV",
@@ -695,14 +698,25 @@ def _entry_field_similarity(field: str, entry: dict, row: dict, refs: dict) -> f
     return None
 
 
-def _entry_global_score(entry: dict, row: dict, refs: dict) -> tuple[float, int]:
+def _entry_global_score(
+    entry: dict,
+    row: dict,
+    refs: dict,
+    score_fields: set[str] | frozenset[str] | None = None,
+) -> tuple[float, int]:
     total = 0.0
-    for field in _PLAN_FIELDS:
+    exact = 0
+    fields = score_fields if score_fields is not None else _PLAN_FIELDS
+    for field in fields:
+        if field not in _PLAN_FIELDS:
+            continue
         sim = _entry_field_similarity(field, entry, row, refs)
         if sim is None:
             continue
         total += max(0.0, min(1.0, sim))
-    return total, score_entry(entry, row, refs)
+        if sim >= 1.0:
+            exact += 1
+    return total, exact
 
 
 # Normalização cosmética (única guarda mantida) -----------------------------
@@ -1020,6 +1034,7 @@ def _best_scored_entry(
     row: dict,
     refs: dict,
     current_phase: str | None,
+    score_fields: set[str] | frozenset[str] | None = None,
 ) -> dict | None:
     """Pick the global best plan entry.
 
@@ -1034,7 +1049,7 @@ def _best_scored_entry(
         if "_of" not in e:
             e = dict(e)
             e["_of"] = k[0]
-        global_score, exact_score = _entry_global_score(e, row, refs)
+        global_score, exact_score = _entry_global_score(e, row, refs, score_fields)
         phase_full = 1 if (current_phase and _phase_is_full(e, current_phase)) else 0
         # R138 — remaining consciente do setor (mesma medida do wizard).
         rem = _remaining(e, phase=current_phase)
@@ -1045,7 +1060,7 @@ def _best_scored_entry(
         return None
     eligible.sort()
     best_neg_score, best_neg_exact, _best_phase_full, best_rem_sort, _best_order, best_entry = eligible[0]
-    if -best_neg_score <= 0:
+    if -best_neg_score < _MIN_GLOBAL_WINNER_SCORE:
         return None
     winner = dict(best_entry)
     winner["_score"] = round(float(-best_neg_score), 3)
@@ -1086,6 +1101,7 @@ def _find_winner_entry(
     refs: dict,
     idx: dict | None = None,
     current_phase: str | None = None,
+    score_fields: set[str] | frozenset[str] | None = None,
 ) -> dict | None:
     """Escolhe a entry do plan por melhor score global simples."""
     entries_by_key = _all_plan_entries(idx or {})
@@ -1097,7 +1113,7 @@ def _find_winner_entry(
                     entries_by_key.setdefault(key, entry)
     if not entries_by_key:
         return None
-    return _best_scored_entry(entries_by_key, row, refs, current_phase)
+    return _best_scored_entry(entries_by_key, row, refs, current_phase, score_fields)
 
 
 def _all_eligible_phase_full(
@@ -1232,15 +1248,6 @@ def _finish_cell(
     elif not ocr_value:
         status = "snapped"  # autofill
     elif _is_very_different(field, ocr_value, proposed):
-        if fill_different:
-            return _make_cell(
-                proposed_fmt,
-                "very_different",
-                source=source,
-                proposed=proposed_fmt,
-                ref_source=source,
-                score=score,
-            )
         return _preserve_ocr_with_ref(field, ocr_value, proposed, source, score)
     else:
         status = "snapped"
@@ -1309,7 +1316,7 @@ def _local_candidate_proposal(
     """Validação local de uma célula quando ainda não há winner global."""
     if not ocr_value:
         return None
-    _ = (field, row, refs)
+    _ = row
     if not candidates:
         return None
     best_sim = max(float(cand.get("sim") or 0.0) for cand in candidates)
@@ -1335,7 +1342,14 @@ def _local_candidate_proposal(
     first_fmt = _format_value(field, proposals[0])
     if any(_format_value(field, value) != first_fmt for value in proposals[1:]):
         return None
-    return proposals[0]
+    proposed = proposals[0]
+    if field in ("of", "ov"):
+        return proposed if _identifier_values_match(field, ocr_value, proposed) else None
+    if field == "cliente":
+        return proposed if _cliente_values_match(ocr_value, proposed, refs) else None
+    if field == "modelo":
+        return proposed if _model_matches_designacao(ocr_value, proposed) else None
+    return proposed
 
 
 def _has_plan_reference_pool(refs: dict) -> bool:
@@ -1615,7 +1629,15 @@ def _score_row(
         if field in cc_fields:
             candidates_by_field[field] = _candidates_for_field(field, row, refs, idx)
 
-    winner = _find_winner_entry(candidates_by_field, row, refs, idx, current_phase)
+    score_fields = cc_fields & set(_PLAN_FIELDS)
+    winner = _find_winner_entry(
+        candidates_by_field,
+        row,
+        refs,
+        idx,
+        current_phase,
+        score_fields,
+    )
 
     obra_concluida = _all_eligible_phase_full(
         candidates_by_field, row, refs, current_phase, winner

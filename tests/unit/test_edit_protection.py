@@ -306,6 +306,17 @@ class _FakeWatcher:
         return _REFS
 
 
+class _EmptyRefsWatcher:
+    def get_refs(self):
+        return {
+            "available": True,
+            "loaded_at": "test",
+            "of_to_entries": {},
+            "clientes_plan": frozenset(),
+            "lotes_sap_full": {},
+        }
+
+
 class TestEditPersistsEndToEnd:
     """Prova end-to-end do bug 'escrevo mas não guarda': um edit humano
     sobrevive ao `_run_and_store_cross_check` (que antes revertia)."""
@@ -336,6 +347,35 @@ class TestEditPersistsEndToEnd:
         # para a designação do plan "OMEGA 1200 H").
         sheet = db.get_sheet(sid)
         assert sheet["sheet_data"]["rows"][0]["modelo"] == "MODELO_DO_OPERADOR"
+
+    def test_rebuild_from_raw_drops_old_system_snap_but_keeps_human_edit(
+        self, tmp_db, monkeypatch
+    ):
+        monkeypatch.setattr(main, "get_watcher", lambda: _EmptyRefsWatcher())
+        monkeypatch.setattr(main, "store_cross_check", lambda *a, **k: {})
+        monkeypatch.setattr(main, "_spawn_shadow_scoring", lambda *a, **k: None)
+
+        sid = db.insert_sheet("t.jpg")
+        raw = {
+            "template_name": "bobine_formato",
+            "header": {"operador": "", "data": "10-05-2026"},
+            "footer": {},
+            "rows": [{"cliente": "RAW", "modelo": "RAW"}],
+        }
+        polluted = {
+            "template_name": "bobine_formato",
+            "header": {"operador": "", "data": "10-05-2026"},
+            "footer": {},
+            "rows": [{"cliente": "SNAP_ANTIGO", "modelo": "SNAP_ANTIGO"}],
+        }
+        db.update_extraction(sid, raw, {}, polluted)
+        db.apply_edit(sid, "rows[0].modelo", "MODELO_HUMANO")
+
+        main._run_and_store_cross_check(sid, rebuild_from_raw=True)
+
+        sheet = db.get_sheet(sid)
+        assert sheet["sheet_data"]["rows"][0]["cliente"] == "RAW"
+        assert sheet["sheet_data"]["rows"][0]["modelo"] == "MODELO_HUMANO"
 
     def test_auto_overwrite_still_works_without_human_edit(self, tmp_db, monkeypatch):
         """Não regredir R130-R132: sem edit humano, o auto-overwrite continua

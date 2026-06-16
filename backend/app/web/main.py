@@ -990,14 +990,10 @@ def _build_cc_maps(sheet_id: int) -> tuple[
     if not cc or cc.get("engine_version") != ENGINE_VERSION:
         try:
             rebuild_from_raw = bool(
-                stale_cc and stale_cc.get("engine_version") != ENGINE_VERSION
+                (cc and cc.get("engine_version") != ENGINE_VERSION)
+                or (stale_cc and stale_cc.get("engine_version") != ENGINE_VERSION)
             )
-            if rebuild_from_raw:
-                _run_and_store_cross_check(
-                    sheet_id, rebuild_from_raw=rebuild_from_raw
-                )
-            else:
-                _run_and_store_cross_check(sheet_id)
+            _run_and_store_cross_check(sheet_id, rebuild_from_raw=rebuild_from_raw)
             cc = load_sheet_cross_check(sheet_id)
         except Exception:  # noqa: BLE001
             pass
@@ -1708,7 +1704,7 @@ def admin_reload_refs() -> JSONResponse:
         if s["status"] in ("error", "pending"):
             continue
         try:
-            _run_and_store_cross_check(s["id"])
+            _run_and_store_cross_check(s["id"], rebuild_from_raw=True)
             revalidated += 1
         except Exception:  # noqa: BLE001
             traceback.print_exc()
@@ -1784,7 +1780,7 @@ def _revalidate_all_sheets_bg() -> None:
             )
         for s in sheets:
             try:
-                _run_and_store_cross_check(s["id"])
+                _run_and_store_cross_check(s["id"], rebuild_from_raw=True)
             except Exception:  # noqa: BLE001
                 traceback.print_exc()
             with _revalidation_lock:

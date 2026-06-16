@@ -774,6 +774,18 @@ class RefWatcher:
         self._refs = new_refs
         _persist_refs_status(self._refs, self.doc_dir, prev_stats=prev_stats)
         _persist_legacy_mined(self._refs, self.repo_root)
+        logger.info(
+            "refs carregadas: plan=%s hash=%s stock=%s hash=%s "
+            "maquinas=%s hash=%s colaboradores=%s hash=%s",
+            self.plan_path,
+            (self._refs.get("plan_sha256") or "")[:8],
+            self.sap_path,
+            (self._refs.get("sap_sha256") or "")[:8],
+            self.maq_path,
+            (self._refs.get("maquinas_sha256") or "")[:8],
+            self.colab_path,
+            (self._refs.get("colab_sha256") or "")[:8],
+        )
         try:
             from app.pipeline import scoring_engine
             scoring_engine.invalidate_index_cache()

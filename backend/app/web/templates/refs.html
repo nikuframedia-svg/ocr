@@ -65,6 +65,28 @@
           · erro: {{ refs_importer.last_error }}
         {% endif %}
       </div>
+      {% set last_import = refs_importer.last_result or {} %}
+      {% if last_import %}
+      <div class="muted tiny" style="margin-top:8px;">
+        último import:
+        {% if last_import.ok %}ok{% else %}erro{% endif %}
+        · {{ (last_import.imported or [])|length }} importado(s)
+        · {{ (last_import.skipped or [])|length }} igual(is)
+        · {{ (last_import.candidates or [])|length }} candidato(s)
+        {% if last_import.refs_loaded_at %}
+          · refs carregadas: {{ last_import.refs_loaded_at }}
+        {% endif %}
+      </div>
+      {% if last_import.imported %}
+      <div class="muted tiny" style="margin-top:6px;">
+        {% for item in last_import.imported %}
+          {% if loop.index <= 4 %}
+            {{ item.kind }}: {{ item.filename }} -> {{ item.target }} · hash {{ item.sha256[:8] }}{% if not loop.last %}<br>{% endif %}
+          {% endif %}
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% endif %}
       <form method="post" action="/refs/import-folder" style="margin-top:10px;">
         <button class="btn" type="submit">Importar pasta agora</button>
       </form>
