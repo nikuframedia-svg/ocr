@@ -822,14 +822,14 @@ def sheet_page(
         src = sheet["raw_extraction"]
         (cc_status_by_path, cc_ref_by_path, cc_ref_title_by_path,
          cc_suspended_by_path, cc_snapped_by_path,
-         cc_obra_concluida_by_path) = (
-            {}, {}, {}, {}, {}, {},
+         cc_obra_concluida_by_path, cc_pending_by_path) = (
+            {}, {}, {}, {}, {}, {}, {},
         )
     else:
         src = sheet.get("sheet_data") or {}
         (cc_status_by_path, cc_ref_by_path, cc_ref_title_by_path,
          cc_suspended_by_path, cc_snapped_by_path,
-         cc_obra_concluida_by_path) = (
+         cc_obra_concluida_by_path, cc_pending_by_path) = (
             _build_cc_maps(sheet_id)
         )
 
@@ -866,6 +866,7 @@ def sheet_page(
             "cc_suspended_by_path": cc_suspended_by_path,
             "cc_snapped_by_path": cc_snapped_by_path,
             "cc_obra_concluida_by_path": cc_obra_concluida_by_path,
+            "cc_pending_by_path": cc_pending_by_path,
             "flagged_count": flagged,
             "view_mode": view_mode,
             "back_url": back_url,
@@ -917,9 +918,51 @@ def _build_snapped_map_from_raw(sheet: dict) -> dict[str, bool]:
     return out
 
 
+def _has_cross_pending_value(value: object) -> bool:
+    """True when a row cell has operator/OCR content worth flagging."""
+    text = str(value or "").strip()
+    return bool(text) and text not in {"-", "—", "–"}
+
+
+def _build_pending_cross_map(
+    sheet: dict | None,
+    status_map: dict[str, str],
+) -> dict[str, bool]:
+    """Mark filled cross-checkable row cells that ended up with no useful color.
+
+    This is UI-only: it does not alter scoring, refs, persisted JSON, or
+    auto-overwrites. It prevents filled fields like sheet 1570's PAV8
+    `cliente/of/modelo` cells from looking like ordinary no-ref cells when the
+    cross-check JSON has no status for that path or reports `NA`.
+    """
+    if not sheet:
+        return {}
+    sheet_data = sheet.get("sheet_data") or {}
+    rows = sheet_data.get("rows") or []
+    try:
+        template = _template_ctx_for_sheet(sheet).get("template")
+        cross_fields = set(template.cross_check_fields or ()) if template else set()
+    except Exception:  # noqa: BLE001
+        cross_fields = set()
+    if not cross_fields:
+        return {}
+
+    pending: dict[str, bool] = {}
+    for row_idx, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        for field in cross_fields:
+            if not _has_cross_pending_value(row.get(field)):
+                continue
+            path = f"rows[{row_idx}].{field}"
+            if status_map.get(path, "NA") == "NA":
+                pending[path] = True
+    return pending
+
+
 def _build_cc_maps(sheet_id: int) -> tuple[
     dict[str, str], dict[str, str], dict[str, str], dict[str, bool],
-    dict[str, bool], dict[str, bool],
+    dict[str, bool], dict[str, bool], dict[str, bool],
 ]:
     """Round 33: load cross-check JSON for sheet, build {field_path: status}
     + {field_path: ref} maps for template rendering of green/red cell colors.
@@ -958,9 +1001,10 @@ def _build_cc_maps(sheet_id: int) -> tuple[
             cc = load_sheet_cross_check(sheet_id)
         except Exception:  # noqa: BLE001
             pass
-    snapped_map = _build_snapped_map_from_raw(db.get_sheet(sheet_id) or {})
+    sheet = db.get_sheet(sheet_id) or {}
+    snapped_map = _build_snapped_map_from_raw(sheet)
     if not cc:
-        return {}, {}, {}, {}, snapped_map, {}
+        return {}, {}, {}, {}, snapped_map, {}, {}
     status_map: dict[str, str] = {}
     ref_map: dict[str, str] = {}
     ref_title_map: dict[str, str] = {}
@@ -1018,8 +1062,9 @@ def _build_cc_maps(sheet_id: int) -> tuple[
                 title = _cell_ref_title(info, ref)
                 if title:
                     ref_title_map[path] = title
+    pending_map = _build_pending_cross_map(sheet, status_map)
     return (status_map, ref_map, ref_title_map, suspended_map, snapped_map,
-            obra_concluida_map)
+            obra_concluida_map, pending_map)
 
 
 def _maybe_record_operador_alias(sheet_id: int) -> None:
@@ -1152,7 +1197,7 @@ async def sheet_edit(
     cells_by_path = (sheet.get("dq_audit") or {}).get("cells", {})
     (cc_status_by_path, cc_ref_by_path, cc_ref_title_by_path,
      cc_suspended_by_path, cc_snapped_by_path,
-     cc_obra_concluida_by_path) = (
+     cc_obra_concluida_by_path, cc_pending_by_path) = (
         _build_cc_maps(sheet_id)
     )
 
@@ -1172,6 +1217,7 @@ async def sheet_edit(
             cc_suspended_by_path=cc_suspended_by_path,
             cc_snapped_by_path=cc_snapped_by_path,
             cc_obra_concluida_by_path=cc_obra_concluida_by_path,
+            cc_pending_by_path=cc_pending_by_path,
             sheet_status=sheet.get("status"),
             oob=oob,
         )
@@ -2683,6 +2729,7 @@ def kanban_viewer(
                 "cc_ref_by_path": {},
                 "cc_ref_title_by_path": {},
                 "cc_obra_concluida_by_path": {},
+                "cc_pending_by_path": {},
                 "valid_operadores": _get_operadores(),
                 **_template_ctx_for_sheet(None),  # bobine_formato defaults
             },
@@ -2737,11 +2784,11 @@ def kanban_viewer(
     # Round 33: cross-check colors per cell
     (cc_status_by_path, cc_ref_by_path, cc_ref_title_by_path,
      cc_suspended_by_path, cc_snapped_by_path,
-     cc_obra_concluida_by_path) = ({}, {}, {}, {}, {}, {})
+     cc_obra_concluida_by_path, cc_pending_by_path) = ({}, {}, {}, {}, {}, {}, {})
     if sheet:
         (cc_status_by_path, cc_ref_by_path, cc_ref_title_by_path,
          cc_suspended_by_path, cc_snapped_by_path,
-         cc_obra_concluida_by_path) = (
+         cc_obra_concluida_by_path, cc_pending_by_path) = (
             _build_cc_maps(sheet["id"])
         )
 
@@ -2777,6 +2824,7 @@ def kanban_viewer(
             "cc_suspended_by_path": cc_suspended_by_path,
             "cc_snapped_by_path": cc_snapped_by_path,
             "cc_obra_concluida_by_path": cc_obra_concluida_by_path,
+            "cc_pending_by_path": cc_pending_by_path,
             "valid_operadores": _get_operadores(),
             "data_iso_for_validate": data_iso_for_validate,
             "has_cropped": sheet_has_cropped,

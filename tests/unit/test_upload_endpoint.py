@@ -71,7 +71,7 @@ def env(tmp_path, monkeypatch):
     # Neutralizar efeitos de disco/rede do pós-processamento (testados noutro lado).
     monkeypatch.setattr(main, "_run_and_store_cross_check", lambda sid: None)
     monkeypatch.setattr(main, "_deposit_csv_to_factory", lambda sid: None)
-    monkeypatch.setattr(main, "_build_cc_maps", lambda sid: ({}, {}, {}, {}, {}, {}))
+    monkeypatch.setattr(main, "_build_cc_maps", lambda sid: ({}, {}, {}, {}, {}, {}, {}))
     monkeypatch.setattr(main.kernel, "emit_event", lambda *a, **k: None)
     return tmp_path
 

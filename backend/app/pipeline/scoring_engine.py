@@ -308,8 +308,8 @@ _STATUS_LABELS = {
 # de identidade; não se ancora cegamente na OF nem se auto-preenche a linha.
 # R159 — disponibilidade de referência passa a ser por campo: plan carregado
 # não significa que dbase/dtopo/comp/etc tenham pool válido.
-# R160 — `clientes_lexicon` sozinho não é pool de plan; modelos passam a
-# procurar também pelo primeiro token da designação, com tolerância 0/O.
+# R160 — legado: `clientes_lexicon` sozinho não era pool de plan; em R214
+# deixou de entrar nos candidatos de cliente das rows.
 # R161 — o fallback diagnóstico de conflito de identidade usa a mesma regra
 # de modelo que o score; O/0 em modelo já não impede winner diagnóstico.
 # R162 — espessura recupera vírgula perdida no OCR (26 → 2,6) apenas quando
@@ -378,22 +378,12 @@ _STATUS_LABELS = {
 # (RODEL não pode bater FERRO DE LISBOA).
 # R198 — removido também prefixo compacto genérico (METAL/COMP não batem
 # METALOGALVA/COMPANHIA).
-# R206 — remove regras casuísticas recentes: o cross volta a depender de
-# aliases explícitos e equivalências gerais, não de correções por amostra.
-# R207 — remove travas por STOCK em cliente; R210 trata STOCK como prefixo
-# operacional do plan, não como parte do nome do cliente.
-# R208 — winner global puro: todos os candidatos desde início, sem âncoras
-# OF/OV, sem aliases/abreviações de cliente, sem variantes opinativas de modelo.
-# R209 — legado: winner por votação de campos credíveis removido em R213.
-# R210 — cliente por compacto normalizado também encontra linhas STOCK <cliente>.
-# R211 — winner não pode nascer só de votos fuzzy; exige ao menos 1 match exato.
-# R212 — winner forte aplica correções suaves de OCR; STOCK deixa de ser
-# stopword de cliente; empates do Plan com mesmo código curto podem usar
-# desempate de fase/remaining.
-# R213 — repõe Cross global simples pré-regressão: todos os candidatos entram,
-# score contínuo por campo com peso máximo 1, sem mínimo de votos/exato.
+# R206..R213 — historial de remoção de âncoras/regras casuísticas.
+# R214 — winner global calcula score contra todas as linhas do Plan, não só
+# contra a união Top-K por campo. Cliente usa apenas nomes do Plan no Top-K
+# local; aliases/lexicon não entram na escolha de rows.
 # BUMP obrigatório: força regeneração dos cross-check JSON antigos.
-ENGINE_VERSION = "v15_R213"
+ENGINE_VERSION = "v15_R214"
 
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
@@ -923,8 +913,6 @@ def _candidates_for_field(field: str, row: dict, refs: dict, idx: dict) -> list[
 
     if field == "cliente":
         ocr_u = ocr_value.upper()
-        # R123 — ligar o cliente ao pool de entries (plan_by_cliente) para
-        # que uma linha que só bate por cliente ainda entre no winner.
         plan_by_cliente = {
             str(k).strip().upper(): list(v or [])
             for k, v in (idx.get("plan_by_cliente", {}) or {}).items()
@@ -936,8 +924,6 @@ def _candidates_for_field(field: str, row: dict, refs: dict, idx: dict) -> list[
             plan_by_cliente.setdefault(key, [])
             plan_by_cliente[key].extend(entries or [])
         pool = set(clientes_plan)
-        if "clientes_lexicon" in refs:
-            pool |= set(refs.get("clientes_lexicon") or [])
 
         seen_clientes: set[str] = set()
 
@@ -950,25 +936,6 @@ def _candidates_for_field(field: str, row: dict, refs: dict, idx: dict) -> list[
                 "value": key, "sim": sim,
                 "plan_entries": plan_by_cliente.get(key, []),
             })
-
-        # R210 — o Plan usa frequentemente "STOCK <cliente>" como etiqueta
-        # operacional. Procurar primeiro por compacto normalizado para que
-        # MTG BELUX e STOCK MTG BELUX concorram em igualdade, sem aliases nem
-        # subset matching.
-        target_compact = _cliente_compact(ocr_u)
-        if target_compact:
-            for k in sorted(pool):
-                compact = _cliente_compact(k)
-                if not compact:
-                    continue
-                if compact == target_compact:
-                    _append_cliente_candidate(k, 100.0)
-                elif (
-                    max(len(compact), len(target_compact)) >= 4
-                    and abs(len(compact) - len(target_compact)) == 1
-                    and _lev_distance(compact, target_compact) <= 1
-                ):
-                    _append_cliente_candidate(k, 95.0)
 
         for k, s in _topk_keys_by_sim(ocr_u, list(pool), _TOP_K):
             _append_cliente_candidate(k, s)
@@ -1038,6 +1005,16 @@ def _entry_key(entry: dict) -> tuple:
     )
 
 
+def _all_plan_entries(idx: dict) -> dict[tuple, dict]:
+    entries_by_key: dict[tuple, dict] = {}
+    for of_key, entries in (idx.get("of_to_entries") or {}).items():
+        for entry in entries or []:
+            stamped = dict(entry)
+            stamped["_of"] = entry.get("_of") or of_key
+            entries_by_key.setdefault(_entry_key(stamped), stamped)
+    return entries_by_key
+
+
 def _best_scored_entry(
     entries_by_key: dict[tuple, dict],
     row: dict,
@@ -1068,6 +1045,8 @@ def _best_scored_entry(
         return None
     eligible.sort()
     best_neg_score, best_neg_exact, _best_phase_full, best_rem_sort, _best_order, best_entry = eligible[0]
+    if -best_neg_score <= 0:
+        return None
     winner = dict(best_entry)
     winner["_score"] = round(float(-best_neg_score), 3)
     winner["_exact_score"] = int(-best_neg_exact)
@@ -1105,15 +1084,17 @@ def _find_winner_entry(
     candidates_by_field: dict[str, list[dict]],
     row: dict,
     refs: dict,
+    idx: dict | None = None,
     current_phase: str | None = None,
 ) -> dict | None:
     """Escolhe a entry do plan por melhor score global simples."""
-    entries_by_key: dict[tuple, dict] = {}
-    for field in _PLAN_FIELDS:
-        for cand in candidates_by_field.get(field, []):
-            for entry in cand.get("plan_entries", []):
-                key = _entry_key(entry)
-                entries_by_key.setdefault(key, entry)
+    entries_by_key = _all_plan_entries(idx or {})
+    if not entries_by_key:
+        for field in _PLAN_FIELDS:
+            for cand in candidates_by_field.get(field, []):
+                for entry in cand.get("plan_entries", []):
+                    key = _entry_key(entry)
+                    entries_by_key.setdefault(key, entry)
     if not entries_by_key:
         return None
     return _best_scored_entry(entries_by_key, row, refs, current_phase)
@@ -1634,7 +1615,7 @@ def _score_row(
         if field in cc_fields:
             candidates_by_field[field] = _candidates_for_field(field, row, refs, idx)
 
-    winner = _find_winner_entry(candidates_by_field, row, refs, current_phase)
+    winner = _find_winner_entry(candidates_by_field, row, refs, idx, current_phase)
 
     obra_concluida = _all_eligible_phase_full(
         candidates_by_field, row, refs, current_phase, winner

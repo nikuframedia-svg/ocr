@@ -684,7 +684,7 @@ class TestShadowScore:
         # Sem ListaColaboradores, não há base para confirmar operador.
         assert scoring["header"]["operador"]["status"] == "NA"
 
-    def test_top_level_snapped_excludes_very_different(self):
+    def test_zero_score_dimension_does_not_autofill_a_winner(self):
         sheet_data = {
             "template_name": "bobine_formato",
             "header": {},
@@ -697,7 +697,8 @@ class TestShadowScore:
 
         assert scoring["summary"]["very_different"] == 1
         assert snapped == scoring["summary"]["snapped"]
-        assert snapped > 0
+        assert snapped == 0
+        assert scoring["rows"][0]["winner_of"] is None
         assert total == snapped + confirmed + na + scoring["summary"]["very_different"]
 
     def test_unknown_cliente_with_plan_pool_goes_to_review(self):
@@ -1727,9 +1728,43 @@ class TestShadowScore:
 
 
 class TestFindWinner:
-    def test_no_candidates_returns_none(self):
-        winner = _find_winner_entry({}, {}, _REFS)
+    def test_no_plan_entries_returns_none(self):
+        winner = _find_winner_entry({}, {}, {"of_to_entries": {}})
         assert winner is None
+
+    def test_scores_all_plan_entries_not_only_topk_candidates(self):
+        refs = {
+            "available": True,
+            "of_to_entries": {
+                f"260{i:03d}": [{
+                    "ov": f"240{i:04d}",
+                    "cliente": f"CLIENTE {i}",
+                    "designacao": f"MODELO {i}",
+                    "comp": 1000 + i,
+                    "lbase": 100 + i,
+                    "ltopo": 50 + i,
+                    "esp": 3,
+                }]
+                for i in range(20)
+            },
+            "clientes_plan": frozenset({f"CLIENTE {i}" for i in range(20)}),
+            "lotes_sap_full": {},
+        }
+        idx = _get_indices(refs)
+        row = {
+            "cliente": "CLIENTE 19",
+            "modelo": "MODELO 19",
+            "comp_mm": "1019",
+            "lbase": "119",
+            "ltopo": "69",
+            "esp": "3",
+        }
+
+        winner = _find_winner_entry({}, row, refs, idx)
+
+        assert winner is not None
+        assert winner["_of"] == "260019"
+        assert winner["_score"] == 6
 
     def test_best_scored_entry_returns_stamped_of_copy(self):
         entries = {

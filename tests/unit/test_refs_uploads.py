@@ -302,6 +302,59 @@ def test_ref_importer_preserves_windows_configured_paths(monkeypatch):
     assert str(ref_importer.configured_import_dir()) == r"\\srv-planeamento\ocr\files"
 
 
+def test_ref_importer_default_is_external_windows_folder(monkeypatch):
+    for env_name in ref_importer.IMPORT_DIR_ENV_VARS:
+        monkeypatch.delenv(env_name, raising=False)
+    monkeypatch.setattr(ref_importer, "_config_value", lambda _name: None)
+
+    path = ref_importer.configured_import_dir()
+
+    assert str(path) == r"F:\ocr\files"
+    assert ref_importer._is_absolute_import_path(path) is True
+
+
+def test_ref_importer_starts_for_windows_absolute_source_even_if_missing(monkeypatch):
+    state = {
+        "enabled": False,
+        "running": False,
+        "source_dir": "",
+        "interval_seconds": None,
+        "last_run_at": None,
+        "last_ok": None,
+        "last_error": None,
+        "last_result": None,
+    }
+    started: list[bool] = []
+
+    class FakeThread:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+        def start(self):
+            started.append(True)
+
+        def is_alive(self):
+            return bool(started)
+
+    monkeypatch.setattr(ref_importer, "_state", state)
+    monkeypatch.setattr(ref_importer, "_thread", None)
+    monkeypatch.setattr(ref_importer.threading, "Thread", FakeThread)
+
+    ok = ref_importer.start_background_importer(
+        source_dir=Path(r"F:\ocr\files"),
+        interval_seconds=30,
+    )
+
+    assert ok is True
+    assert started == [True]
+    status = ref_importer.status()
+    assert status["enabled"] is True
+    assert status["thread_alive"] is True
+    assert status["source_dir"] == r"F:\ocr\files"
+    assert status["last_error"] == "pasta de importação não existe"
+
+
 def test_plan_inspection_rejects_missing_required_columns(tmp_path):
     bad = tmp_path / "bad_plan.xlsx"
     wb = Workbook()

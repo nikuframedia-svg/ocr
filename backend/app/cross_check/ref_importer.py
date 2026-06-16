@@ -23,7 +23,7 @@ from app.pipeline.scoring_engine import normalize_of
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
-DEFAULT_IMPORT_DIR = Path(r"F:\ocr\files")
+DEFAULT_IMPORT_DIR_RAW = r"F:\ocr\files"
 IMPORT_DIR_ENV_VARS = ("KANBAN_REFS_IMPORT_DIR", "OCR_REFS_IMPORT_DIR")
 IMPORT_INTERVAL_ENV = "KANBAN_REFS_IMPORT_INTERVAL_SEC"
 DEFAULT_IMPORT_INTERVAL_SECONDS = 15 * 60
@@ -115,9 +115,13 @@ def _is_windows_absolute(raw: str | Path) -> bool:
     return PureWindowsPath(str(raw)).is_absolute()
 
 
+def _is_absolute_import_path(raw: str | Path) -> bool:
+    return Path(raw).is_absolute() or _is_windows_absolute(raw)
+
+
 def _resolve_path(raw: str | Path) -> Path:
     path = Path(raw)
-    if path.is_absolute() or _is_windows_absolute(raw):
+    if _is_absolute_import_path(raw):
         return path
     return _REPO_ROOT / path
 
@@ -132,7 +136,7 @@ def configured_import_dir() -> Path:
         val = _config_value(env_name)
         if val:
             return _resolve_path(val)
-    return DEFAULT_IMPORT_DIR
+    return _resolve_path(DEFAULT_IMPORT_DIR_RAW)
 
 
 def configured_interval_seconds() -> int:
@@ -677,6 +681,7 @@ def start_background_importer(
     global _thread
     source = Path(source_dir) if source_dir is not None else configured_import_dir()
     interval = interval_seconds or configured_interval_seconds()
+    is_absolute_source = _is_absolute_import_path(source)
     with _thread_lock:
         if _thread is not None and _thread.is_alive():
             return True
@@ -686,7 +691,7 @@ def start_background_importer(
                 "source_dir": str(source),
                 "interval_seconds": interval,
             })
-        if (not source.exists() or not source.is_dir()) and not source.is_absolute():
+        if (not source.exists() or not source.is_dir()) and not is_absolute_source:
             with _state_lock:
                 _state["last_error"] = "pasta de importação não existe"
             return False
