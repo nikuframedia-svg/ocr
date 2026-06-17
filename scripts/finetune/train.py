@@ -18,11 +18,10 @@ import json
 from pathlib import Path
 
 # ---- Constantes a confirmar na Metalogalva -------------------------------
-# O modelo de producao no Ollama chama-se 'qwen3.5:9b'. O fine-tuning precisa
-# do modelo BASE equivalente no HuggingFace. Confirma com:
-#     ollama show qwen3.5:9b
-# e ajusta BASE_MODEL para o id Unsloth correspondente. O default abaixo
-# assume a familia Qwen2.5-VL (o VLM que o projeto usa).
+# O modelo de producao no Ollama chama-se 'qwen3-vl:8b'. O fine-tuning precisa
+# do modelo BASE equivalente no HuggingFace/Unsloth. Confirma com:
+#     ollama show qwen3-vl:8b
+# e ajusta BASE_MODEL para o id correspondente antes de treinar.
 BASE_MODEL = "unsloth/Qwen2.5-VL-7B-Instruct"   # <-- confirmar vs 'ollama show'
 LORA_RANK = 16
 EPOCHS = 2

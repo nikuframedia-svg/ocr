@@ -32,10 +32,9 @@ if (Test-Path $envFile) {
 Get-Process | Where-Object { $_.Name -in @("python","cloudflared") } | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 1
 
-# Production OCR uses qwen3.5:9b (Round 20). Disable reasoning blocks via
-# OCR_NO_THINK=1 - without it the model emits ~3x extra "thinking" tokens
-# that cause 42% JSON parse failures and 4x latency. With it: 100% parse
-# rate, ~22s/photo, +6.9pp field accuracy vs qwen2.5vl:7b baseline.
+# Production OCR uses qwen3-vl:8b. Disable reasoning blocks via
+# OCR_NO_THINK=1; older Qwen3 tests showed extra "thinking" tokens can hurt
+# JSON stability and latency.
 # R65: only set if not already loaded from .env.
 if (-not $env:OCR_NO_THINK) { $env:OCR_NO_THINK = "1" }
 

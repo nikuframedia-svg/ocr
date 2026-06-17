@@ -42,12 +42,10 @@ from app.pipeline.scoring_engine import normalize_of  # noqa: E402
 # point at a remote Ollama (e.g. the desktop PC on the same LAN).
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 # MODEL is overridable via OCR_MODEL env var so we can benchmark different
-# Ollama models without forking the script. Default = qwen3.5:9b (Round 20:
-# beats qwen2.5vl:7b by +6.9pp field, +9.9pp critical, half hallucination
-# on 19-sheet apples-to-apples benchmark; only loss is lote -33.9pp).
+# Ollama models without forking the script. Default = qwen3-vl:8b.
 # Production server adds OCR_NO_THINK=1 to disable Qwen3 reasoning blocks
-# (without it, 42% of photos failed JSON parse, see Round 18→19).
-MODEL = os.environ.get("OCR_MODEL", "qwen3.5:9b")
+# (older Qwen3 tests showed reasoning blocks hurt JSON stability/latency).
+MODEL = os.environ.get("OCR_MODEL", "qwen3-vl:8b")
 TIMEOUT_SEC = 600
 MAX_RETRIES = 2
 NUM_PREDICT = 8192
@@ -272,10 +270,8 @@ def ollama_request(image_b64: str) -> tuple[str | None, dict[str, Any]]:
         "keep_alive": -1,
         "options": {"temperature": TEMPERATURE, "num_predict": NUM_PREDICT},
     }
-    # Disable thinking for hybrid models (Qwen3 family). Without this,
-    # qwen3.5:9b emits ~3× extra tokens of reasoning that often degrade
-    # JSON output and inflate latency. Env-var gated so production model
-    # (qwen2.5vl:7b) is unaffected.
+    # Disable thinking for hybrid models (Qwen3 family). Without this, some
+    # builds emit extra reasoning tokens that degrade JSON output and latency.
     if os.environ.get("OCR_NO_THINK", "").lower() in ("1", "true", "yes"):
         payload["think"] = False
     data = json.dumps(payload).encode("utf-8")
@@ -416,7 +412,7 @@ def process_image(
 
     result.raw_response = raw
 
-    # Round 59 — auto-retry on JSON parse failure. LLMs (qwen3.5:9b)
+    # Round 59 — auto-retry on JSON parse failure. Vision LLMs
     # occasionally produce malformed JSON (missing comma, unescaped
     # quote) even at temperature=0 due to sampling state. The same
     # input retried often succeeds on attempt 2/3.

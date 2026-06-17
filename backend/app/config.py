@@ -34,11 +34,11 @@ class Settings(BaseSettings):
         ),
     )
     vllm_model: str = Field(
-        default="qwen2.5vl:7b",
+        default="qwen3-vl:8b",
         description=(
-            "Model name as known to the inference engine. Ollama default "
-            "tag is q4_K_M (~5 GB). 3B was the baseline; 7B is the "
-            "production choice. For vLLM use `Qwen/Qwen2.5-VL-7B-Instruct-AWQ`."
+            "Model name as known to the inference engine. Defaults to the "
+            "same Ollama vision model used by the OCR path. For a true vLLM "
+            "deployment, override VLLM_MODEL with the server's model id."
         ),
     )
     vllm_timeout_s: float = Field(
@@ -95,9 +95,9 @@ class Settings(BaseSettings):
         default="qwen3.5:9b",
         description=(
             "Text model for the /learnings LLM analyst (chat, attractor "
-            "analysis, reports). Defaults to qwen3.5:9b — the same model the "
-            "OCR already uses, so no extra download is needed. Override via "
-            "OLLAMA_TEXT_MODEL to point at a dedicated text model."
+            "analysis, reports). Defaults to qwen3.5:9b and is intentionally "
+            "separate from the OCR vision model. Override via OLLAMA_TEXT_MODEL "
+            "to point at a dedicated text model."
         ),
     )
 
