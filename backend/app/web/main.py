@@ -339,10 +339,10 @@ async def upload(
 # `source`. As constantes R61/R66 anteriores (campos hard-coded) saíram
 # por dead code; R109 substituiu-as pela flag `snapped` por célula.
 
-# R142 — auto-overwrite conservador: só `snapped` (delta suave / autofill)
-# é aplicado. `very_different` fica para revisão humana, mesmo quando há
-# proposta concreta do plan/SAP. Travões adicionais: edições humanas (R133)
-# e obra_concluida (R125).
+# R215 — restaurado auto-overwrite R134/R135: `snapped` e `very_different`
+# com proposta concreta de referência são aplicados. `ocr_raw`/`syntax`
+# continuam a ficar para revisão humana. Travões adicionais: edições humanas
+# (R133) e obra_concluida (R125).
 
 
 def _human_edited_paths(sheet_id: int) -> frozenset[str]:
@@ -443,12 +443,13 @@ def _maybe_apply_snap(
     cell: dict,
     protected: frozenset[str] = frozenset(),
 ) -> bool:
-    """Aplica apenas correções suaves/autofill propostas pelo cross-check.
+    """Aplica correções propostas pelo cross-check.
 
     Política:
       - `snapped` (delta suave / autofill) → aplica.
+      - `very_different` vindo de ref concreta → aplica.
       - `confirmed` / `NA` → no-op.
-      - `very_different` → no-op; é revisão humana.
+      - `very_different` sem ref concreta → no-op; é revisão humana.
 
     Travões (apenas estes):
       - R133: campo com última edição humana (`protected`) — autoritativo,
@@ -467,7 +468,8 @@ def _maybe_apply_snap(
     if engine_status == "snapped":
         pass
     elif engine_status == "very_different":
-        return False
+        if cell.get("source") in (None, "ocr_raw", "syntax", "obra_concluida"):
+            return False
     else:
         return False
     canonical = (cell.get("value") or "").strip()
@@ -490,18 +492,33 @@ def _apply_auto_overwrites(
       - cobre também `result["header"]` e `result["footer"]` (motor já
         produz cells nessas secções desde R123 Fase 4 B9);
 
-    R142: `very_different` deixou de ser aplicado automaticamente. Vermelho
-    significa rever, não escrever por cima.
+    R215: `very_different` com ref concreta volta a ser aplicado
+    automaticamente. Vermelho sem ref concreta continua a significar revisão.
 
     R133 — `protected` (field_paths com última edição humana) salta o
     auto-overwrite desses campos. Ver `_maybe_apply_snap`.
     """
+    sheet = db.get_sheet(sheet_id) or {}
+    sheet_data = sheet.get("sheet_data") or {}
+    rows_data = sheet_data.get("rows") or []
+    template_name = result.get("template_name") or sheet_data.get("template_name")
     n_applied = 0
     for row_r in result.get("rows", []):
         i = row_r.get("row_index")
         if i is None:
             continue
         for fn, cell in row_r.get("fields", {}).items():
+            # Acabamento TPL086 usa o campo interno `modelo` para
+            # REFERÊNCIA / PEÇA. Se o OCR/operador já trouxe algo nessa
+            # coluna, mostramos a referência do plan no cross-check mas não
+            # substituímos automaticamente esse texto operacional.
+            if (
+                template_name == "acabamento"
+                and fn == "modelo"
+                and i < len(rows_data)
+                and str((rows_data[i] or {}).get("modelo") or "").strip()
+            ):
+                continue
             if _maybe_apply_snap(sheet_id, f"rows[{i}].{fn}", cell, protected):
                 n_applied += 1
     for section in ("header", "footer"):
@@ -640,15 +657,15 @@ def _run_and_store_cross_check(
 ) -> dict | None:
     """Round 33 — invisible verification inline in /upload pipeline.
 
-    R109/R123 — para QUALQUER célula que o motor marque como ``snapped``
-    (escolheu ou preencheu um valor diferente do OCR), ``_apply_auto_overwrites``
-    escreve o valor canónico do plano na sheet_data. Células ``very_different``
-    (vermelho) ficam para revisão humana — nunca são aplicadas.
+    R215 — para células ``snapped`` e ``very_different`` com referência
+    concreta, ``_apply_auto_overwrites`` escreve o valor canónico do plano
+    na sheet_data. ``very_different`` sem ref concreta continua a ficar para
+    revisão humana.
 
     Steps:
       1. Run cross_check_sheet → per-cell status against refs
-      2. apply_auto_overwrites (todas as células snapped) + operador snap
-         + cod_maquina fill
+      2. apply_auto_overwrites (snapped + very_different concreto) +
+         operador snap + cod_maquina fill
       3. If any edits were applied, re-run cross_check_sheet on the updated
          sheet_data so the persisted JSON reflects the final state
       4. Persist JSON to ``C:\\kanban\\nifruka\\03_Cross_Check\\``
@@ -686,7 +703,7 @@ def _run_and_store_cross_check(
     if sheet.get("status") == "validated":
         n_overwritten = n_op_snapped = n_codmaq_filled = 0
     else:
-        # Cross-check auto-overwrite: só células `snapped` (suaves/autofill).
+        # Cross-check auto-overwrite: `snapped` e `very_different` concreto.
         n_overwritten = _apply_auto_overwrites(sheet_id, result, protected)
         # R70 — operator snap against ListaColaboradores (SAP employee list).
         # Resolves OCR name/cod against canonical sname/cod/pernr and applies
@@ -2484,8 +2501,8 @@ async def sheet_add_row(sheet_id: int, request: Request) -> JSONResponse:
     """R136 — adiciona uma linha em branco à tabela de produção (no fim).
 
     O operador pode então preenchê-la à mão ou via o wizard "Corrigir via OF".
-    Só antes da validação. Re-corre o cross-check para a nova linha (células
-    vazias ficam NA/cinza) e devolve o índice da nova linha.
+    Só antes da validação. Re-corre o cross-check para a nova linha (apenas
+    células vazias ficam NA/cinza) e devolve o índice da nova linha.
     """
     if _is_mobile_request(request):
         raise HTTPException(403, "Edição só pode ser feita em desktop")

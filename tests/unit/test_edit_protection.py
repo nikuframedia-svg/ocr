@@ -157,8 +157,8 @@ class TestMaybeApplySnapProtected:
         sheet = db.get_sheet(sid)
         assert sheet["sheet_data"]["rows"][0]["modelo"] == "CANONICO"
 
-    def test_very_different_never_auto_applies(self, tmp_db):
-        """Vermelho/rever é sinal de decisão humana, mesmo quando há ref."""
+    def test_very_different_with_concrete_ref_auto_applies(self, tmp_db):
+        """R215: ref concreta volta a substituir, mesmo em very_different."""
         sid = db.insert_sheet("test.jpg")
         sheet_data = {
             "template_name": "bobine_formato", "header": {}, "footer": {},
@@ -166,6 +166,29 @@ class TestMaybeApplySnapProtected:
         }
         db.update_extraction(sid, sheet_data, {}, sheet_data)
         cell = {"engine_status": "very_different", "value": "CANONICO", "source": "plan"}
+
+        applied = main._maybe_apply_snap(sid, "rows[0].modelo", cell, frozenset())
+
+        assert applied is True
+        sheet = db.get_sheet(sid)
+        assert sheet["sheet_data"]["rows"][0]["modelo"] == "CANONICO"
+
+    @pytest.mark.parametrize("source", [None, "ocr_raw", "syntax"])
+    def test_very_different_without_concrete_ref_does_not_auto_apply(
+        self, tmp_db, source
+    ):
+        """Sem ref concreta continua a ser revisão humana."""
+        sid = db.insert_sheet("test.jpg")
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"modelo": "OCR_ORIG"}],
+        }
+        db.update_extraction(sid, sheet_data, {}, sheet_data)
+        cell = {
+            "engine_status": "very_different",
+            "value": "CANONICO",
+            "source": source,
+        }
 
         applied = main._maybe_apply_snap(sid, "rows[0].modelo", cell, frozenset())
 

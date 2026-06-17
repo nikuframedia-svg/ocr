@@ -2,21 +2,21 @@
 
 Fluxo atual:
 
-  Top-K por campo → top-1 por linha (melhor score) → proposta por célula.
-  O motor classifica a distância entre OCR e proposta; a camada web só
-  aplica automaticamente propostas `snapped` (suaves/autofill).
+  Top-K por campo + score global contra todo o Plan → winner → proposta por
+  célula. O motor classifica a distância entre OCR e proposta; a camada web
+  aplica automaticamente `snapped` e `very_different` com origem concreta.
 
     Guardas principais:
     - Todos os campos lidos têm o mesmo peso na escolha da linha do plan.
-    - `very_different` fica para revisão humana.
-    - Winner global forte pode corrigir OCR suave em OF/OV/modelo.
-    - Um único campo isolado nunca preenche/corrige a linha toda.
+    - OF/OV/cliente/modelo não ancoram nem vetam sozinhos a linha.
+    - Winner global aceite pode corrigir OF/OV/cliente/modelo/campos técnicos.
+    - Campos preenchidos sem plan/SAP validam por regra local ou vão a revisão.
 
   Estados de célula (com legendas para a UI):
     - confirmed:      "Confirmado"          — motor escolheu valor igual ao OCR
     - snapped:        "Substituído"          — motor mudou (ou preencheu) sem ser radical
     - very_different: "Muito diferente"     — motor propõe valor longe do OCR; vermelho
-    - NA:             "Sem referência"      — campo sem pool / sem winner
+    - NA:             "Sem valor"           — célula vazia sem dado para validar
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ from app.dq.machines import machine_phase_from_setor, resolve_machine_from_setor
 
 # Inline deps (R109 — motor self-contained) ----------------------------------
 
-_MIN_GLOBAL_WINNER_SCORE = 2.0
+_MIN_GLOBAL_WINNER_SCORE = 1.0
 
 _CLIENTE_STOPWORDS = frozenset({
     "GMBH", "SAS", "SARL", "SA", "S.A", "LDA", "LTD", "SL", "BV", "NV",
@@ -272,7 +272,7 @@ _STATUS_LABELS = {
     "confirmed":      "Confirmado",
     "snapped":        "Substituído",
     "very_different": "Muito diferente — rever",
-    "NA":             "Sem referência",
+    "NA":             "Sem valor",
 }
 
 # R123 — versão do motor. Gravada em cada cross-check JSON; o viewer
@@ -284,7 +284,8 @@ _STATUS_LABELS = {
 # campos normais no score global.
 # R142 — corrige regressões: Acabamento preserva OF/REFERÊNCIA não-vazias;
 # obra_concluida respeita a mesma âncora; dbase/dtopo usam regras numéricas.
-# R143 — campos de linha sem referência real ficam NA, não MATCH sintáctico.
+# R143 — legado: campos de linha sem referência real ficavam NA, não MATCH
+# sintáctico. Em R216, campos preenchidos passam por regra local/sintaxe.
 # R144 — header.data valida datas impossíveis; fila to_analisar cobre
 # header/footer e `ocr_raw` deixa de fingir ref.
 # R145 — header.n_operador valida contra ListaColaboradores quando existe.
@@ -298,8 +299,8 @@ _STATUS_LABELS = {
 # R151 — qualquer `very_different` preserva OCR; proposta fica em ref.
 # R152 — legado: autosnap já não depende de âncora OF/OV; o winner global
 # propõe refs e cada célula decide o estado pela diferença local.
-# R153 — sem pool de referência (plan/SAP vazio) fica NA; não gerar falsos
-# NO_MATCH quando o cross não tem base para comparar.
+# R153 — legado: sem pool de referência (plan/SAP vazio) ficava NA para não
+# gerar falsos NO_MATCH. Em R216, campo preenchido cruzável fica em revisão.
 # R154 — candidatos fuzzy sem winner elegível não viram NA quando há plan:
 # valor escrito em campo validável continua a ir para revisão.
 # R155 — legado: fallback diagnóstico de identidade removido em R208.
@@ -319,8 +320,8 @@ _STATUS_LABELS = {
 # a variante /10 bate a referência; erros grandes continuam em revisão.
 # R163 — obra_concluida deixa de pintar a linha inteira como NO_MATCH. A fase
 # cheia no plan é aviso/metadata; não transforma células certas em erro.
-# R164 — header/footer sem referência real deixam de contar como MATCH por
-# estarem preenchidos; só validações explícitas ficam verdes.
+# R164 — legado: header/footer sem referência real deixavam de contar como
+# MATCH só por estarem preenchidos. Em R216, usam regra/sintaxe local.
 # R165 — header.pernr validado contra ListaColaboradores e contra
 # operador/n_operador; PERNR errado já não passa cinzento para o export CPIS.
 # R166 — espessura também cruza StockSAP quando há lote com esp; divergências
@@ -331,8 +332,8 @@ _STATUS_LABELS = {
 # >50mm, LBASE/LTOPO/LARG >10mm e ESP >0,05mm entram em revisão.
 # R169 — ferramenta/CONI inválido expõe a regra real (`ref_source`
 # ferramenta) e a lista aceite, em vez de sair como ref ocr_raw.
-# R170 — modelo com grupos numéricos incompatíveis (ex: 1200 vs 1500)
-# deixa de ser auto-substituído só por similaridade textual alta.
+# R170 — legado removido em R216: modelo já não bloqueia por grupos numéricos
+# internos; a coerência global do winner decide a designação final.
 # R171 — score do winner usa as mesmas tolerâncias numéricas do validador;
 # medidas que viram NO_MATCH deixam de inflacionar confiança/autofill.
 # R172 — `larg_mm` usa StockSAP quando há lote com largura; se não houver
@@ -343,8 +344,8 @@ _STATUS_LABELS = {
 # TOTAL QTD é inteiro não-negativo, não decimal.
 # R175 — footer.horas_trabalhadas aceita os formatos permitidos pela schema
 # (8h, 8:30h, 8 30h, 830), mantendo o limite máximo de 24:00.
-# R176 — campos de linha sem referência continuam NA quando têm formato
-# plausível, mas valores obviamente inválidos vão para revisão por syntax.
+# R176 — legado: campos de linha sem referência continuavam NA quando tinham
+# formato plausível. Em R216, valores preenchidos validam por regra local.
 # R177 — SOBRAS e CESTA Nº deixam de esconder texto impossível como NA.
 # R178 — QTD de linha segue a schema estrita: 1-4 dígitos, sem decimais.
 # R179 — PRI deixa de esconder texto impossível como NA; aceita apenas
@@ -385,8 +386,13 @@ _STATUS_LABELS = {
 # R214 — winner global calcula score contra todas as linhas do Plan, não só
 # contra a união Top-K por campo. Cliente usa apenas nomes do Plan no Top-K
 # local; aliases/lexicon não entram na escolha de rows.
+# R215 — restaura a filosofia R134/R135 de substitute-everything: quando há
+# winner concreto, divergências fortes também carregam o valor da referência.
+# R216 — campos preenchidos deixam de cair em NA neutro quando podem ser
+# validados por regra/sintaxe; modelo deixa de bloquear por conflito numérico
+# interno (ex.: 1200 vs 1500).
 # BUMP obrigatório: força regeneração dos cross-check JSON antigos.
-ENGINE_VERSION = "v15_R214"
+ENGINE_VERSION = "v17_R216"
 
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
@@ -520,8 +526,8 @@ def _model_compact_matches(model_value: object, designacao: object) -> bool:
 
     This is deliberately containment-only, not general fuzzy matching: it
     catches OCR/layout variants like ``0641-S-515`` vs ``0641S515`` and
-    ``CA06F18D N1`` vs ``CAO6F18D - Nº1 ...`` while still letting numeric
-    conflicts such as ``OMEGA 1200`` vs ``OMEGA 1500`` fail later.
+    ``CA06F18D N1`` vs ``CAO6F18D - Nº1 ...``. Remaining differences fall
+    back to the normal model similarity/winner scoring.
     """
     model_variants = [v for v in _model_compact_variants(model_value) if len(v) >= 4]
     if not model_variants:
@@ -560,38 +566,6 @@ def _model_exact_compact_contained(model_value: object, designacao: object) -> b
         return False
     des = _model_compact(designacao)
     return bool(des and model in des)
-
-
-def _model_digit_groups(value: object) -> tuple[str, ...]:
-    """Digit-like groups from the model head, treating OCR O as 0 near digits."""
-    text = _model_first_token(value)
-    groups: list[str] = []
-    current: list[str] = []
-
-    def _flush() -> None:
-        if current:
-            groups.append(("".join(current).lstrip("0") or "0"))
-            current.clear()
-
-    for i, ch in enumerate(text):
-        prev_ch = text[i - 1] if i else ""
-        next_ch = text[i + 1] if i + 1 < len(text) else ""
-        if ch.isdigit():
-            current.append(ch)
-        elif ch == "O" and (
-            prev_ch.isdigit() or prev_ch == "O" or next_ch.isdigit() or next_ch == "O"
-        ):
-            current.append("0")
-        else:
-            _flush()
-    _flush()
-    return tuple(groups)
-
-
-def _model_numeric_groups_conflict(ocr_value: object, proposed: object) -> bool:
-    ocr_groups = _model_digit_groups(ocr_value)
-    proposed_groups = _model_digit_groups(proposed)
-    return bool(ocr_groups and proposed_groups and ocr_groups != proposed_groups)
 
 
 def _is_missing_ocr(value: object) -> bool:
@@ -1155,9 +1129,7 @@ def _is_very_different(field: str, ocr_value: str, proposed: str) -> bool:
             return False
         if _model_compact_matches(ocr_u, proposed_u):
             return False
-        if _model_numeric_groups_conflict(ocr_u, proposed):
-            return True
-        return True
+        return _str_sim(_model_compact(ocr_u), _model_compact(proposed_u)) < _VERY_DIFF_STR_SIM
     sim = _str_sim(str(ocr_value), str(proposed))
     return sim < _VERY_DIFF_STR_SIM
 
@@ -1193,7 +1165,7 @@ def _score_ferramenta_cell(ocr_value: str) -> dict:
 
 
 def _score_no_ref_row_cell(field: str, ocr_value: str) -> dict:
-    """Keep no-reference fields NA unless their own syntax is impossible."""
+    """Validate filled no-plan fields by local rule/syntax instead of NA."""
     if not ocr_value:
         return _make_cell("", "NA", "ocr_raw")
 
@@ -1215,7 +1187,7 @@ def _score_no_ref_row_cell(field: str, ocr_value: str) -> dict:
 
     if valid is False:
         return _make_cell(ocr_value, "very_different", "syntax")
-    return _make_cell(ocr_value, "NA", "ocr_raw")
+    return _make_cell(ocr_value, "confirmed", "syntax")
 
 
 def _finish_cell(
@@ -1229,8 +1201,10 @@ def _finish_cell(
 ) -> dict:
     """Formata o valor proposto, decide o estado vs o OCR, devolve a célula.
 
-    O valor devolvido é a proposta formatada só para `confirmed`/`snapped`.
-    `very_different` preserva OCR e guarda a proposta em `proposed`.
+    O valor devolvido é a proposta formatada para `confirmed`/`snapped`.
+    Quando `fill_different=True`, `very_different` também carrega a proposta
+    concreta (modo R134/R135). Sem essa flag, preserva OCR e guarda a proposta
+    em `proposed`.
     """
     proposed_fmt = _format_value(field, proposed)
     ocr_fmt = _format_value(field, ocr_value)
@@ -1241,6 +1215,8 @@ def _finish_cell(
         and proposed_fmt
         and not _num_variants(field, ocr_value)
     ):
+        # Texto/lixo num campo numérico é problema de sintaxe, não correção
+        # segura pelo plan/SAP. Mantém o OCR para revisão e evita auto-apply.
         return _preserve_ocr_with_ref(field, ocr_value, proposed, source, score)
 
     if proposed_fmt and ocr_fmt and proposed_fmt.upper() == ocr_fmt.upper():
@@ -1248,6 +1224,8 @@ def _finish_cell(
     elif not ocr_value:
         status = "snapped"  # autofill
     elif _is_very_different(field, ocr_value, proposed):
+        if fill_different and source not in (None, "ocr_raw", "syntax", "obra_concluida"):
+            return _make_cell(proposed_fmt, "very_different", source=source, score=score)
         return _preserve_ocr_with_ref(field, ocr_value, proposed, source, score)
     else:
         status = "snapped"
@@ -1422,7 +1400,7 @@ def _apply_winner_to_field(
     template_name: str | None = None,
 ) -> dict:
     if field in _NO_REF_FIELDS:
-        return _make_cell(ocr_value, "NA", "ocr_raw")
+        return _score_no_ref_row_cell(field, ocr_value)
 
     # --- Campos validados directamente contra o StockSAP (R123) ---------
     # O lote e a largura vivem no StockSAP, não na entry do plan_colunas.
@@ -1431,7 +1409,7 @@ def _apply_winner_to_field(
             return _make_cell("", "NA", "ocr_raw")
         sap_full = refs.get("lotes_sap_full", {}) or {}
         if not sap_full:
-            return _make_cell(ocr_value, "NA", "ocr_raw")
+            return _make_cell(ocr_value, "very_different", "ocr_raw", ref_source="sap")
         sap_lote, sap_entry = _sap_lote_entry(refs, ocr_value)
         if sap_entry:
             extra = {"ref_source": "sap"}
@@ -1464,8 +1442,14 @@ def _apply_winner_to_field(
                 and sap_larg_n is not None
                 and abs(ocr_larg_n - sap_larg_n) > _VERY_DIFF_NUM_ABS["larg_mm"]
             ):
-                return _preserve_ocr_with_ref(field, ocr_value, str(sap_larg), "sap", None)
-            return _finish_cell(field, ocr_value, str(sap_larg), "sap", None)
+                return _finish_cell(
+                    field, ocr_value, str(sap_larg), "sap", None,
+                    fill_different=True,
+                )
+            return _finish_cell(
+                field, ocr_value, str(sap_larg), "sap", None,
+                fill_different=True,
+            )
 
     if field == "esp":
         # StockSAP também traz espessura do lote. Se o operador escreveu esp,
@@ -1474,11 +1458,19 @@ def _apply_winner_to_field(
         _sap_lote, sap_e = _sap_lote_entry(refs, row.get("lote"))
         sap_esp = sap_e.get("esp") if sap_e else None
         if ocr_value and sap_esp not in (None, ""):
-            return _finish_cell(field, ocr_value, str(sap_esp), "sap", None)
+            return _finish_cell(
+                field, ocr_value, str(sap_esp), "sap", None,
+                fill_different=True,
+            )
 
     # --- Campos resolvidos pela entry vencedora do plan -----------------
     if winner is None and not has_field_reference:
-        return _make_cell(ocr_value, "NA", "ocr_raw")
+        if ocr_value:
+            return _make_cell(
+                ocr_value, "very_different", "ocr_raw",
+                ref_source=_field_ref_source(field, refs, row),
+            )
+        return _make_cell("", "NA", "ocr_raw")
 
     if winner is None and not candidates:
         # R120 — operador escreveu algo num campo validável e o motor não
@@ -1544,6 +1536,11 @@ def _apply_winner_to_field(
 
     score = winner.get("_score") if winner else None
     if field == "cliente" and ocr_value:
+        if winner is not None:
+            return _finish_cell(
+                field, ocr_value, proposed, "plan", score,
+                fill_different=True,
+            )
         if _cliente_values_match(ocr_value, proposed, refs):
             return _make_cell(
                 _format_value(field, ocr_value),
@@ -1555,10 +1552,15 @@ def _apply_winner_to_field(
             )
         return _finish_cell(
             field, ocr_value, proposed, "plan", score,
-            fill_different=winner is not None,
+            fill_different=False,
         )
 
     if field in ("of", "ov") and ocr_value:
+        if winner is not None:
+            return _finish_cell(
+                field, ocr_value, proposed, "plan", score,
+                fill_different=True,
+            )
         if _identifier_values_match(field, ocr_value, proposed):
             return _make_cell(
                 _format_value(field, ocr_value),
@@ -1570,7 +1572,7 @@ def _apply_winner_to_field(
             )
         return _finish_cell(
             field, ocr_value, proposed, "plan", score,
-            fill_different=winner is not None,
+            fill_different=False,
         )
 
     # Acabamento TPL086: com winner global também mostra/aplica a referência
@@ -1611,9 +1613,9 @@ def _score_row(
 
     Cada campo cai num de três tratamentos:
       - campo com referência no plan/SAP (_ROW_FIELDS) → winner/candidatos;
-      - campo sem referência (_NO_REF_FIELDS: pri, qtd, ...) → NA;
+      - campo sem referência (_NO_REF_FIELDS: pri, qtd, ...) → regra local;
       - campo próprio do template sem referência (cesta_n, m2, sobras, ...) →
-        NA, para não inflacionar métricas reais de MATCH/NO_MATCH.
+        regra local, para não deixar valores preenchidos neutros.
 
     R125: quando `current_phase` é passado, desempata o winner entre
     linhas ainda com espaço nessa fase e, se TODAS as linhas candidatas
@@ -1671,13 +1673,14 @@ def _score_row(
         elif field in _NO_REF_FIELDS:
             result = _score_no_ref_row_cell(field, ocr_value)
         else:
-            # Campo próprio do template, sem referência no plan/SAP. Não é
-            # MATCH: fica cinzento para métricas de cross-check honestas.
-            result = _make_cell(ocr_value, "NA", "ocr_raw")
+            # Campo próprio do template, sem referência no plan/SAP: aplica
+            # regra local para evitar NA neutro em valor preenchido.
+            result = _score_no_ref_row_cell(field, ocr_value)
         fields_out[field] = result
         _tally(result["status"])
 
-    # Campos extra que o OCR leu fora do schema do template — registar NA.
+    # Campos extra que o OCR leu fora do schema do template — aplicar regra
+    # local se houver valor, senão NA.
     for k, v in row.items():
         if k in fields_out:
             continue
@@ -1685,7 +1688,7 @@ def _score_row(
         if k in _NO_REF_FIELDS:
             extra_cell = _score_no_ref_row_cell(k, extra_value.strip())
         else:
-            extra_cell = _make_cell(extra_value, "NA", "ocr_raw")
+            extra_cell = _score_no_ref_row_cell(k, extra_value.strip())
         fields_out[k] = extra_cell
         _tally(extra_cell["status"])
 
@@ -1886,8 +1889,8 @@ def _score_header_footer(
 
     `operador`/`n_operador` cruzam-se com a ListaColaboradores;
     `setor_maquina`/`cod_maquina` com o catálogo de máquinas; `data`, `turno`
-    e rodapé recebem validação sintática. Campos sem referência/validador ficam
-    NA, para não inflacionar o MATCH rate.
+    e rodapé recebem validação sintática. Campos preenchidos sem catálogo
+    externo passam por regra/sintaxe local para não ficarem neutros.
     """
     colaboradores = refs.get("colaboradores", {}) or {}
     colaborador_entries: list[dict] = []
@@ -2004,7 +2007,7 @@ def _score_header_footer(
             st = "confirmed" if _norm_name(v) in snames else "very_different"
             return _make_cell(v, st, "ocr_raw", ref_source="colaboradores")
         elif field == "operador":
-            return _make_cell(v, "NA", "ocr_raw")
+            return _make_cell(v, "confirmed", "syntax")
         elif field == "n_operador" and colaborador_codes:
             variants = _operator_code_variants(v)
             expected_entry = entry_by_header_name or entry_by_header_pernr
@@ -2022,7 +2025,7 @@ def _score_header_footer(
             return _make_cell(v, st, "ocr_raw", ref_source="colaboradores")
         elif field == "n_operador":
             if _looks_like_operator_short_code(v):
-                return _make_cell(v, "NA", "ocr_raw")
+                return _make_cell(v, "confirmed", "syntax")
             return _make_cell(v, "very_different", "syntax")
         elif field == "pernr" and colaborador_entries:
             expected_entry = entry_by_header_code or entry_by_header_name
@@ -2043,12 +2046,13 @@ def _score_header_footer(
             )
             return _make_cell(v, st, "ocr_raw", ref_source="colaboradores")
         elif field == "pernr":
-            return _make_cell(v, "NA", "ocr_raw")
+            st = "confirmed" if v.isdigit() else "very_different"
+            return _make_cell(v, st, "syntax")
         elif field == "setor_maquina" and machine_catalog_available:
             st = "confirmed" if resolve_machine_from_setor(v, refs) else "very_different"
             return _make_cell(v, st, "ocr_raw", ref_source="maquinas")
         elif field == "setor_maquina":
-            return _make_cell(v, "NA", "ocr_raw")
+            return _make_cell(v, "confirmed", "syntax")
         elif field == "cod_maquina" and expected_codmaq:
             if v.upper() == expected_codmaq:
                 return _make_cell(v, "confirmed", "ocr_raw", ref_source="maquinas")
@@ -2061,7 +2065,7 @@ def _score_header_footer(
             return _make_cell(v, st, "ocr_raw", ref_source="maquinas")
         elif field == "cod_maquina":
             if _looks_like_machine_code(v):
-                return _make_cell(v, "NA", "ocr_raw")
+                return _make_cell(v, "confirmed", "syntax")
             return _make_cell(v, "very_different", "syntax")
         elif field == "data":
             st = "confirmed" if _looks_like_date(v) else "very_different"
@@ -2076,7 +2080,7 @@ def _score_header_footer(
             st = "confirmed" if _looks_like_hours(v) else "very_different"
             return _make_cell(v, st, "syntax")
         else:
-            return _make_cell(v, "NA", "ocr_raw")
+            return _make_cell(v, "confirmed", "syntax")
 
     header_keys = _ordered_union(header_fields, header.keys())
     footer_keys = _ordered_union(footer_fields, footer.keys())

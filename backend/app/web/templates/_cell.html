@@ -21,7 +21,7 @@
                       or field_path.endswith('.dbase') or field_path.endswith('.dtopo')
                       or field_path.endswith('.lote') %}{# R52 F3: lote NO_MATCH amarelo (warn) — não em SAP é review, não erro crítico #}
 {# R52 F4: NA from stub-accept (suspended_by_stub) → cc-na-suspended (amarelo soft)
-   to distinguish from NA sem-ref (qtd/coni/pri/etc — cinza neutro). #}
+   to distinguish from NA vazio/sem valor (cinza neutro). #}
 {% set _is_suspended = cc_suspended_by_path is defined and cc_suspended_by_path.get(field_path) %}
 {% set _is_pending_cross = cc_pending_by_path is defined and cc_pending_by_path.get(field_path) %}
 {# R130: identidade única (of/ov/cliente). NO_MATCH passa a amarelo
@@ -31,6 +31,8 @@
    ficaram CERTAS: operador snap, cod_maquina fill, modelo, dim). O fix
    real vive no engine (`_preserve_ocr_with_ref` preserva OCR em
    disagreement de of/ov/cliente → very_different → cc-warn aqui).
+   R216: células preenchidas já não devem ficar NA por falta de ref; ou
+   validam por regra local ou aparecem como revisão.
    O asterisco `*` (cc_snapped_by_path) continua a marcar auto-correcções
    sem alterar a cor: MATCH é verde, quer venha do OCR quer venha de snap. #}
 {% set _is_id_field = field_path.endswith('.of')

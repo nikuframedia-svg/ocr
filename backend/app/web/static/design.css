@@ -447,7 +447,7 @@ input[type="date"] {
    Cross-check verification colors (Round 33)
    - cc-match: cell value matches reference (plan/SAP) → green
    - cc-no-match: cell diverges from reference → red
-   - cc-na: no reference (operator-managed or no plan/SAP entry) → neutral
+   - cc-na: empty/currently no value to validate → neutral
    These OVERRIDE the conf-* backgrounds when applied (specificity via
    ordering — they appear after, so cascade wins).
    ===================================================================== */
@@ -476,8 +476,8 @@ input[type="date"] {
   font-size: 10px; font-weight: 700; color: #b45309;
 }
 .cc-na {
-  /* R56: visible neutral colour for cells with no ref to validate against
-     (qtd/coni/pri/header/footer). User explicit: "tem de ter tudo cor".
+  /* R56/R216: visible neutral colour for empty cells with no value to
+     validate. User explicit: "tem de ter tudo cor".
      Light slate-grey background + faint `—` marker distinguishes from
      MATCH (green) and stub-accept (yellow soft). */
   background: rgba(148, 163, 184, 0.10) !important;
@@ -495,9 +495,9 @@ input[type="date"] {
   display: inline-block; width: 14px; height: 14px;
   border-radius: 2px; position: relative; flex-shrink: 0;
 }
-/* R52 F4: cc-na-suspended — NA from stub-accept (row otherwise validates
-   but this field disagrees with plan/SAP). Soft yellow with `?` marker
-   distinguishes from cc-na (no ref, ignore). Operator sees "review me"
+/* R52 F4: cc-na-suspended — stale/legacy suspended NA from stub-accept
+   (row otherwise validates but this field disagrees with plan/SAP). Soft
+   yellow with `?` marker distinguishes from cc-na (empty/no value). Operator sees "review me"
    without the urgency of NO_MATCH red. */
 .cc-na-suspended {
   background: rgba(254, 240, 138, 0.35);

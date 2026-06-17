@@ -213,7 +213,7 @@ class TestEvalGate:
         }
         scoring, *_ = shadow_score(sheet_data, None, simulated)
 
-        assert scoring["rows"][0]["fields"]["cliente"]["status"] == "NA"
+        assert scoring["rows"][0]["fields"]["cliente"]["status"] == "very_different"
 
     def test_stored_rule_shape_is_simulable(self):
         refs = {
