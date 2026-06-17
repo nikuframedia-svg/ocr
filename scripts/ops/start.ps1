@@ -32,9 +32,8 @@ if (Test-Path $envFile) {
 Get-Process | Where-Object { $_.Name -in @("python","cloudflared") } | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 1
 
-# Production OCR uses qwen3-vl:8b. Disable reasoning blocks via
-# OCR_NO_THINK=1; older Qwen3 tests showed extra "thinking" tokens can hurt
-# JSON stability and latency.
+# Production OCR uses yasserrmd/Nanonets-OCR2-3B:latest. OCR_NO_THINK=1
+# disables reasoning blocks when the runtime supports it; otherwise it is harmless.
 # R65: only set if not already loaded from .env.
 if (-not $env:OCR_NO_THINK) { $env:OCR_NO_THINK = "1" }
 

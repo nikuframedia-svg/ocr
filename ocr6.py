@@ -1,6 +1,6 @@
 """
 Pipeline Kanban OCR — Metalogalva
-  Qwen2.5-VL via Ollama faz OCR + extração estruturada numa só chamada.
+  VLM via Ollama faz OCR + extração estruturada numa só chamada.
   Output: CSV com 3 blocos (CABEÇALHO / TABELA / RODAPÉ) + JSON + métricas.
 
 Uso:
@@ -19,7 +19,6 @@ import hashlib
 import json
 import logging
 import os
-import re
 import sys
 import time
 import urllib.error
@@ -36,16 +35,20 @@ from PIL import Image
 # import works both when ocr6 is imported by the web app and run standalone.
 sys.path.insert(0, str(Path(__file__).resolve().parent / "backend"))
 from app.pipeline.scoring_engine import normalize_of  # noqa: E402
+from app.pipeline.inference.response_parser import (  # noqa: E402
+    html_table_detected,
+    parse_ocr_response,
+)
 
 # ── Configuração ──────────────────────────────────────────────────────────────
 # R64 — OLLAMA_URL is overridable via env var so the laptop runtime can
 # point at a remote Ollama (e.g. the desktop PC on the same LAN).
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 # MODEL is overridable via OCR_MODEL env var so we can benchmark different
-# Ollama models without forking the script. Default = qwen3-vl:8b.
-# Production server adds OCR_NO_THINK=1 to disable Qwen3 reasoning blocks
-# (older Qwen3 tests showed reasoning blocks hurt JSON stability/latency).
-MODEL = os.environ.get("OCR_MODEL", "qwen3-vl:8b")
+# Ollama models without forking the script. Default = Nanonets OCR2 3B.
+# Production can set OCR_NO_THINK=1 to disable reasoning blocks when the
+# model/runtime supports `think`; runtimes that ignore it keep working.
+MODEL = os.environ.get("OCR_MODEL", "yasserrmd/Nanonets-OCR2-3B:latest")
 TIMEOUT_SEC = 600
 MAX_RETRIES = 2
 NUM_PREDICT = 8192
@@ -240,20 +243,8 @@ def image_to_base64(path: Path, max_edge: int = _MAX_IMAGE_LONG_EDGE) -> str:
 
 
 def clean_json(raw: str) -> dict[str, Any]:
-    """Remove <think>...</think>, markdown fences, e extrai o JSON."""
-    text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-    if "```" in text:
-        for part in text.split("```"):
-            part = part.strip()
-            if part.startswith("json"):
-                part = part[4:].strip()
-            if part.startswith("{"):
-                text = part
-                break
-    s, e = text.find("{"), text.rfind("}") + 1
-    if s == -1 or e <= s:
-        raise ValueError("JSON delimiters not found in response")
-    return json.loads(text[s:e])
+    """Recover JSON first, falling back to Nanonets-style HTML tables."""
+    return parse_ocr_response(raw)
 
 
 # ── Cliente Ollama ────────────────────────────────────────────────────────────
@@ -270,8 +261,8 @@ def ollama_request(image_b64: str) -> tuple[str | None, dict[str, Any]]:
         "keep_alive": -1,
         "options": {"temperature": TEMPERATURE, "num_predict": NUM_PREDICT},
     }
-    # Disable thinking for hybrid models (Qwen3 family). Without this, some
-    # builds emit extra reasoning tokens that degrade JSON output and latency.
+    # Disable thinking when the model/runtime supports it. Runtimes that
+    # ignore the option keep working; models that honour it return cleaner JSON.
     if os.environ.get("OCR_NO_THINK", "").lower() in ("1", "true", "yes"):
         payload["think"] = False
     data = json.dumps(payload).encode("utf-8")
@@ -420,7 +411,12 @@ def process_image(
     last_err: Exception | None = None
     for json_attempt in range(MAX_RETRIES + 1):
         try:
-            extracted = clean_json(raw)
+            extracted = parse_ocr_response(
+                raw,
+                row_fields=row_fields,
+                header_fields=header_fields,
+                footer_fields=footer_fields,
+            )
             break
         except (json.JSONDecodeError, ValueError) as e:
             last_err = e
@@ -457,6 +453,11 @@ def process_image(
         header_fields=header_fields,
         footer_fields=footer_fields,
     )
+    if html_table_detected(raw) and not normalized["rows"] and (row_fields or ROW_FIELDS):
+        metrics.status = "erro_json"
+        metrics.error = "HTML table detected but no mappable production rows"
+        log.error(f"  ✗ {metrics.error}")
+        return result
     result.header = normalized["header"]
     result.rows = normalized["rows"]
     result.footer = normalized["footer"]

@@ -34,7 +34,7 @@ class Settings(BaseSettings):
         ),
     )
     vllm_model: str = Field(
-        default="qwen3-vl:8b",
+        default="yasserrmd/Nanonets-OCR2-3B:latest",
         description=(
             "Model name as known to the inference engine. Defaults to the "
             "same Ollama vision model used by the OCR path. For a true vLLM "

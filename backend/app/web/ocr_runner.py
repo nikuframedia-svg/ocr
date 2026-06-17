@@ -27,13 +27,13 @@ _REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO))
 sys.path.insert(0, str(_REPO / "backend"))
 
-import json  # R132 — parse Pass-1.5 side-detect response
 import sys  # R132 — side-detect failure log
 from typing import Final  # R132
 
 import ocr6  # type: ignore  # noqa: E402
 
 from app.dq.alignment import check_and_fix_alignment  # noqa: E402
+from app.pipeline.inference.response_parser import detect_fustes_side  # noqa: E402
 from app.pipeline.prompt_builder import (  # noqa: E402
     build_prompt,
     build_side_detect_prompt,
@@ -95,20 +95,7 @@ def _detect_side(image_path: Path) -> str:
     raw = getattr(result, "raw_response", "") or ""
     if not raw:
         return "F"
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        # Modelo devolveu texto com markdown ou prefix — tentar extrair {…}
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            return "F"
-        try:
-            parsed = json.loads(raw[start:end + 1])
-        except json.JSONDecodeError:
-            return "F"
-    side = str(parsed.get("side", "F")).strip().upper()
-    return side if side in ("F", "V") else "F"
+    return detect_fustes_side(raw) or "F"
 
 
 def _run_ocr(image_path: Path, template: Any = None) -> dict:

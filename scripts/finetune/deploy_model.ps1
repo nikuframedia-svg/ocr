@@ -33,6 +33,6 @@ ollama create kanban-9b -f $modelfile
 
 Write-Host ""
 Write-Host "Modelo 'kanban-9b' criado no Ollama."
-Write-Host "Para o usar: no .env, muda  OCR_MODEL=qwen3-vl:8b  para  OCR_MODEL=kanban-9b"
+Write-Host "Para o usar: no .env, muda  OCR_MODEL=yasserrmd/Nanonets-OCR2-3B:latest  para  OCR_MODEL=kanban-9b"
 Write-Host "e corre o update.ps1."
-Write-Host "E REVERSIVEL: se o novo for pior, volta a por qwen3-vl:8b e reinicia."
+Write-Host "E REVERSIVEL: se o novo for pior, volta a por yasserrmd/Nanonets-OCR2-3B:latest e reinicia."

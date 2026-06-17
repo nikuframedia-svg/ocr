@@ -7,10 +7,9 @@ extraction.
 """
 from __future__ import annotations
 
-import json
-
 import pytest
-from app.pipeline.inference.vllm_client import _clean_json
+from app.pipeline.inference.vllm_client import _clean_json, _section_payload
+from app.pipeline.inference.response_parser import OCRResponseParseError
 
 
 def test_plain_json() -> None:
@@ -58,12 +57,12 @@ def test_handles_nested_objects() -> None:
 
 
 def test_invalid_json_raises() -> None:
-    with pytest.raises(json.JSONDecodeError):
+    with pytest.raises(OCRResponseParseError):
         _clean_json('{"a": 1,')
 
 
 def test_no_json_at_all_raises() -> None:
-    with pytest.raises(json.JSONDecodeError):
+    with pytest.raises(OCRResponseParseError):
         _clean_json("just some text without any json")
 
 
@@ -90,3 +89,34 @@ def test_repairs_missing_comma_between_array_objects() -> None:
 def test_repair_does_not_corrupt_already_valid_json() -> None:
     raw = '{"rows": [{"of": "111111"}, {"of": "222222"}]}'
     assert _clean_json(raw) == {"rows": [{"of": "111111"}, {"of": "222222"}]}
+
+
+def test_html_table_fallback() -> None:
+    raw = """
+    <table>
+      <tr><th>PRI</th><th>CLIENTE</th><th>OF</th><th>MODELO</th><th>QTD</th></tr>
+      <tr><td>1</td><td>ELECNOR</td><td>256690</td><td>U522</td><td>3</td></tr>
+    </table>
+    """
+    parsed = _clean_json(raw)
+    assert parsed["rows"][0]["cliente"] == "ELECNOR"
+    assert parsed["rows"][0]["of"] == "256690"
+
+
+def test_section_payload_unwraps_canonical_header_payload() -> None:
+    payload = {
+        "header": {"operador": "José", "data": "16-06-2026"},
+        "rows": [{"of": "263472"}],
+        "footer": {},
+    }
+
+    assert _section_payload(payload, "header") == {
+        "operador": "José",
+        "data": "16-06-2026",
+    }
+
+
+def test_section_payload_keeps_flat_crop_payload() -> None:
+    payload = {"operador": "José", "data": "16-06-2026"}
+
+    assert _section_payload(payload, "header") == payload
