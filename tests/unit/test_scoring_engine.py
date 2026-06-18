@@ -1924,8 +1924,11 @@ class TestGlobalWinnerScoring:
             assert fields[field]["status"] == "snapped"
             assert fields[field]["source"] == "plan"
 
-    def test_of_ov_conflict_without_support_still_uses_minimum_winner(self):
-        """Com política de maio, uma OF exata já pode preencher a linha."""
+    def test_of_ov_conflict_withholds_disputed_fields(self):
+        """R218 — OF (262107) e OV (2410002) apontam para linhas DIFERENTES
+        (262108 tem essa OV): conflito de identidade. A OF confirma (o OCR bate
+        com o winner), mas os campos onde as duas linhas discordam NÃO são
+        preenchidos às cegas — ficam para revisão (guarda de ambiguidade)."""
         sheet_data = {
             "template_name": "bobine_formato", "header": {}, "footer": {},
             "rows": [{"of": "262107", "ov": "2410002"}],
@@ -1936,14 +1939,18 @@ class TestGlobalWinnerScoring:
 
         assert scoring["rows"][0]["winner_of"] == "262107"
         assert scoring["rows"][0]["winner_score"] >= 1
-        assert scoring["rows"][0]["identity_conflict"] is False
+        # OF: o OCR confirma o winner → verde.
         assert fields["of"]["value"] == "262107"
         assert fields["of"]["status"] == "confirmed"
-        assert fields["ov"]["value"] == "2410001"
-        assert fields["ov"]["status"] == "snapped"
-        for field in ("cliente", "modelo", "comp_mm", "esp", "lbase", "ltopo"):
-            assert fields[field]["status"] == "snapped"
-            assert fields[field]["source"] == "plan"
+        # OV: o OCR (2410002) não bate com o winner (2410001) e as linhas
+        # discordam → mantém o OCR para revisão, NÃO substitui.
+        assert fields["ov"]["value"] == "2410002"
+        assert fields["ov"]["status"] == "very_different"
+        # Campos vazios onde as linhas discordam de forma significativa: não
+        # inventar a partir de um winner arbitrário (ficam NA, sem valor).
+        for field in ("cliente", "modelo", "comp_mm", "esp"):
+            assert fields[field]["value"] == ""
+            assert fields[field]["status"] == "NA"
 
     def test_single_exact_of_can_fill_row_in_expedicao(self):
         """No modo maio, uma OF isolada pode escolher winner e preencher."""
@@ -3481,3 +3488,97 @@ class TestR217NumericJunkSubstitution:
 
         assert cell["value"] == "1500"
         assert "auto_apply" not in cell
+
+
+class TestR218WinnerMixAndAmbiguityGuard:
+    """R218 — winner por MISTURA (contagem de acertos + soma graduada) e guarda
+    de ambiguidade (rivais quase-empatados que discordam num campo → não
+    substituir esse campo)."""
+
+    def test_mix_prefers_more_exact_matches_over_higher_fuzzy_sum(self):
+        """A linha que bate CERTO em mais campos vence a que só soma muitos
+        quase-acertos — ao contrário da soma pura (que escolheria a 262108)."""
+        refs = {
+            "available": True,
+            "of_to_entries": {
+                # A: 3 acertos exatos (cliente, comp, larg), resto longe → soma 3.0
+                "262107": [{
+                    "ov": "A1", "cliente": "ELECNOR", "designacao": "LINHA A",
+                    "comp": 1000, "larg": 200, "lbase": 9999, "ltopo": 9999, "esp": 99.0,
+                }],
+                # B: 1 exato (cliente) + 5 quase-acertos a 0.6 → soma 4.0 (> A!)
+                "262108": [{
+                    "ov": "B1", "cliente": "ELECNOR", "designacao": "LINHA B",
+                    "comp": 1070, "larg": 214, "lbase": 114, "ltopo": 74, "esp": 3.45,
+                }],
+            },
+            "clientes_plan": frozenset({"ELECNOR"}),
+            "lotes_sap_full": {},
+        }
+        idx = _get_indices(refs)
+        row = {
+            "cliente": "ELECNOR", "comp_mm": "1000", "larg_mm": "200",
+            "lbase": "100", "ltopo": "60", "esp": "3,0",
+        }
+
+        winner = _find_winner_entry({}, row, refs, idx)
+
+        assert winner is not None
+        # MISTURA escolhe A (3 acertos certos), não B (soma maior mas 1 acerto).
+        assert winner["_of"] == "262107"
+        assert winner["_exact_score"] == 3
+
+    def test_ambiguity_guard_withholds_disputed_fields(self):
+        """Duas linhas com a MESMA OF e o resto ilegível: a OF confirma, mas
+        modelo/comp (onde as candidatas discordam) NÃO são substituídos."""
+        refs = {
+            "available": True,
+            "of_to_entries": {
+                "262107": [
+                    {"ov": "A1", "cliente": "X", "designacao": "POLE-A", "comp": 6000},
+                    {"ov": "A2", "cliente": "X", "designacao": "POLE-B", "comp": 8000},
+                ],
+            },
+            "clientes_plan": frozenset({"X"}),
+            "lotes_sap_full": {},
+        }
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"of": "262107", "modelo": "", "comp_mm": ""}],
+        }
+
+        scoring, *_ = shadow_score(sheet_data, None, refs)
+        fields = scoring["rows"][0]["fields"]
+
+        # OF: ambas as candidatas concordam → confirmada e substituída.
+        assert fields["of"]["value"] == "262107"
+        # modelo/comp: candidatas discordam → NÃO inventar (fica vazio, não POLE-*).
+        assert fields["modelo"]["value"] == ""
+        assert fields["modelo"]["value"] not in ("POLE-A", "POLE-B")
+        assert fields["comp_mm"]["value"] == ""
+
+    def test_clear_winner_still_substitutes_illegible_field(self):
+        """Sem ambiguidade (winner é líder claro), o R217 mantém-se: campo
+        numérico com OCR-lixo é substituído pelo valor do plano."""
+        refs = {
+            "available": True,
+            "of_to_entries": {
+                "262107": [
+                    {"ov": "A1", "cliente": "X", "designacao": "POLE-A", "comp": 6000},
+                    {"ov": "A2", "cliente": "X", "designacao": "POLE-B", "comp": 8000},
+                ],
+            },
+            "clientes_plan": frozenset({"X"}),
+            "lotes_sap_full": {},
+        }
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            # modelo bate POLE-A → L1 é líder claro (sem rival na margem).
+            "rows": [{"of": "262107", "modelo": "POLE-A", "comp_mm": "zzz"}],
+        }
+
+        scoring, *_ = shadow_score(sheet_data, None, refs)
+        comp = scoring["rows"][0]["fields"]["comp_mm"]
+
+        assert comp["value"] == "6000"
+        assert "auto_apply" not in comp

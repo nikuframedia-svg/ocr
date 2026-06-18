@@ -35,6 +35,10 @@ from app.dq.machines import machine_phase_from_setor, resolve_machine_from_setor
 
 _MIN_GLOBAL_WINNER_SCORE = 1.0
 
+# R218 — margem de "líder claro": rivais cujo `combined` está a <= esta margem
+# do melhor são considerados quase-empatados (entram na guarda de ambiguidade).
+_WINNER_MARGIN = 0.5
+
 _CLIENTE_STOPWORDS = frozenset({
     "GMBH", "SAS", "SARL", "SA", "S.A", "LDA", "LTD", "SL", "BV", "NV",
     "LIMITED", "UNIPESSOAL",
@@ -398,8 +402,13 @@ _STATUS_LABELS = {
 # OCR seja texto/lixo: removido o guarda de sintaxe numérica do R216 e a flag
 # `auto_apply=False` (review-only). O valor canónico do plan/SAP volta a
 # substituir sempre; a divergência só afeta a cor.
+# R218 — winner por MISTURA (contagem de acertos + soma graduada: campo certo
+# vale o dobro de um "parecido") + guarda de ambiguidade: quando rivais
+# quase-empatados discordam num campo, esse campo não é substituído
+# (auto_apply=False, review-only estreito por AMBIGUIDADE de winner — distinto
+# do guarda numérico do R216, que continua removido).
 # BUMP obrigatório: força regeneração dos cross-check JSON antigos.
-ENGINE_VERSION = "v18_R217"
+ENGINE_VERSION = "v19_R218"
 
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
@@ -1017,37 +1026,57 @@ def _best_scored_entry(
     current_phase: str | None,
     score_fields: set[str] | frozenset[str] | None = None,
 ) -> dict | None:
-    """Pick the global best plan entry.
+    """Escolhe a melhor entry do plan.
 
-    R213: no field can veto the winner. Each non-empty field contributes a
-    continuous score between 0 and 1, and the largest total wins. Exact/tolerant
-    matches are only a tie-breaker after the global score.
+    R218 — MISTURA contagem + soma: o critério principal é
+    ``combined = exact_score + global_score`` (um campo que bate certo vale o
+    dobro de um campo só "parecido"). A contagem domina; a soma graduada afina e
+    desempata. R213 mantém-se: nenhum campo veta, cada campo vale 0..1.
+    Os rivais quase-empatados (``combined`` a <= ``_WINNER_MARGIN`` do melhor)
+    ficam em ``winner['_rivals']`` para a guarda de ambiguidade.
     """
     from app.pipeline.of_consumption import remaining as _remaining
 
-    eligible: list[tuple[float, int, int, float, int, dict]] = []
+    eligible: list[tuple] = []
     for order, (k, e) in enumerate(entries_by_key.items()):
         if "_of" not in e:
             e = dict(e)
             e["_of"] = k[0]
         global_score, exact_score = _entry_global_score(e, row, refs, score_fields)
+        combined = exact_score + global_score
         phase_full = 1 if (current_phase and _phase_is_full(e, current_phase)) else 0
         # R138 — remaining consciente do setor (mesma medida do wizard).
         rem = _remaining(e, phase=current_phase)
         rem_sort = 9e9 if rem == float("inf") else rem
-        eligible.append((-global_score, -exact_score, phase_full, rem_sort, order, e))
+        eligible.append(
+            (-combined, -global_score, -exact_score, phase_full, rem_sort, order, e)
+        )
 
     if not eligible:
         return None
     eligible.sort()
-    best_neg_score, best_neg_exact, _best_phase_full, best_rem_sort, _best_order, best_entry = eligible[0]
-    if -best_neg_score < _MIN_GLOBAL_WINNER_SCORE:
+    best = eligible[0]
+    best_combined = -best[0]
+    best_global = -best[1]
+    best_exact = -best[2]
+    best_rem_sort = best[4]
+    if best_global < _MIN_GLOBAL_WINNER_SCORE:
         return None
-    winner = dict(best_entry)
-    winner["_score"] = round(float(-best_neg_score), 3)
-    winner["_exact_score"] = int(-best_neg_exact)
+    winner = dict(best[6])
+    winner["_score"] = round(float(best_global), 3)
+    winner["_exact_score"] = int(best_exact)
+    winner["_combined"] = round(float(best_combined), 3)
     if best_rem_sort < 9e9:
         winner["_remaining"] = best_rem_sort
+    # R218 — rivais quase-empatados (eligible já ordenado por combined desc).
+    rivals: list[dict] = []
+    for cand in eligible[1:]:
+        if best_combined - (-cand[0]) <= _WINNER_MARGIN:
+            rivals.append(cand[6])
+        else:
+            break
+    if rivals:
+        winner["_rivals"] = rivals
     return winner
 
 
@@ -1366,6 +1395,57 @@ def _field_ref_source(field: str, refs: dict | None = None, row: dict | None = N
     return "plan"
 
 
+def _entry_field_canonical(field: str, entry: dict, template_name: str | None = None) -> str:
+    """Valor canónico que uma entry do plan proporia para `field` (espelha a
+    extração do winner em _apply_winner_to_field). "" se a entry não tem dado."""
+    if field == "of":
+        return str(entry.get("_of") or entry.get("of") or "").strip()
+    if field == "ov":
+        return str(entry.get("ov") or "").strip()
+    if field == "modelo":
+        des = " ".join(str(entry.get("designacao") or "").split())
+        if not des:
+            return ""
+        if template_name == "acabamento":
+            return _model_first_token(des) or des
+        return des
+    if field == "cliente":
+        return str(entry.get("cliente") or "").strip()
+    plan_attr = {
+        "comp_mm": "comp", "larg_mm": "larg", "lbase": "lbase",
+        "ltopo": "ltopo", "esp": "esp", "dbase": "dbase", "dtopo": "dtopo",
+    }.get(field)
+    if plan_attr:
+        v = entry.get(plan_attr)
+        return str(v) if v not in (None, "") else ""
+    return ""
+
+
+def _canonical_values_disagree(field: str, a: str, b: str) -> bool:
+    """True se dois valores canónicos divergem significativamente. Números:
+    diferença acima da tolerância do campo. Texto: diferente após normalização."""
+    na, nb = _num(a), _num(b)
+    if na is not None and nb is not None:
+        return abs(na - nb) > _VERY_DIFF_NUM_ABS.get(field, 0.0)
+    return _format_value(field, a).strip().upper() != _format_value(field, b).strip().upper()
+
+
+def _winner_ambiguous_for_field(
+    field: str, proposed: str, winner: dict, template_name: str | None = None
+) -> bool:
+    """R218 — guarda de ambiguidade: True se algum rival quase-empatado propõe,
+    neste campo, um valor canónico diferente do do winner. Nesse caso o motor
+    não deve substituir o OCR — fica para revisão humana."""
+    rivals = winner.get("_rivals") or []
+    if not rivals or not proposed:
+        return False
+    for rival in rivals:
+        rv = _entry_field_canonical(field, rival, template_name)
+        if rv and _canonical_values_disagree(field, proposed, rv):
+            return True
+    return False
+
+
 def _apply_winner_to_field(
     field: str,
     ocr_value: str,
@@ -1509,6 +1589,32 @@ def _apply_winner_to_field(
         return _make_cell(ocr_value, "NA", "ocr_raw")
 
     score = winner.get("_score") if winner else None
+
+    # R218 — guarda de ambiguidade: se o winner não é líder claro e os rivais
+    # quase-empatados DISCORDAM neste campo, só substituímos se o OCR confirmar
+    # o winner. Se o OCR não confirma (vazio ou diferente), não inventar a
+    # partir de um winner arbitrário — fica para revisão.
+    if (
+        winner is not None
+        and proposed
+        and _winner_ambiguous_for_field(field, proposed, winner, template_name)
+        and (_entry_field_similarity(field, winner, row, refs) or 0.0) < 1.0
+    ):
+        proposed_fmt = _format_value(field, proposed)
+        ocr_fmt = _format_value(field, ocr_value)
+        if not ocr_fmt:
+            # Campo vazio + ambíguo: não inventar — NA com a ref no tooltip.
+            return _make_cell(
+                "", "NA", "ocr_raw", proposed=proposed_fmt, ref_source="plan",
+            )
+        # OCR presente mas não confirma o winner: mantém OCR, mostra ref,
+        # não auto-aplica (revisão humana).
+        return _make_cell(
+            ocr_fmt, "very_different", "ocr_raw",
+            proposed=proposed_fmt, ref_source="plan",
+            auto_apply=False, score=score,
+        )
+
     if field == "cliente" and ocr_value:
         if winner is not None:
             return _finish_cell(
@@ -2162,7 +2268,8 @@ def _to_legacy_cell(v5_cell: dict, ref_value: str | None = None) -> dict:
     R124: expõe também `source` ("plan", "sap", "lexicon", "ocr_raw") para
     a UI/audit trail distinguir propostas vindas de refs do fallback OCR.
 
-    Propaga `score` e usa `proposed` como `ref` para tooltip de referência.
+    Propaga `score`, `auto_apply` (R218 — guarda de ambiguidade) e usa
+    `proposed` como `ref` para tooltip de referência.
     """
     v5_status = v5_cell.get("status", "NA")
     legacy_status = _V5_TO_LEGACY.get(v5_status, "NA")
@@ -2176,6 +2283,9 @@ def _to_legacy_cell(v5_cell: dict, ref_value: str | None = None) -> dict:
         "ref_source": v5_cell.get("ref_source") or v5_cell.get("source"),
         "score": v5_cell.get("score"),
     }
+    # R218 — célula ambígua (rivais discordam): mostra ref mas não auto-aplica.
+    if v5_cell.get("auto_apply") is False:
+        out["auto_apply"] = False
     # Ref para tooltip de referência: prioriza `proposed`,
     # depois `ref_value` legado, depois `value`.
     if "proposed" in v5_cell:

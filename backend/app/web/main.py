@@ -464,6 +464,10 @@ def _maybe_apply_snap(
     # R125 — obra concluída no plan: operador investiga, não auto-substituir.
     if cell.get("source") == "obra_concluida":
         return False
+    # R218 — winner ambíguo (rivais quase-empatados discordam neste campo):
+    # mostra a referência mas não auto-substitui; fica para revisão humana.
+    if cell.get("auto_apply") is False:
+        return False
     engine_status = cell.get("engine_status")
     source = cell.get("source")
     ref_source = cell.get("ref_source") or source
