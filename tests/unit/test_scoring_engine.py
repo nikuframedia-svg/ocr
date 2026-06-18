@@ -412,9 +412,13 @@ class TestShadowScore:
             ({"lote": "M26B0307", "esp": "ABC"}, "esp", "2,6", "sap"),
         ],
     )
-    def test_invalid_numeric_ocr_never_autosnaps_to_reference(
+    def test_invalid_numeric_ocr_substitutes_reference(
         self, row, field, ref_value, ref_source
     ):
+        """R217 (30/05) — substitute-everything: OCR ilegível ("ABC") num campo
+        numérico é substituído pelo valor canónico do plan/SAP. Como o OCR não
+        é numérico, fica `snapped` (verde/Substituído), o estado que garante o
+        auto-apply, e não review-only vermelho como no R216."""
         from app.pipeline.scoring_engine import cross_check_sheet
 
         sheet_data = {
@@ -427,22 +431,16 @@ class TestShadowScore:
         result = cross_check_sheet(sheet_data, None, _REFS)
         cell = result["rows"][0]["fields"][field]
 
-        assert cell["value"] == "ABC"
-        assert cell["status"] == "NO_MATCH"
+        # Valor passa a ser o canónico (não fica "ABC") e é snapped/auto-aplicável.
+        assert cell["value"] == ref_value
+        assert cell["status"] == "MATCH"
+        assert cell["snapped"] is True
         assert cell["ref_source"] == ref_source
-        expected_ref = ref_value
-        expected_reason = "Motor propõe valor muito diferente do OCR"
-        assert cell.get("ref", "") == expected_ref
-        assert {
-            "section": "rows",
-            "row_index": 0,
-            "field": field,
-            "field_path": f"rows[0].{field}",
-            "value": "ABC",
-            "ref": expected_ref,
-            "ref_source": ref_source,
-            "reason": expected_reason,
-        } in result["to_analisar"]
+        # Snapped não vai para a fila to_analisar (essa é só para NO_MATCH).
+        assert not any(
+            item["field_path"] == f"rows[0].{field}"
+            for item in result["to_analisar"]
+        )
 
     def test_larg_mm_stocksap_over_10mm_substitutes_reference(self):
         from app.pipeline.scoring_engine import cross_check_sheet
@@ -3451,3 +3449,35 @@ class TestR132MaqFustes:
         assert "PRI" in prompt
         assert "MOTIVO DA PARAGEM" in prompt
         assert '"side"' in prompt
+
+
+class TestR217NumericJunkSubstitution:
+    """R217 (restore 30/05) — substitute-everything também em campos numéricos
+    cujo OCR seja texto/lixo. Removido o guarda de sintaxe numérica do R216 e a
+    célula review-only com `auto_apply=False`: o valor canónico do plan/SAP
+    volta a substituir sempre; a divergência só afeta a cor."""
+
+    def test_garbage_ocr_in_numeric_field_is_substituted_by_plan(self):
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{
+                "cliente": "ELECNOR", "ov": "2410001", "of": "262107",
+                "modelo": "OMEGA 1200 H", "comp_mm": "ABC",
+            }],
+        }
+        scoring, *_ = shadow_score(sheet_data, None, _REFS)
+        comp = scoring["rows"][0]["fields"]["comp_mm"]
+
+        # O valor canónico do plan substitui o OCR ilegível (não fica "ABC").
+        assert comp["value"] == "1200"
+        assert comp["source"] == "plan"
+        # Já não existe a flag review-only que bloqueava o auto-apply (R216).
+        assert "auto_apply" not in comp
+
+    def test_finish_cell_substitutes_value_for_non_numeric_ocr(self):
+        from app.pipeline.scoring_engine import _finish_cell
+
+        cell = _finish_cell("comp_mm", "abc", "1500", "plan", 5)
+
+        assert cell["value"] == "1500"
+        assert "auto_apply" not in cell

@@ -173,7 +173,7 @@ class TestMaybeApplySnapProtected:
         sheet = db.get_sheet(sid)
         assert sheet["sheet_data"]["rows"][0]["modelo"] == "CANONICO"
 
-    @pytest.mark.parametrize("source", [None, "ocr_raw", "syntax"])
+    @pytest.mark.parametrize("source", [None, "ocr_raw", "syntax", "obra_concluida"])
     def test_very_different_without_concrete_ref_does_not_auto_apply(
         self, tmp_db, source
     ):
@@ -195,6 +195,99 @@ class TestMaybeApplySnapProtected:
         assert applied is False
         sheet = db.get_sheet(sid)
         assert sheet["sheet_data"]["rows"][0]["modelo"] == "OCR_ORIG"
+
+    @pytest.mark.parametrize("source", ["plan", "sap", "maquinas", "colaboradores", "ferramenta"])
+    def test_very_different_with_concrete_source_auto_applies(
+        self, tmp_db, source
+    ):
+        """Fontes concretas seguem 30/05: escrevem o valor canónico."""
+        sid = db.insert_sheet("test.jpg")
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"modelo": "OCR_ORIG"}],
+        }
+        db.update_extraction(sid, sheet_data, {}, sheet_data)
+        cell = {
+            "engine_status": "very_different",
+            "value": "CANONICO",
+            "source": source,
+        }
+
+        applied = main._maybe_apply_snap(sid, "rows[0].modelo", cell, frozenset())
+
+        assert applied is True
+        sheet = db.get_sheet(sid)
+        assert sheet["sheet_data"]["rows"][0]["modelo"] == "CANONICO"
+
+    @pytest.mark.parametrize("ref_source", ["plan", "sap", "maquinas", "colaboradores"])
+    def test_very_different_with_concrete_ref_source_uses_ref(
+        self, tmp_db, ref_source
+    ):
+        """Quando o legado preserva OCR mas traz ref concreta, aplica a ref."""
+        sid = db.insert_sheet("test.jpg")
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"modelo": "OCR_ORIG"}],
+        }
+        db.update_extraction(sid, sheet_data, {}, sheet_data)
+        cell = {
+            "engine_status": "very_different",
+            "value": "OCR_ORIG",
+            "source": "ocr_raw",
+            "ref_source": ref_source,
+            "ref": "CANONICO",
+        }
+
+        applied = main._maybe_apply_snap(sid, "rows[0].modelo", cell, frozenset())
+
+        assert applied is True
+        sheet = db.get_sheet(sid)
+        assert sheet["sheet_data"]["rows"][0]["modelo"] == "CANONICO"
+
+    def test_ferramenta_review_label_is_not_auto_applied(self, tmp_db):
+        """CONI inválido expõe uma regra, não um canónico determinístico."""
+        sid = db.insert_sheet("test.jpg")
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"coni": "XYZ"}],
+        }
+        db.update_extraction(sid, sheet_data, {}, sheet_data)
+        cell = {
+            "engine_status": "very_different",
+            "value": "XYZ",
+            "source": "ocr_raw",
+            "ref_source": "ferramenta",
+            "ref": "CONI, TORRES, OCT, CIL, CIO, CIB",
+        }
+
+        applied = main._maybe_apply_snap(sid, "rows[0].coni", cell, frozenset())
+
+        assert applied is False
+        sheet = db.get_sheet(sid)
+        assert sheet["sheet_data"]["rows"][0]["coni"] == "XYZ"
+
+    def test_concrete_ref_auto_applies_even_for_invalid_numeric_ocr(self, tmp_db):
+        """R217 (30/05): texto/lixo num campo numérico volta a ser substituído
+        pela ref concreta do plan/SAP — sem o travão `auto_apply` do R216."""
+        sid = db.insert_sheet("test.jpg")
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"comp_mm": "ABC"}],
+        }
+        db.update_extraction(sid, sheet_data, {}, sheet_data)
+        cell = {
+            "engine_status": "very_different",
+            "value": "ABC",
+            "source": "ocr_raw",
+            "ref_source": "plan",
+            "ref": "1200",
+        }
+
+        applied = main._maybe_apply_snap(sid, "rows[0].comp_mm", cell, frozenset())
+
+        assert applied is True
+        sheet = db.get_sheet(sid)
+        assert sheet["sheet_data"]["rows"][0]["comp_mm"] == "1200"
 
 
 class TestShadowRunCounters:
@@ -425,9 +518,32 @@ class TestEditPersistsEndToEnd:
         sheet = db.get_sheet(sid)
         assert sheet["sheet_data"]["rows"][0]["modelo"] == "OMEGA 1200 H"
 
-    def test_acabamento_reference_survives_re_cross_check(self, tmp_db, monkeypatch):
-        """Acabamento: REFERÊNCIA/PEÇA do operador não é substituída pela
-        designação completa do plan durante o auto-overwrite."""
+    def test_invalid_numeric_ocr_is_overwritten_by_ref(self, tmp_db, monkeypatch):
+        """R217 (30/05): texto/lixo num campo numérico volta a ser substituído
+        pelo valor canónico do plan (substitute-everything), não fica para
+        revisão como no R216."""
+        monkeypatch.setattr(main, "get_watcher", lambda: _FakeWatcher())
+        monkeypatch.setattr(main, "store_cross_check", lambda *a, **k: {})
+
+        sid = db.insert_sheet("t.jpg")
+        sheet_data = {
+            "template_name": "bobine_formato",
+            "header": {"operador": "", "data": "10-05-2026"},
+            "footer": {},
+            "rows": [{
+                "cliente": "ELECNOR", "ov": "2410001", "of": "262107",
+                "modelo": "OMEGA 1200 H", "comp_mm": "ABC",
+            }],
+        }
+        db.update_extraction(sid, sheet_data, {}, sheet_data)
+
+        main._run_and_store_cross_check(sid)
+
+        sheet = db.get_sheet(sid)
+        assert sheet["sheet_data"]["rows"][0]["comp_mm"] == "1200"
+
+    def test_acabamento_reference_is_overwritten_by_cross_check(self, tmp_db, monkeypatch):
+        """Acabamento volta à política de 30/05: winner concreto substitui."""
         monkeypatch.setattr(main, "get_watcher", lambda: _FakeWatcher())
         monkeypatch.setattr(main, "store_cross_check", lambda *a, **k: {})
 
@@ -447,4 +563,4 @@ class TestEditPersistsEndToEnd:
         main._run_and_store_cross_check(sid)
 
         sheet = db.get_sheet(sid)
-        assert sheet["sheet_data"]["rows"][0]["modelo"] == "PEÇA-X"
+        assert sheet["sheet_data"]["rows"][0]["modelo"] == "OMEGA 1200 H"

@@ -292,11 +292,14 @@ _STATUS_LABELS = {
 # R146 — header.setor_maquina/cod_maquina validam contra maquinas.xlsx e
 # contra a combinação esperada setor→codmaq.
 # R147 — separa origem do valor (`source`) da origem da referência
-# (`ref_source`) em células OCR-preservadas.
+# (`ref_source`) em células com referência explícita.
 # R148 — contador top-level `snapped` deixa de incluir `very_different`.
-# R149 — lote parecido em SAP vira revisão; nunca auto-substituição.
-# R150 — identidade escrita (of/ov/cliente) preserva OCR; plan fica em ref.
-# R151 — qualquer `very_different` preserva OCR; proposta fica em ref.
+# R149 — lote parecido em SAP vira revisão com ref concreta; pode ser
+# auto-substituído no ciclo de 30/05.
+# R150 — identidade escrita (of/ov/cliente) volta a carregar o canónico quando
+# existe winner/ref concreta.
+# R151 — `very_different` com ref concreta segue substitute-everything; OCR só
+# é preservado quando não há canónico seguro.
 # R152 — legado: autosnap já não depende de âncora OF/OV; o winner global
 # propõe refs e cada célula decide o estado pela diferença local.
 # R153 — legado: sem pool de referência (plan/SAP vazio) ficava NA para não
@@ -391,8 +394,12 @@ _STATUS_LABELS = {
 # R216 — campos preenchidos deixam de cair em NA neutro quando podem ser
 # validados por regra/sintaxe; modelo deixa de bloquear por conflito numérico
 # interno (ex.: 1200 vs 1500).
+# R217 (restore 30/05) — substitute-everything também em campos numéricos cujo
+# OCR seja texto/lixo: removido o guarda de sintaxe numérica do R216 e a flag
+# `auto_apply=False` (review-only). O valor canónico do plan/SAP volta a
+# substituir sempre; a divergência só afeta a cor.
 # BUMP obrigatório: força regeneração dos cross-check JSON antigos.
-ENGINE_VERSION = "v17_R216"
+ENGINE_VERSION = "v18_R217"
 
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
@@ -1196,60 +1203,30 @@ def _finish_cell(
     proposed: str,
     source: str,
     score: float | int | None,
-    *,
-    fill_different: bool = False,
 ) -> dict:
     """Formata o valor proposto, decide o estado vs o OCR, devolve a célula.
 
-    O valor devolvido é a proposta formatada para `confirmed`/`snapped`.
-    Quando `fill_different=True`, `very_different` também carrega a proposta
-    concreta (modo R134/R135). Sem essa flag, preserva OCR e guarda a proposta
-    em `proposed`.
+    R134/R135 (30/05): quando há proposta concreta, o `value` devolvido é o
+    canónico. `very_different` é um estado intermédio para revisão/auto-apply,
+    não um motivo para preservar OCR dentro da célula validada.
     """
     proposed_fmt = _format_value(field, proposed)
     ocr_fmt = _format_value(field, ocr_value)
 
-    if (
-        field in ("comp_mm", "larg_mm", "lbase", "ltopo", "dbase", "dtopo", "esp")
-        and ocr_value
-        and proposed_fmt
-        and not _num_variants(field, ocr_value)
-    ):
-        # Texto/lixo num campo numérico é problema de sintaxe, não correção
-        # segura pelo plan/SAP. Mantém o OCR para revisão e evita auto-apply.
-        return _preserve_ocr_with_ref(field, ocr_value, proposed, source, score)
-
+    # R217 (30/05) — substitute-everything: havendo proposta concreta do
+    # plan/SAP, o valor canónico substitui sempre o OCR, mesmo em campos
+    # numéricos cujo OCR seja texto/lixo. Removido o guarda de sintaxe
+    # numérica do R216 (que preservava o OCR e bloqueava auto-apply); a única
+    # coisa que a divergência afeta é a cor (very_different/vermelho).
     if proposed_fmt and ocr_fmt and proposed_fmt.upper() == ocr_fmt.upper():
         status = "confirmed"
     elif not ocr_value:
         status = "snapped"  # autofill
     elif _is_very_different(field, ocr_value, proposed):
-        if fill_different and source not in (None, "ocr_raw", "syntax", "obra_concluida"):
-            return _make_cell(proposed_fmt, "very_different", source=source, score=score)
-        return _preserve_ocr_with_ref(field, ocr_value, proposed, source, score)
+        status = "very_different"
     else:
         status = "snapped"
     return _make_cell(proposed_fmt, status, source=source, score=score)
-
-
-def _preserve_ocr_with_ref(
-    field: str,
-    ocr_value: str,
-    proposed: str,
-    ref_source: str,
-    score: float | int | None,
-) -> dict:
-    proposed_fmt = _format_value(field, proposed)
-    ocr_fmt = _format_value(field, ocr_value)
-    matches = bool(proposed_fmt and ocr_fmt and proposed_fmt.upper() == ocr_fmt.upper())
-    return _make_cell(
-        ocr_fmt,
-        "confirmed" if matches else "very_different",
-        "ocr_raw",
-        proposed=proposed_fmt,
-        ref_source=ref_source,
-        score=score,
-    )
 
 
 def _identifier_values_match(field: str, ocr_value: object, proposed: object) -> bool:
@@ -1443,12 +1420,10 @@ def _apply_winner_to_field(
                 and abs(ocr_larg_n - sap_larg_n) > _VERY_DIFF_NUM_ABS["larg_mm"]
             ):
                 return _finish_cell(
-                    field, ocr_value, str(sap_larg), "sap", None,
-                    fill_different=True,
+                    field, ocr_value, str(sap_larg), "sap", None
                 )
             return _finish_cell(
-                field, ocr_value, str(sap_larg), "sap", None,
-                fill_different=True,
+                field, ocr_value, str(sap_larg), "sap", None
             )
 
     if field == "esp":
@@ -1459,8 +1434,7 @@ def _apply_winner_to_field(
         sap_esp = sap_e.get("esp") if sap_e else None
         if ocr_value and sap_esp not in (None, ""):
             return _finish_cell(
-                field, ocr_value, str(sap_esp), "sap", None,
-                fill_different=True,
+                field, ocr_value, str(sap_esp), "sap", None
             )
 
     # --- Campos resolvidos pela entry vencedora do plan -----------------
@@ -1538,8 +1512,7 @@ def _apply_winner_to_field(
     if field == "cliente" and ocr_value:
         if winner is not None:
             return _finish_cell(
-                field, ocr_value, proposed, "plan", score,
-                fill_different=True,
+                field, ocr_value, proposed, "plan", score
             )
         if _cliente_values_match(ocr_value, proposed, refs):
             return _make_cell(
@@ -1551,15 +1524,13 @@ def _apply_winner_to_field(
                 score=score,
             )
         return _finish_cell(
-            field, ocr_value, proposed, "plan", score,
-            fill_different=False,
+            field, ocr_value, proposed, "plan", score
         )
 
     if field in ("of", "ov") and ocr_value:
         if winner is not None:
             return _finish_cell(
-                field, ocr_value, proposed, "plan", score,
-                fill_different=True,
+                field, ocr_value, proposed, "plan", score
             )
         if _identifier_values_match(field, ocr_value, proposed):
             return _make_cell(
@@ -1571,16 +1542,14 @@ def _apply_winner_to_field(
                 score=score,
             )
         return _finish_cell(
-            field, ocr_value, proposed, "plan", score,
-            fill_different=False,
+            field, ocr_value, proposed, "plan", score
         )
 
     # Acabamento TPL086: com winner global também mostra/aplica a referência
     # da melhor linha; se estiver distante, fica vermelho para revisão.
     if template_name == "acabamento" and field in ("of", "modelo") and ocr_value:
         return _finish_cell(
-            field, ocr_value, proposed, "plan", score,
-            fill_different=winner is not None,
+            field, ocr_value, proposed, "plan", score
         )
 
     proposed_fmt = _format_value(field, proposed)
@@ -1592,7 +1561,6 @@ def _apply_winner_to_field(
         field, ocr_value, proposed,
         source="plan",
         score=score,
-        fill_different=winner is not None,
     )
 
 
@@ -2194,8 +2162,7 @@ def _to_legacy_cell(v5_cell: dict, ref_value: str | None = None) -> dict:
     R124: expõe também `source` ("plan", "sap", "lexicon", "ocr_raw") para
     a UI/audit trail distinguir propostas vindas de refs do fallback OCR.
 
-    Propaga `score` e usa `proposed` como `ref` quando o motor preservou OCR
-    em desacordo — tooltip mostra a origem real da referência.
+    Propaga `score` e usa `proposed` como `ref` para tooltip de referência.
     """
     v5_status = v5_cell.get("status", "NA")
     legacy_status = _V5_TO_LEGACY.get(v5_status, "NA")
@@ -2209,9 +2176,8 @@ def _to_legacy_cell(v5_cell: dict, ref_value: str | None = None) -> dict:
         "ref_source": v5_cell.get("ref_source") or v5_cell.get("source"),
         "score": v5_cell.get("score"),
     }
-    # Ref para tooltip de referência: prioriza `proposed` (motor preservou
-    # OCR em disagreement), depois `ref_value` legado, depois
-    # `value` (snapped/very_different antigo).
+    # Ref para tooltip de referência: prioriza `proposed`,
+    # depois `ref_value` legado, depois `value`.
     if "proposed" in v5_cell:
         out["ref"] = v5_cell["proposed"]
     elif ref_value is not None:

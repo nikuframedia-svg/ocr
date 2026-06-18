@@ -23,14 +23,13 @@
 {# R52 F4: NA from stub-accept (suspended_by_stub) → cc-na-suspended (amarelo soft)
    to distinguish from NA vazio/sem valor (cinza neutro). #}
 {% set _is_suspended = cc_suspended_by_path is defined and cc_suspended_by_path.get(field_path) %}
-{% set _is_pending_cross = cc_pending_by_path is defined and cc_pending_by_path.get(field_path) %}
 {# R130: identidade única (of/ov/cliente). NO_MATCH passa a amarelo
    (cc-warn) em vez de vermelho — semântica "review me, não erro hard".
    R133: removido o override `_was_auto_substituted → cc-warn` (era
    demasiado abrangente — pintava de amarelo cells auto-corrigidas que
    ficaram CERTAS: operador snap, cod_maquina fill, modelo, dim). O fix
-   real vive no engine (`_preserve_ocr_with_ref` preserva OCR em
-   disagreement de of/ov/cliente → very_different → cc-warn aqui).
+   real vive no engine: refs concretas carregam o canónico e refs inseguras
+   continuam em revisão.
    R216: células preenchidas já não devem ficar NA por falta de ref; ou
    validam por regra local ou aparecem como revisão.
    O asterisco `*` (cc_snapped_by_path) continua a marcar auto-correcções
@@ -45,7 +44,6 @@
 {% if cc_status == 'MATCH' %}{% set cc_class = 'cc-match' %}
 {% elif cc_status == 'NO_MATCH' and (_is_dim_field or _is_id_field) %}{% set cc_class = 'cc-warn' %}
 {% elif cc_status == 'NO_MATCH' %}{% set cc_class = 'cc-no-match' %}
-{% elif cc_status == 'NA' and _is_pending_cross %}{% set cc_class = 'cc-warn' %}
 {% elif cc_status == 'NA' and _is_suspended %}{% set cc_class = 'cc-na-suspended' %}
 {% else %}{% set cc_class = 'cc-na' %}
 {% endif %}
