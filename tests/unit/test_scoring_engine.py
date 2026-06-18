@@ -1924,11 +1924,11 @@ class TestGlobalWinnerScoring:
             assert fields[field]["status"] == "snapped"
             assert fields[field]["source"] == "plan"
 
-    def test_of_ov_conflict_withholds_disputed_fields(self):
-        """R218 — OF (262107) e OV (2410002) apontam para linhas DIFERENTES
+    def test_of_ov_conflict_substitutes_winner_and_flags(self):
+        """R219 — OF (262107) e OV (2410002) apontam para linhas DIFERENTES
         (262108 tem essa OV): conflito de identidade. A OF confirma (o OCR bate
-        com o winner), mas os campos onde as duas linhas discordam NÃO são
-        preenchidos às cegas — ficam para revisão (guarda de ambiguidade)."""
+        com o winner). Os campos onde as duas linhas discordam são SUBSTITUÍDOS
+        pelo valor da linha vencedora (262107) mas marcados very_different."""
         sheet_data = {
             "template_name": "bobine_formato", "header": {}, "footer": {},
             "rows": [{"of": "262107", "ov": "2410002"}],
@@ -1943,14 +1943,16 @@ class TestGlobalWinnerScoring:
         assert fields["of"]["value"] == "262107"
         assert fields["of"]["status"] == "confirmed"
         # OV: o OCR (2410002) não bate com o winner (2410001) e as linhas
-        # discordam → mantém o OCR para revisão, NÃO substitui.
-        assert fields["ov"]["value"] == "2410002"
+        # discordam → SUBSTITUI pelo do vencedor e marca para revisão.
+        assert fields["ov"]["value"] == "2410001"
         assert fields["ov"]["status"] == "very_different"
-        # Campos vazios onde as linhas discordam de forma significativa: não
-        # inventar a partir de um winner arbitrário (ficam NA, sem valor).
+        # Campos vazios em disputa: preenchidos do vencedor (262107) + vermelho.
+        assert fields["cliente"]["value"] == "ELECNOR"
+        assert fields["cliente"]["status"] == "very_different"
+        assert fields["modelo"]["value"] == "OMEGA 1200 H"
+        assert fields["comp_mm"]["value"] == "1200"
         for field in ("cliente", "modelo", "comp_mm", "esp"):
-            assert fields[field]["value"] == ""
-            assert fields[field]["status"] == "NA"
+            assert fields[field]["status"] == "very_different"
 
     def test_single_exact_of_can_fill_row_in_expedicao(self):
         """No modo maio, uma OF isolada pode escolher winner e preencher."""
@@ -3528,9 +3530,10 @@ class TestR218WinnerMixAndAmbiguityGuard:
         assert winner["_of"] == "262107"
         assert winner["_exact_score"] == 3
 
-    def test_ambiguity_guard_withholds_disputed_fields(self):
-        """Duas linhas com a MESMA OF e o resto ilegível: a OF confirma, mas
-        modelo/comp (onde as candidatas discordam) NÃO são substituídos."""
+    def test_ambiguity_substitutes_winner_and_flags_red(self):
+        """R219 — duas linhas com a MESMA OF e o resto ilegível: a OF confirma;
+        modelo/comp (onde as candidatas discordam) são SUBSTITUÍDOS pelo valor
+        da linha vencedora mas marcados very_different (vermelho/rever)."""
         refs = {
             "available": True,
             "of_to_entries": {
@@ -3550,12 +3553,14 @@ class TestR218WinnerMixAndAmbiguityGuard:
         scoring, *_ = shadow_score(sheet_data, None, refs)
         fields = scoring["rows"][0]["fields"]
 
-        # OF: ambas as candidatas concordam → confirmada e substituída.
+        # OF: ambas as candidatas concordam → confirmada.
         assert fields["of"]["value"] == "262107"
-        # modelo/comp: candidatas discordam → NÃO inventar (fica vazio, não POLE-*).
-        assert fields["modelo"]["value"] == ""
-        assert fields["modelo"]["value"] not in ("POLE-A", "POLE-B")
-        assert fields["comp_mm"]["value"] == ""
+        # modelo/comp: candidatas discordam → SUBSTITUI pela vencedora (POLE-A /
+        # 6000, por desempate de ordem) e marca very_different para revisão.
+        assert fields["modelo"]["value"] == "POLE-A"
+        assert fields["modelo"]["status"] == "very_different"
+        assert fields["comp_mm"]["value"] == "6000"
+        assert fields["comp_mm"]["status"] == "very_different"
 
     def test_clear_winner_still_substitutes_illegible_field(self):
         """Sem ambiguidade (winner é líder claro), o R217 mantém-se: campo

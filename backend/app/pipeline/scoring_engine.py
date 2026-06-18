@@ -403,12 +403,14 @@ _STATUS_LABELS = {
 # `auto_apply=False` (review-only). O valor canónico do plan/SAP volta a
 # substituir sempre; a divergência só afeta a cor.
 # R218 — winner por MISTURA (contagem de acertos + soma graduada: campo certo
-# vale o dobro de um "parecido") + guarda de ambiguidade: quando rivais
-# quase-empatados discordam num campo, esse campo não é substituído
-# (auto_apply=False, review-only estreito por AMBIGUIDADE de winner — distinto
-# do guarda numérico do R216, que continua removido).
+# vale o dobro de um "parecido"). A deteção de ambiguidade (rivais
+# quase-empatados que discordam num campo) mantém-se.
+# R219 — substituir SEMPRE: em ambiguidade o sistema deixa de RETER (NA/keep-OCR
+# do R218) e passa a SUBSTITUIR pelo valor da linha vencedora, marcando
+# `very_different` (vermelho/rever) para o operador conferir. Removida a flag
+# `auto_apply` (já não há retenção). A ambiguidade só afeta a cor, não o valor.
 # BUMP obrigatório: força regeneração dos cross-check JSON antigos.
-ENGINE_VERSION = "v19_R218"
+ENGINE_VERSION = "v20_R219"
 
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
@@ -1590,10 +1592,12 @@ def _apply_winner_to_field(
 
     score = winner.get("_score") if winner else None
 
-    # R218 — guarda de ambiguidade: se o winner não é líder claro e os rivais
-    # quase-empatados DISCORDAM neste campo, só substituímos se o OCR confirmar
-    # o winner. Se o OCR não confirma (vazio ou diferente), não inventar a
-    # partir de um winner arbitrário — fica para revisão.
+    # R219 — guarda de ambiguidade: o winner não é líder claro (rivais
+    # quase-empatados DISCORDAM neste campo) e o OCR não confirma o winner
+    # (vazio ou diferente). O sistema SUBSTITUI sempre pelo valor da linha
+    # vencedora, mas marca `very_different` (vermelho/rever) para o operador
+    # conferir qual das linhas possíveis é a certa. Como `source="plan"`
+    # (concreta), o valor é auto-aplicado e a célula entra na fila to_analisar.
     if (
         winner is not None
         and proposed
@@ -1601,18 +1605,9 @@ def _apply_winner_to_field(
         and (_entry_field_similarity(field, winner, row, refs) or 0.0) < 1.0
     ):
         proposed_fmt = _format_value(field, proposed)
-        ocr_fmt = _format_value(field, ocr_value)
-        if not ocr_fmt:
-            # Campo vazio + ambíguo: não inventar — NA com a ref no tooltip.
-            return _make_cell(
-                "", "NA", "ocr_raw", proposed=proposed_fmt, ref_source="plan",
-            )
-        # OCR presente mas não confirma o winner: mantém OCR, mostra ref,
-        # não auto-aplica (revisão humana).
         return _make_cell(
-            ocr_fmt, "very_different", "ocr_raw",
-            proposed=proposed_fmt, ref_source="plan",
-            auto_apply=False, score=score,
+            proposed_fmt, "very_different", "plan",
+            proposed=proposed_fmt, ref_source="plan", score=score,
         )
 
     if field == "cliente" and ocr_value:
@@ -2268,8 +2263,7 @@ def _to_legacy_cell(v5_cell: dict, ref_value: str | None = None) -> dict:
     R124: expõe também `source` ("plan", "sap", "lexicon", "ocr_raw") para
     a UI/audit trail distinguir propostas vindas de refs do fallback OCR.
 
-    Propaga `score`, `auto_apply` (R218 — guarda de ambiguidade) e usa
-    `proposed` como `ref` para tooltip de referência.
+    Propaga `score` e usa `proposed` como `ref` para tooltip de referência.
     """
     v5_status = v5_cell.get("status", "NA")
     legacy_status = _V5_TO_LEGACY.get(v5_status, "NA")
@@ -2283,9 +2277,6 @@ def _to_legacy_cell(v5_cell: dict, ref_value: str | None = None) -> dict:
         "ref_source": v5_cell.get("ref_source") or v5_cell.get("source"),
         "score": v5_cell.get("score"),
     }
-    # R218 — célula ambígua (rivais discordam): mostra ref mas não auto-aplica.
-    if v5_cell.get("auto_apply") is False:
-        out["auto_apply"] = False
     # Ref para tooltip de referência: prioriza `proposed`,
     # depois `ref_value` legado, depois `value`.
     if "proposed" in v5_cell:
