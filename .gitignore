@@ -38,6 +38,7 @@ reports/runs/
 reports/extractions_*/
 reports/sap_validation/
 reports/dq_index/
+reports/mass_ocr_runs/
 reports/r42_baseline.json
 reports/round43_variants_results.json
 

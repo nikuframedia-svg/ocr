@@ -23,6 +23,7 @@ from __future__ import annotations
 import time
 import unicodedata
 from datetime import datetime, timezone
+from functools import lru_cache
 import re
 from itertools import product
 from typing import Any
@@ -44,6 +45,14 @@ _CLIENTE_STOPWORDS = frozenset({
     "LIMITED", "UNIPESSOAL",
 })
 
+_CLIENTE_OCR_TOKEN_ALIASES = {
+    "STACK": "ESTOQUE",
+    "STAEK": "ESTOQUE",
+    "STACA": "ESTOQUE",
+    "STOCK": "ESTOQUE",
+    "STOQUE": "ESTOQUE",
+}
+
 
 def _norm_ascii_upper(value: object) -> str:
     d = unicodedata.normalize("NFKD", str(value or ""))
@@ -54,7 +63,8 @@ def _cliente_tokens(value: object) -> tuple[str, ...]:
     norm = _norm_ascii_upper(value)
     cleaned = re.sub(r"[^A-Z0-9]+", " ", norm)
     return tuple(
-        tok for tok in cleaned.split()
+        _CLIENTE_OCR_TOKEN_ALIASES.get(tok, tok)
+        for tok in cleaned.split()
         if tok and tok not in _CLIENTE_STOPWORDS
     )
 
@@ -258,6 +268,36 @@ _PLAN_FIELDS = ("of", "ov", "modelo", "cliente", "comp_mm", "larg_mm",
 
 _TOP_K = 10
 
+_FORCED_WINNER_MIN_SIM = {
+    "cliente": 50.0,
+    "modelo": 50.0,
+    "of": 70.0,
+    "ov": 70.0,
+    "comp_mm": 80.0,
+    "larg_mm": 80.0,
+    "lbase": 80.0,
+    "ltopo": 80.0,
+    "esp": 80.0,
+    "dbase": 80.0,
+    "dtopo": 80.0,
+}
+_MIN_FORCED_WINNER_SCORE = 0.01
+_MIN_FORCED_TOP1_SCORE = -999.0
+
+_FIELD_SCORE_WEIGHTS = {
+    "of": 1.00,
+    "modelo": 0.90,
+    "ov": 0.80,
+    "cliente": 0.70,
+    "comp_mm": 0.40,
+    "larg_mm": 0.40,
+    "lbase": 0.40,
+    "ltopo": 0.40,
+    "esp": 0.40,
+    "dbase": 0.40,
+    "dtopo": 0.40,
+}
+
 # Thresholds de "muito diferente" — abaixo destes níveis, vermelho.
 _VERY_DIFF_STR_SIM = 50.0          # se sim < 50, é muito diferente
 _VERY_DIFF_NUM_ABS = {             # diferença absoluta > X = revisão humana
@@ -410,7 +450,13 @@ _STATUS_LABELS = {
 # `very_different` (vermelho/rever) para o operador conferir. Removida a flag
 # `auto_apply` (já não há retenção). A ambiguidade só afeta a cor, não o valor.
 # BUMP obrigatório: força regeneração dos cross-check JSON antigos.
-ENGINE_VERSION = "v20_R219"
+# R220 — winner forçado por candidatos reais: quando não há match forte mas
+# há candidato concreto vindo de cliente/modelo/OF/OV/dimensões, escolhe-se a
+# melhor linha candidata e deixa-se o cross preencher a linha toda.
+# R221 — melhor linha plausível: campos errados/vazios deixam de bloquear.
+# Linha não vazia com refs escolhe sempre strong/forced/forced_top1; valores
+# locais vazios com winner viram MATCH_REGRA_VAZIO em vez de NA.
+ENGINE_VERSION = "v21_R221"
 
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
@@ -439,20 +485,25 @@ def _lev_distance(a: str, b: str) -> int:
     return prev[-1]
 
 
-def _str_sim(target: str, candidate: str) -> float:
-    if not target or not candidate:
-        return 0.0
-    t = target.upper()
-    c = candidate.upper()
+@lru_cache(maxsize=500_000)
+def _str_sim_cached(t: str, c: str) -> float:
     if t == c:
         return 100.0
     if t in c or c in t:
         return 80.0
+    if len(t) > 3 and len(c) > 3 and not (set(t) & set(c)):
+        return 0.0
     d = _lev_distance(t, c)
     m = max(len(t), len(c))
     if d >= m:
         return 0.0
     return 100.0 * (1 - d / m)
+
+
+def _str_sim(target: str, candidate: str) -> float:
+    if not target or not candidate:
+        return 0.0
+    return _str_sim_cached(str(target).upper(), str(candidate).upper())
 
 
 def _num(v: Any) -> float | None:
@@ -695,9 +746,11 @@ def _entry_global_score(
     row: dict,
     refs: dict,
     score_fields: set[str] | frozenset[str] | None = None,
-) -> tuple[float, int]:
+) -> tuple[float, int, list[dict], float]:
     total = 0.0
+    raw_total = 0.0
     exact = 0
+    reasons: list[dict] = []
     fields = score_fields if score_fields is not None else _PLAN_FIELDS
     for field in fields:
         if field not in _PLAN_FIELDS:
@@ -705,10 +758,30 @@ def _entry_global_score(
         sim = _entry_field_similarity(field, entry, row, refs)
         if sim is None:
             continue
-        total += max(0.0, min(1.0, sim))
+        raw_total += max(0.0, min(1.0, sim))
+        weight = _FIELD_SCORE_WEIGHTS.get(field, 0.30)
+        clamped = max(0.0, min(1.0, sim))
+        contribution = clamped * weight
+        if sim <= 0.10:
+            contribution -= weight * 0.15
+        total += contribution
         if sim >= 1.0:
             exact += 1
-    return total, exact
+        reasons.append({
+            "field": field,
+            "sim": round(float(sim), 3),
+            "weight": weight,
+            "points": round(float(contribution), 3),
+        })
+    return total, exact, reasons, raw_total
+
+
+def _row_has_any_value(row: dict) -> bool:
+    return any(
+        str(v or "").strip()
+        for k, v in (row or {}).items()
+        if not str(k).startswith("_")
+    )
 
 
 # Normalização cosmética (única guarda mantida) -----------------------------
@@ -819,6 +892,30 @@ def _topk_keys_by_sim(target: str, pool: list[str], k: int) -> list[tuple[str, f
     return [(key, s) for s, key in scored[:k] if s > 0]
 
 
+def _topk_by_similarity(
+    pool: list[str],
+    similarity_fn,
+    k: int,
+) -> list[tuple[str, float]]:
+    scored = [(similarity_fn(key), key) for key in pool]
+    scored.sort(reverse=True)
+    return [(key, s) for s, key in scored[:k] if s > 0]
+
+
+def _cliente_candidate_similarity(ocr_value: object, candidate: object) -> float:
+    return max(
+        _str_sim(_norm_ascii_upper(ocr_value), _norm_ascii_upper(candidate)),
+        _str_sim(_cliente_compact(ocr_value), _cliente_compact(candidate)),
+    )
+
+
+def _model_candidate_similarity(ocr_value: object, candidate: object) -> float:
+    return max(
+        _str_sim(str(ocr_value or "").strip().upper(), str(candidate or "").strip().upper()),
+        _str_sim(_model_compact(ocr_value), _model_compact(candidate)),
+    )
+
+
 def _candidates_for_field(field: str, row: dict, refs: dict, idx: dict) -> list[dict]:
     """Top-K candidatos por campo (puro top-K)."""
     ocr_value = str(row.get(field) or "").strip()
@@ -901,17 +998,29 @@ def _candidates_for_field(field: str, row: dict, refs: dict, idx: dict) -> list[
                 out.append({"value": value, "sim": sim, "plan_entries": plan_entries})
 
         ocr_u = ocr_value.upper()
+        ocr_compact_variants = set(_model_compact_variants(ocr_value))
         for v in _o_zero_variants(ocr_u):
             if v in model_ft_to_entries:
                 _append_model_candidate(v, _str_sim(ocr_u, v), model_ft_to_entries[v])
+        for k, entries in model_ft_to_entries.items():
+            if _model_compact(k) in ocr_compact_variants:
+                _append_model_candidate(k, 100.0, entries)
 
         if len(out) < _TOP_K:
-            for k, s in _topk_keys_by_sim(ocr_u, list(model_ft_to_entries.keys()), _TOP_K):
+            for k, s in _topk_by_similarity(
+                list(model_ft_to_entries.keys()),
+                lambda key: _model_candidate_similarity(ocr_value, key),
+                _TOP_K,
+            ):
                 _append_model_candidate(k, s, model_ft_to_entries[k])
                 if len(out) >= _TOP_K:
                     break
 
-        for k, s in _topk_keys_by_sim(ocr_value, idx["des_keys"], _TOP_K):
+        for k, s in _topk_by_similarity(
+            idx["des_keys"],
+            lambda key: _model_candidate_similarity(ocr_value, key),
+            _TOP_K,
+        ):
             _append_model_candidate(k, s, des_to_entries[k])
             if len(out) >= _TOP_K:
                 break
@@ -943,7 +1052,11 @@ def _candidates_for_field(field: str, row: dict, refs: dict, idx: dict) -> list[
                 "plan_entries": plan_by_cliente.get(key, []),
             })
 
-        for k, s in _topk_keys_by_sim(ocr_u, list(pool), _TOP_K):
+        for k, s in _topk_by_similarity(
+            list(pool),
+            lambda key: _cliente_candidate_similarity(ocr_value, key),
+            _TOP_K,
+        ):
             _append_cliente_candidate(k, s)
             if len(out) >= _TOP_K:
                 break
@@ -1027,6 +1140,7 @@ def _best_scored_entry(
     refs: dict,
     current_phase: str | None,
     score_fields: set[str] | frozenset[str] | None = None,
+    min_global_score: float = _MIN_GLOBAL_WINNER_SCORE,
 ) -> dict | None:
     """Escolhe a melhor entry do plan.
 
@@ -1044,15 +1158,18 @@ def _best_scored_entry(
         if "_of" not in e:
             e = dict(e)
             e["_of"] = k[0]
-        global_score, exact_score = _entry_global_score(e, row, refs, score_fields)
+        global_score, exact_score, reasons, raw_score = _entry_global_score(
+            e, row, refs, score_fields
+        )
         combined = exact_score + global_score
         phase_full = 1 if (current_phase and _phase_is_full(e, current_phase)) else 0
         # R138 — remaining consciente do setor (mesma medida do wizard).
         rem = _remaining(e, phase=current_phase)
         rem_sort = 9e9 if rem == float("inf") else rem
-        eligible.append(
-            (-combined, -global_score, -exact_score, phase_full, rem_sort, order, e)
-        )
+        eligible.append((
+            -combined, -global_score, -exact_score, phase_full, rem_sort,
+            order, e, reasons, raw_score,
+        ))
 
     if not eligible:
         return None
@@ -1062,12 +1179,18 @@ def _best_scored_entry(
     best_global = -best[1]
     best_exact = -best[2]
     best_rem_sort = best[4]
-    if best_global < _MIN_GLOBAL_WINNER_SCORE:
+    if best_global < min_global_score:
         return None
     winner = dict(best[6])
-    winner["_score"] = round(float(best_global), 3)
+    winner["_score"] = round(float(best[8]), 3)
+    winner["_weighted_score"] = round(float(best_global), 3)
     winner["_exact_score"] = int(best_exact)
     winner["_combined"] = round(float(best_combined), 3)
+    winner["_score_reasons"] = sorted(
+        best[7],
+        key=lambda reason: abs(float(reason.get("points") or 0.0)),
+        reverse=True,
+    )[:6]
     if best_rem_sort < 9e9:
         winner["_remaining"] = best_rem_sort
     # R218 — rivais quase-empatados (eligible já ordenado por combined desc).
@@ -1080,6 +1203,31 @@ def _best_scored_entry(
     if rivals:
         winner["_rivals"] = rivals
     return winner
+
+
+def _candidate_is_real_evidence(field: str, cand: dict) -> bool:
+    if not cand.get("plan_entries"):
+        return False
+    sim = float(cand.get("sim") or 0.0)
+    return sim >= _FORCED_WINNER_MIN_SIM.get(field, 100.0)
+
+
+def _candidate_entries_by_key(
+    candidates_by_field: dict[str, list[dict]],
+    score_fields: set[str] | frozenset[str] | None = None,
+) -> dict[tuple, dict]:
+    allowed = set(score_fields or _PLAN_FIELDS)
+    entries_by_key: dict[tuple, dict] = {}
+    for field in _PLAN_FIELDS:
+        if field not in allowed:
+            continue
+        for cand in candidates_by_field.get(field, []):
+            if not _candidate_is_real_evidence(field, cand):
+                continue
+            for entry in cand.get("plan_entries", []):
+                key = _entry_key(entry)
+                entries_by_key.setdefault(key, entry)
+    return entries_by_key
 
 
 # R125 — consciência do estado de produção (fases do plan) ------------------
@@ -1114,8 +1262,32 @@ def _find_winner_entry(
     idx: dict | None = None,
     current_phase: str | None = None,
     score_fields: set[str] | frozenset[str] | None = None,
+    force_top1: bool = True,
 ) -> dict | None:
-    """Escolhe a entry do plan por melhor score global simples."""
+    """Escolhe a entry do plan: strong → forced → forced_top1."""
+    forced_entries = _candidate_entries_by_key(candidates_by_field, score_fields)
+    if forced_entries:
+        winner = _best_scored_entry(
+            forced_entries, row, refs, current_phase, score_fields
+        )
+        if winner is not None:
+            winner["_winner_mode"] = "strong"
+            return winner
+        winner = _best_scored_entry(
+            forced_entries,
+            row,
+            refs,
+            current_phase,
+            score_fields,
+            min_global_score=_MIN_FORCED_WINNER_SCORE,
+        )
+        if winner is not None:
+            winner["_winner_mode"] = "forced"
+            return winner
+
+    if not force_top1 or not _row_has_any_value(row):
+        return None
+
     entries_by_key = _all_plan_entries(idx or {})
     if not entries_by_key:
         for field in _PLAN_FIELDS:
@@ -1125,7 +1297,18 @@ def _find_winner_entry(
                     entries_by_key.setdefault(key, entry)
     if not entries_by_key:
         return None
-    return _best_scored_entry(entries_by_key, row, refs, current_phase, score_fields)
+
+    winner = _best_scored_entry(
+        entries_by_key,
+        row,
+        refs,
+        current_phase,
+        score_fields,
+        min_global_score=_MIN_FORCED_TOP1_SCORE,
+    )
+    if winner is not None:
+        winner["_winner_mode"] = "forced_top1"
+    return winner
 
 
 def _all_eligible_phase_full(
@@ -1185,11 +1368,63 @@ def _make_cell(value: str, status: str, source: str, **extra) -> dict:
     return cell
 
 
-def _score_ferramenta_cell(ocr_value: str) -> dict:
+def _winner_match_kind(winner: dict | None) -> str | None:
+    mode = (winner or {}).get("_winner_mode")
+    if mode == "forced":
+        return "MATCH_FORCADO"
+    if mode == "forced_top1":
+        return "MATCH_BEST_GUESS"
+    return None
+
+
+def _mark_winner_cell(cell: dict, winner: dict | None) -> dict:
+    if not winner:
+        return cell
+    out = dict(cell)
+    mode = winner.get("_winner_mode")
+    if mode:
+        out["winner_mode"] = mode
+    if winner.get("_score_reasons"):
+        out["score_reasons"] = winner.get("_score_reasons")
+    match_kind = _winner_match_kind(winner)
+    if match_kind:
+        out["match_kind"] = match_kind
+        if out.get("status") == "very_different":
+            out["forced_from_status"] = "very_different"
+            out["status"] = "snapped"
+            out["label"] = _STATUS_LABELS["snapped"]
+    return out
+
+
+def _empty_rule_cell(field: str, *, ref_source: str = "syntax") -> dict:
+    _ = field
+    return _make_cell(
+        "",
+        "confirmed",
+        "syntax",
+        ref_source=ref_source,
+        match_kind="MATCH_REGRA_VAZIO",
+        empty_ok=True,
+    )
+
+
+def _score_ferramenta_cell(ocr_value: str, *, row_has_winner: bool = False) -> dict:
     canonical = normalize_ferramenta(ocr_value)
     if canonical == "":
+        if row_has_winner:
+            return _empty_rule_cell("coni", ref_source="ferramenta")
         return _make_cell("", "NA", "ocr_raw")
     if canonical is None:
+        if row_has_winner:
+            return _make_cell(
+                ocr_value,
+                "confirmed",
+                "syntax",
+                proposed=_FERRAMENTA_REF_LABEL,
+                ref_source="ferramenta",
+                match_kind="MATCH_REGRA_FORCADO",
+                warning="Valor CONI fora do vocabulário; aceite por winner da linha.",
+            )
         return _make_cell(
             ocr_value,
             "very_different",
@@ -1202,9 +1437,16 @@ def _score_ferramenta_cell(ocr_value: str) -> dict:
     return _make_cell(canonical, "snapped", "lexicon")
 
 
-def _score_no_ref_row_cell(field: str, ocr_value: str) -> dict:
+def _score_no_ref_row_cell(
+    field: str,
+    ocr_value: str,
+    *,
+    row_has_winner: bool = False,
+) -> dict:
     """Validate filled no-plan fields by local rule/syntax instead of NA."""
     if not ocr_value:
+        if row_has_winner:
+            return _empty_rule_cell(field)
         return _make_cell("", "NA", "ocr_raw")
 
     valid: bool | None = None
@@ -1224,8 +1466,22 @@ def _score_no_ref_row_cell(field: str, ocr_value: str) -> dict:
         valid = _looks_like_yes_no_marker(ocr_value)
 
     if valid is False:
+        if row_has_winner:
+            return _make_cell(
+                ocr_value,
+                "confirmed",
+                "syntax",
+                ref_source="syntax",
+                match_kind="MATCH_REGRA_FORCADO",
+                warning="Valor local inválido; aceite por winner da linha.",
+            )
         return _make_cell(ocr_value, "very_different", "syntax")
-    return _make_cell(ocr_value, "confirmed", "syntax")
+    return _make_cell(
+        ocr_value,
+        "confirmed",
+        "syntax",
+        match_kind="MATCH_REGRA",
+    )
 
 
 def _finish_cell(
@@ -1436,8 +1692,8 @@ def _winner_ambiguous_for_field(
     field: str, proposed: str, winner: dict, template_name: str | None = None
 ) -> bool:
     """R218 — guarda de ambiguidade: True se algum rival quase-empatado propõe,
-    neste campo, um valor canónico diferente do do winner. Nesse caso o motor
-    não deve substituir o OCR — fica para revisão humana."""
+    neste campo, um valor canónico diferente do do winner. Desde R219 isto só
+    afeta revisão/cor; o valor canónico do winner continua a substituir."""
     rivals = winner.get("_rivals") or []
     if not rivals or not proposed:
         return False
@@ -1465,6 +1721,8 @@ def _apply_winner_to_field(
     # O lote e a largura vivem no StockSAP, não na entry do plan_colunas.
     if field == "lote":
         if not ocr_value:
+            if winner is not None:
+                return _mark_winner_cell(_empty_rule_cell(field, ref_source="sap"), winner)
             return _make_cell("", "NA", "ocr_raw")
         sap_full = refs.get("lotes_sap_full", {}) or {}
         if not sap_full:
@@ -1474,7 +1732,7 @@ def _apply_winner_to_field(
             extra = {"ref_source": "sap"}
             if sap_lote and sap_lote != ocr_value.strip().upper():
                 extra["proposed"] = sap_lote
-            return _make_cell(ocr_value, "confirmed", "sap", **extra)
+            return _mark_winner_cell(_make_cell(ocr_value, "confirmed", "sap", **extra), winner)
         if candidates and candidates[0].get("sim", 0) >= 80:
             return _make_cell(
                 ocr_value, "very_different", "ocr_raw",
@@ -1501,11 +1759,13 @@ def _apply_winner_to_field(
                 and sap_larg_n is not None
                 and abs(ocr_larg_n - sap_larg_n) > _VERY_DIFF_NUM_ABS["larg_mm"]
             ):
-                return _finish_cell(
-                    field, ocr_value, str(sap_larg), "sap", None
+                return _mark_winner_cell(
+                    _finish_cell(field, ocr_value, str(sap_larg), "sap", None),
+                    winner,
                 )
-            return _finish_cell(
-                field, ocr_value, str(sap_larg), "sap", None
+            return _mark_winner_cell(
+                _finish_cell(field, ocr_value, str(sap_larg), "sap", None),
+                winner,
             )
 
     if field == "esp":
@@ -1515,8 +1775,9 @@ def _apply_winner_to_field(
         _sap_lote, sap_e = _sap_lote_entry(refs, row.get("lote"))
         sap_esp = sap_e.get("esp") if sap_e else None
         if ocr_value and sap_esp not in (None, ""):
-            return _finish_cell(
-                field, ocr_value, str(sap_esp), "sap", None
+            return _mark_winner_cell(
+                _finish_cell(field, ocr_value, str(sap_esp), "sap", None),
+                winner,
             )
 
     # --- Campos resolvidos pela entry vencedora do plan -----------------
@@ -1569,6 +1830,23 @@ def _apply_winner_to_field(
         proposed = _local_candidate_proposal(field, ocr_value, candidates, row, refs)
 
     if not proposed:
+        if winner is not None:
+            if ocr_value:
+                return _mark_winner_cell(
+                    _make_cell(
+                        _format_value(field, ocr_value),
+                        "confirmed",
+                        "syntax",
+                        ref_source=_field_ref_source(field, refs, row),
+                        match_kind="MATCH_FORCADO_SEM_CANONICO",
+                        warning="Winner escolhido, mas sem valor canónico para este campo.",
+                    ),
+                    winner,
+                )
+            return _mark_winner_cell(
+                _empty_rule_cell(field, ref_source=_field_ref_source(field, refs, row)),
+                winner,
+            )
         if field == "cliente" and ocr_value:
             for cand in candidates or []:
                 proposed_cliente = str(cand.get("value") or "").strip()
@@ -1605,15 +1883,19 @@ def _apply_winner_to_field(
         and (_entry_field_similarity(field, winner, row, refs) or 0.0) < 1.0
     ):
         proposed_fmt = _format_value(field, proposed)
-        return _make_cell(
-            proposed_fmt, "very_different", "plan",
-            proposed=proposed_fmt, ref_source="plan", score=score,
+        return _mark_winner_cell(
+            _make_cell(
+                proposed_fmt, "very_different", "plan",
+                proposed=proposed_fmt, ref_source="plan", score=score,
+            ),
+            winner,
         )
 
     if field == "cliente" and ocr_value:
         if winner is not None:
-            return _finish_cell(
-                field, ocr_value, proposed, "plan", score
+            return _mark_winner_cell(
+                _finish_cell(field, ocr_value, proposed, "plan", score),
+                winner,
             )
         if _cliente_values_match(ocr_value, proposed, refs):
             return _make_cell(
@@ -1630,8 +1912,9 @@ def _apply_winner_to_field(
 
     if field in ("of", "ov") and ocr_value:
         if winner is not None:
-            return _finish_cell(
-                field, ocr_value, proposed, "plan", score
+            return _mark_winner_cell(
+                _finish_cell(field, ocr_value, proposed, "plan", score),
+                winner,
             )
         if _identifier_values_match(field, ocr_value, proposed):
             return _make_cell(
@@ -1649,19 +1932,26 @@ def _apply_winner_to_field(
     # Acabamento TPL086: com winner global também mostra/aplica a referência
     # da melhor linha; se estiver distante, fica vermelho para revisão.
     if template_name == "acabamento" and field in ("of", "modelo") and ocr_value:
-        return _finish_cell(
-            field, ocr_value, proposed, "plan", score
+        return _mark_winner_cell(
+            _finish_cell(field, ocr_value, proposed, "plan", score),
+            winner,
         )
 
     proposed_fmt = _format_value(field, proposed)
     ocr_fmt = _format_value(field, ocr_value)
     if proposed_fmt and ocr_fmt and proposed_fmt.upper() == ocr_fmt.upper():
-        return _make_cell(proposed_fmt, "confirmed", source="plan", score=score)
+        return _mark_winner_cell(
+            _make_cell(proposed_fmt, "confirmed", source="plan", score=score),
+            winner,
+        )
 
-    return _finish_cell(
-        field, ocr_value, proposed,
-        source="plan",
-        score=score,
+    return _mark_winner_cell(
+        _finish_cell(
+            field, ocr_value, proposed,
+            source="plan",
+            score=score,
+        ),
+        winner,
     )
 
 
@@ -1676,6 +1966,7 @@ def _score_row(
     cross_check_fields: tuple[str, ...],
     current_phase: str | None = None,
     template_name: str | None = None,
+    force_top1: bool = True,
 ) -> tuple[dict, int, int, int, int, int]:
     """R123 / R125 — itera os `row_fields` do template (não os 10 fixos
     do bobine).
@@ -1708,6 +1999,7 @@ def _score_row(
         idx,
         current_phase,
         score_fields,
+        force_top1=force_top1,
     )
 
     obra_concluida = _all_eligible_phase_full(
@@ -1731,7 +2023,7 @@ def _score_row(
     for field in row_fields:
         ocr_value = str(row.get(field) or "").strip()
         if field == "coni":
-            result = _score_ferramenta_cell(ocr_value)
+            result = _score_ferramenta_cell(ocr_value, row_has_winner=winner is not None)
         elif field in _ROW_FIELDS and field in cc_fields:
             result = _apply_winner_to_field(
                 field, ocr_value, winner,
@@ -1740,11 +2032,15 @@ def _score_row(
                 template_name=template_name,
             )
         elif field in _NO_REF_FIELDS:
-            result = _score_no_ref_row_cell(field, ocr_value)
+            result = _score_no_ref_row_cell(
+                field, ocr_value, row_has_winner=winner is not None
+            )
         else:
             # Campo próprio do template, sem referência no plan/SAP: aplica
             # regra local para evitar NA neutro em valor preenchido.
-            result = _score_no_ref_row_cell(field, ocr_value)
+            result = _score_no_ref_row_cell(
+                field, ocr_value, row_has_winner=winner is not None
+            )
         fields_out[field] = result
         _tally(result["status"])
 
@@ -1755,9 +2051,13 @@ def _score_row(
             continue
         extra_value = str(v) if v is not None else ""
         if k in _NO_REF_FIELDS:
-            extra_cell = _score_no_ref_row_cell(k, extra_value.strip())
+            extra_cell = _score_no_ref_row_cell(
+                k, extra_value.strip(), row_has_winner=winner is not None
+            )
         else:
-            extra_cell = _score_no_ref_row_cell(k, extra_value.strip())
+            extra_cell = _score_no_ref_row_cell(
+                k, extra_value.strip(), row_has_winner=winner is not None
+            )
         fields_out[k] = extra_cell
         _tally(extra_cell["status"])
 
@@ -1767,6 +2067,10 @@ def _score_row(
         "fields": fields_out,
         "winner_of": (winner or {}).get("_of") if winner else None,
         "winner_score": (winner or {}).get("_score") if winner else None,
+        "winner_weighted_score": (winner or {}).get("_weighted_score") if winner else None,
+        "winner_combined": (winner or {}).get("_combined") if winner else None,
+        "winner_score_reasons": (winner or {}).get("_score_reasons") if winner else None,
+        "winner_mode": (winner or {}).get("_winner_mode") if winner else None,
         "identity_conflict": False,
         "obra_concluida": obra_concluida,
     }
@@ -1947,12 +2251,29 @@ def _ordered_union(*groups: tuple[str, ...] | list[str] | Any) -> tuple[str, ...
     return tuple(out)
 
 
+def _derive_footer_values(rows: list[dict], footer: dict) -> dict[str, str]:
+    derived: dict[str, str] = {}
+    if not str((footer or {}).get("colunas_produzidas") or "").strip():
+        total_qtd = 0
+        found = False
+        for row in rows or []:
+            qtd = _num(row.get("qtd"))
+            if qtd is None or qtd < 0 or abs(qtd - round(qtd)) > 1e-9:
+                continue
+            total_qtd += int(round(qtd))
+            found = True
+        if found:
+            derived["colunas_produzidas"] = str(total_qtd)
+    return derived
+
+
 def _score_header_footer(
     header: dict,
     footer: dict,
     refs: dict,
     header_fields: tuple[str, ...] = (),
     footer_fields: tuple[str, ...] = (),
+    derived_footer: dict | None = None,
 ) -> tuple[dict, dict]:
     """R123 (B9) — valida o cabeçalho e o rodapé em vez de os forçar a NA.
 
@@ -2060,6 +2381,16 @@ def _score_header_footer(
     def _cell(field: str, value: object) -> dict:
         v = str(value).strip() if value is not None else ""
         if not v:
+            if derived_footer and field in derived_footer:
+                return _make_cell(
+                    str(derived_footer[field]),
+                    "snapped",
+                    "syntax",
+                    ref_source="syntax",
+                    match_kind="MATCH_REGRA_DERIVADO",
+                )
+            if field in _NO_REF_FIELDS:
+                return _empty_rule_cell(field)
             return _make_cell("", "NA", "ocr_raw")
         if field == "operador" and snames:
             expected_entry = entry_by_header_code or entry_by_header_pernr
@@ -2194,7 +2525,8 @@ def shadow_score(
     for i, row in enumerate(rows):
         row_out, s, c, n, vd, _t = _score_row(
             i, row, refs, idx, row_fields, cross_check_fields,
-            current_phase, canonical_template_name
+            current_phase, canonical_template_name,
+            force_top1=getattr(template, "has_production_rows", True),
         )
         out_rows.append(row_out)
         snapped += s
@@ -2209,6 +2541,7 @@ def shadow_score(
         header, footer, refs,
         header_fields=getattr(template, "header_fields", ()),
         footer_fields=getattr(template, "footer_fields", ()),
+        derived_footer=_derive_footer_values(rows, footer),
     )
     for cell in (*header_out.values(), *footer_out.values()):
         st = cell["status"]
@@ -2277,6 +2610,11 @@ def _to_legacy_cell(v5_cell: dict, ref_value: str | None = None) -> dict:
         "ref_source": v5_cell.get("ref_source") or v5_cell.get("source"),
         "score": v5_cell.get("score"),
     }
+    if v5_cell.get("match_kind"):
+        out["match_kind"] = v5_cell.get("match_kind")
+    for key in ("winner_mode", "score_reasons", "forced_from_status", "warning", "empty_ok"):
+        if key in v5_cell:
+            out[key] = v5_cell[key]
     # Ref para tooltip de referência: prioriza `proposed`,
     # depois `ref_value` legado, depois `value`.
     if "proposed" in v5_cell:
@@ -2388,6 +2726,10 @@ def cross_check_sheet(
             "summary": row_summary,
             "winner_of": r.get("winner_of"),
             "winner_score": r.get("winner_score"),
+            "winner_weighted_score": r.get("winner_weighted_score"),
+            "winner_combined": r.get("winner_combined"),
+            "winner_score_reasons": r.get("winner_score_reasons"),
+            "winner_mode": r.get("winner_mode"),
             "identity_conflict": r.get("identity_conflict", False),
             # R125 — bandeira propagada para UI / auto-overwrites
             "obra_concluida": r.get("obra_concluida", False),

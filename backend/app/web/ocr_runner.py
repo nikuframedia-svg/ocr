@@ -158,6 +158,43 @@ def _empty_dq_stub() -> dict:
     }
 
 
+def _compact_alnum(value: object) -> str:
+    return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
+
+
+def _looks_like_model_code(value: object) -> bool:
+    compact = _compact_alnum(value)
+    if len(compact) < 5:
+        return False
+    return any(ch.isalpha() for ch in compact) and any(ch.isdigit() for ch in compact)
+
+
+def _looks_like_shifted_acabamento_row(row: dict) -> bool:
+    """Detect Acabamento read with the default Bobine columns.
+
+    Typical bad shape: cliente empty, Acabamento OF/reference shifted into
+    OV/OF, modelo empty, QTD present.
+    """
+    return (
+        not str(row.get("cliente") or "").strip()
+        and bool(str(row.get("ov") or "").strip())
+        and _looks_like_model_code(row.get("of"))
+        and not str(row.get("modelo") or "").strip()
+        and bool(str(row.get("qtd") or "").strip())
+    )
+
+
+def _infer_template_from_default_pass1(pass1_raw: dict) -> Any | None:
+    header = pass1_raw.get("header") or {}
+    setor = str(header.get("setor_maquina") or "")
+    if setor.strip():
+        return None
+    rows = [r for r in (pass1_raw.get("rows") or []) if isinstance(r, dict)]
+    if any(_looks_like_shifted_acabamento_row(row) for row in rows):
+        return get_template("acabamento")
+    return None
+
+
 def _build_current_and_dq(raw_extraction: dict, template: Any) -> tuple[dict, dict]:
     """R135 — corre o guard de alinhamento de colunas sobre a cópia editável
     (`current`), mantendo `raw_extraction` como snapshot OCR intacto (audit).
@@ -191,6 +228,10 @@ def run_pipeline(image_path: Path) -> dict:
     pass1_raw = _run_ocr(image_path)
     setor = (pass1_raw.get("header", {}) or {}).get("setor_maquina", "")
     template = detect_template(setor)
+    if template.name == DEFAULT_TEMPLATE.name:
+        inferred = _infer_template_from_default_pass1(pass1_raw)
+        if inferred is not None:
+            template = inferred
 
     # R132 — side-detect Pass-1.5 para kanbans 2-lados. Falha do detector
     # é silenciosa (assume frente — caso mais comum); operador pode usar

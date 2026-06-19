@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.web import db
@@ -20,7 +20,7 @@ OVERLAY_PATH = _REPO / "lexicons" / "learned_overlay.json"
 def build_overlay() -> dict:
     """Build the overlay dict from all ``status='approved'`` learnings."""
     overlay: dict = {
-        "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "cliente_aliases": {},
         "operador_aliases": {},
         "modelo_aliases": {},

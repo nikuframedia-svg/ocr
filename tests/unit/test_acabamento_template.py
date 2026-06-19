@@ -111,6 +111,44 @@ def test_acabamento_mtg2_alias_resolves_to_acabamento():
     assert get_template("acabamento_mtg2").name == "acabamento"
 
 
+def test_default_pass1_shifted_acabamento_infers_acabamento_template(monkeypatch):
+    import importlib
+    import sys
+    from types import SimpleNamespace
+
+    if "app.web.ocr_runner" in sys.modules:
+        ocr_runner = sys.modules["app.web.ocr_runner"]
+    else:
+        monkeypatch.setitem(
+            sys.modules,
+            "ocr6",
+            SimpleNamespace(
+                PROMPT="",
+                PROMPT_HASH="",
+                load_prompt=lambda _path: ("", ""),
+                process_image=lambda *_args, **_kwargs: None,
+            ),
+        )
+        ocr_runner = importlib.import_module("app.web.ocr_runner")
+
+    inferred = ocr_runner._infer_template_from_default_pass1({
+        "header": {"setor_maquina": ""},
+        "rows": [
+            {
+                "cliente": "",
+                "ov": "Q6Q7F3",
+                "of": "CGC2E0GDI",
+                "modelo": "",
+                "qtd": "7v",
+            },
+        ],
+        "footer": {},
+    })
+
+    assert inferred is not None
+    assert inferred.name == "acabamento"
+
+
 def test_acabamento_prompt_columns_and_no_forced_mtg4():
     """Acabamento mantém colunas OF / REFERÊNCIA / PEÇA / QTD e o prompt não
     força ACABAMENTO MTG4 (R139)."""

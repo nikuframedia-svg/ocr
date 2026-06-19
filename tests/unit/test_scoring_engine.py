@@ -215,7 +215,7 @@ class TestShadowScore:
         for v in scoring["footer"].values():
             assert v["status"] in _valid
 
-    def test_missing_expected_header_footer_fields_are_explicit_na(self):
+    def test_missing_expected_header_footer_fields_are_rule_empty(self):
         sheet_data = {
             "template_name": "bobine_formato",
             "header": {},
@@ -225,8 +225,12 @@ class TestShadowScore:
 
         scoring, *_ = shadow_score(sheet_data, None, _REFS)
 
-        assert scoring["header"]["cod_maquina"]["status"] == "NA"
-        assert scoring["footer"]["colunas_produzidas"]["status"] == "NA"
+        cod_maquina = scoring["header"]["cod_maquina"]
+        colunas = scoring["footer"]["colunas_produzidas"]
+        assert cod_maquina["status"] == "confirmed"
+        assert cod_maquina["match_kind"] == "MATCH_REGRA_VAZIO"
+        assert colunas["status"] == "confirmed"
+        assert colunas["match_kind"] == "MATCH_REGRA_VAZIO"
 
     def test_perfect_row_all_confirmed(self):
         """Linha que bate perfeitamente com plan: tudo confirmed, nada snapped."""
@@ -374,7 +378,7 @@ class TestShadowScore:
         assert esp["status"] == "confirmed"
         assert esp["source"] == "sap"
 
-    def test_blank_esp_is_not_autofilled_from_sap_by_lote_only(self):
+    def test_blank_esp_with_forced_top1_stays_green_empty_rule(self):
         refs = {
             "available": True,
             "of_to_entries": {
@@ -398,9 +402,12 @@ class TestShadowScore:
         scoring, *_ = shadow_score(sheet_data, None, refs)
         esp = scoring["rows"][0]["fields"]["esp"]
 
+        assert scoring["rows"][0]["winner_of"] == "111111"
+        assert scoring["rows"][0]["winner_mode"] == "forced_top1"
         assert esp["value"] == ""
-        assert esp["status"] == "NA"
-        assert scoring["rows"][0]["winner_of"] is None
+        assert esp["status"] == "confirmed"
+        assert esp["empty_ok"] is True
+        assert esp["match_kind"] == "MATCH_BEST_GUESS"
 
     @pytest.mark.parametrize(
         ("row", "field", "ref_value", "ref_source"),
@@ -456,9 +463,11 @@ class TestShadowScore:
         larg = result["rows"][0]["fields"]["larg_mm"]
 
         assert larg["value"] == "250"
-        assert larg["status"] == "NO_MATCH"
+        assert larg["status"] == "MATCH"
         assert larg["ref"] == "250"
         assert larg["ref_source"] == "sap"
+        assert larg["match_kind"] == "MATCH_FORCADO"
+        assert larg["forced_from_status"] == "very_different"
 
     def test_larg_mm_stocksap_within_10mm_can_snap(self):
         sheet_data = {
@@ -672,7 +681,7 @@ class TestShadowScore:
         # Sem ListaColaboradores, operador preenchido valida por regra local.
         assert scoring["header"]["operador"]["status"] == "confirmed"
 
-    def test_zero_score_dimension_does_not_autofill_a_winner(self):
+    def test_zero_score_dimension_forces_best_plausible_winner(self):
         sheet_data = {
             "template_name": "bobine_formato",
             "header": {},
@@ -683,13 +692,16 @@ class TestShadowScore:
             sheet_data, None, _REFS
         )
 
-        assert scoring["summary"]["very_different"] == 1
-        assert snapped == scoring["summary"]["snapped"]
-        assert snapped == 0
-        assert scoring["rows"][0]["winner_of"] is None
+        row = scoring["rows"][0]
+        comp = row["fields"]["comp_mm"]
+        assert row["winner_of"] == "262107"
+        assert row["winner_mode"] == "forced_top1"
+        assert comp["value"] == "1200"
+        assert comp["status"] == "snapped"
+        assert comp["match_kind"] == "MATCH_BEST_GUESS"
         assert total == snapped + confirmed + na + scoring["summary"]["very_different"]
 
-    def test_unknown_cliente_with_plan_pool_goes_to_review(self):
+    def test_unknown_cliente_with_plan_pool_forces_best_plausible_winner(self):
         sheet_data = {
             "template_name": "bobine_formato",
             "header": {},
@@ -699,7 +711,13 @@ class TestShadowScore:
 
         scoring, *_ = shadow_score(sheet_data, None, _REFS)
 
-        assert scoring["rows"][0]["fields"]["cliente"]["status"] == "very_different"
+        row = scoring["rows"][0]
+        cliente = row["fields"]["cliente"]
+        assert row["winner_of"] == "262107"
+        assert row["winner_mode"] == "forced_top1"
+        assert cliente["value"] == "ELECNOR"
+        assert cliente["status"] == "snapped"
+        assert cliente["match_kind"] == "MATCH_BEST_GUESS"
 
     def test_known_cliente_alone_can_fill_row_with_may_policy(self):
         sheet_data = {
@@ -725,11 +743,14 @@ class TestShadowScore:
         assert cliente["value"] == "ELECNOR"
         assert cliente["source"] == "plan"
         assert row["fields"]["of"]["value"] == "262107"
-        assert row["fields"]["of"]["status"] == "very_different"
+        assert row["fields"]["of"]["status"] == "snapped"
+        assert row["fields"]["of"]["match_kind"] == "MATCH_FORCADO"
         assert row["fields"]["ov"]["value"] == "2410001"
-        assert row["fields"]["ov"]["status"] == "very_different"
+        assert row["fields"]["ov"]["status"] == "snapped"
+        assert row["fields"]["ov"]["match_kind"] == "MATCH_FORCADO"
         assert row["fields"]["modelo"]["value"] == "OMEGA 1200 H"
-        assert row["fields"]["modelo"]["status"] == "very_different"
+        assert row["fields"]["modelo"]["status"] == "snapped"
+        assert row["fields"]["modelo"]["match_kind"] == "MATCH_FORCADO"
         assert result["rows"][0]["fields"]["cliente"]["status"] == "MATCH"
 
     def test_cliente_without_plan_pool_goes_to_review(self):
@@ -1339,10 +1360,26 @@ class TestShadowScore:
         for field in ("pri", "qtd"):
             assert row["fields"][field]["status"] == "confirmed"
             assert row["fields"][field]["source"] == "syntax"
+            assert row["fields"][field]["match_kind"] == "MATCH_REGRA"
         assert row["fields"]["coni"]["status"] == "confirmed"
         assert row["fields"]["coni"]["value"] == "OCT"
 
-    def test_invalid_pri_no_ref_field_goes_to_review(self):
+    def test_no_ref_rule_match_kind_is_exposed_in_legacy_cell(self):
+        result = cross_check_sheet(
+            {
+                "template_name": "bobine_formato",
+                "header": {}, "footer": {},
+                "rows": [{"qtd": "5"}],
+            },
+            None,
+            _REFS,
+        )
+
+        qtd = result["rows"][0]["fields"]["qtd"]
+        assert qtd["status"] == "MATCH"
+        assert qtd["match_kind"] == "MATCH_REGRA"
+
+    def test_invalid_pri_with_winner_is_forced_rule_match(self):
         for value in ("xxx", "ABC", "--", "A1234", "123456"):
             result = cross_check_sheet(
                 {
@@ -1356,18 +1393,11 @@ class TestShadowScore:
             pri = result["rows"][0]["fields"]["pri"]
 
             assert pri["value"] == value
-            assert pri["status"] == "NO_MATCH"
+            assert pri["status"] == "MATCH"
             assert pri["ref_source"] == "syntax"
-            assert {
-                "section": "rows",
-                "row_index": 0,
-                "field": "pri",
-                "field_path": "rows[0].pri",
-                "value": value,
-                "ref": "",
-                "ref_source": "syntax",
-                "reason": "Valor inválido para o formato esperado",
-            } in result["to_analisar"]
+            assert pri["match_kind"] == "MATCH_REGRA_FORCADO"
+            assert pri["warning"] == "Valor local inválido; aceite por winner da linha."
+            assert not result["to_analisar"]
 
     def test_plausible_pri_no_ref_field_confirms(self):
         for value in ("F", "1", "A12", "P1", "P.1", "REP C12", "rep. c12"):
@@ -1382,7 +1412,7 @@ class TestShadowScore:
             )
             assert scoring["rows"][0]["fields"]["pri"]["status"] == "confirmed"
 
-    def test_invalid_qtd_no_ref_field_goes_to_review(self):
+    def test_invalid_qtd_with_winner_is_forced_rule_match(self):
         for value in ("ABC", "5,0", "5.0", "-1", "12345"):
             sheet_data = {
                 "template_name": "bobine_formato", "header": {}, "footer": {},
@@ -1393,18 +1423,11 @@ class TestShadowScore:
             qtd = result["rows"][0]["fields"]["qtd"]
 
             assert qtd["value"] == value
-            assert qtd["status"] == "NO_MATCH"
+            assert qtd["status"] == "MATCH"
             assert qtd["ref_source"] == "syntax"
-            assert {
-                "section": "rows",
-                "row_index": 0,
-                "field": "qtd",
-                "field_path": "rows[0].qtd",
-                "value": value,
-                "ref": "",
-                "ref_source": "syntax",
-                "reason": "Valor inválido para o formato esperado",
-            } in result["to_analisar"]
+            assert qtd["match_kind"] == "MATCH_REGRA_FORCADO"
+            assert qtd["warning"] == "Valor local inválido; aceite por winner da linha."
+            assert not result["to_analisar"]
 
     def test_plausible_qtd_no_ref_field_confirms(self):
         for value in ("0", "5", "0005", "9999"):
@@ -1431,7 +1454,7 @@ class TestShadowScore:
         assert cell["source"] == "lexicon"
 
     @pytest.mark.parametrize("bad", ["T", "ABC"])
-    def test_ferramenta_coni_invalid_value_goes_to_review(self, bad):
+    def test_ferramenta_coni_invalid_value_with_winner_is_forced_rule_match(self, bad):
         sheet_data = {
             "template_name": "bobine_formato", "header": {}, "footer": {},
             "rows": [{"of": "262107", "qtd": "5", "coni": bad}],
@@ -1440,25 +1463,19 @@ class TestShadowScore:
         result = cross_check_sheet(sheet_data, None, _REFS)
         cell = scoring["rows"][0]["fields"]["coni"]
         assert cell["value"] == bad
-        assert cell["status"] == "very_different"
-        assert cell["source"] == "ocr_raw"
+        assert cell["status"] == "confirmed"
+        assert cell["source"] == "syntax"
         assert cell["ref_source"] == "ferramenta"
         assert "CONI" in cell["proposed"]
         assert "número" in cell["proposed"]
+        assert cell["match_kind"] == "MATCH_REGRA_FORCADO"
         legacy = result["rows"][0]["fields"]["coni"]
-        assert legacy["status"] == "NO_MATCH"
+        assert legacy["status"] == "MATCH"
         assert legacy["ref_source"] == "ferramenta"
         assert legacy["ref"] == cell["proposed"]
-        assert {
-            "section": "rows",
-            "row_index": 0,
-            "field": "coni",
-            "field_path": "rows[0].coni",
-            "value": bad,
-            "ref": cell["proposed"],
-            "ref_source": "ferramenta",
-            "reason": "Valor não permitido no vocabulário de ferramenta/CONI",
-        } in result["to_analisar"]
+        assert legacy["match_kind"] == "MATCH_REGRA_FORCADO"
+        assert legacy["warning"] == "Valor CONI fora do vocabulário; aceite por winner da linha."
+        assert not result["to_analisar"]
 
     def test_lote_near_sap_match_goes_to_review_not_autosnap(self):
         from app.pipeline.scoring_engine import cross_check_sheet
@@ -1826,6 +1843,140 @@ class TestGlobalWinnerScoring:
         scoring, *_ = shadow_score(sheet_data, None, _REFS)
         assert scoring["rows"][0]["fields"]["of"]["status"] == "confirmed"
         assert scoring["rows"][0]["fields"]["of"]["value"] == "262107"
+
+    @pytest.mark.parametrize("ocr_cliente", ["STAEK MTG", "STACK MTG", "STACA MTG"])
+    def test_cliente_ocr_alias_selects_real_plan_row_and_fills_line(self, ocr_cliente):
+        refs = {
+            "available": True,
+            "of_to_entries": {
+                "262771": [{
+                    "ov": "260001",
+                    "cliente": "ESTOQUE MTG",
+                    "designacao": "CGC2E45DI",
+                    "esp": 3,
+                    "lbase": 431,
+                    "ltopo": 180,
+                }],
+            },
+            "clientes_plan": frozenset({"ESTOQUE MTG"}),
+            "lotes_sap_full": {},
+        }
+        sheet_data = {
+            "template_name": "quinadora_pav4", "header": {}, "footer": {},
+            "rows": [{"cliente": ocr_cliente, "qtd": "90"}],
+        }
+
+        result = cross_check_sheet(sheet_data, None, refs)
+        row = result["rows"][0]
+        fields = row["fields"]
+
+        assert row["winner_of"] == "262771"
+        assert fields["cliente"]["value"] == "ESTOQUE MTG"
+        assert fields["of"]["value"] == "262771"
+        assert fields["ov"]["value"] == "260001"
+        assert fields["modelo"]["value"] == "CGC2E45DI"
+        assert fields["esp"]["value"] == "3"
+        assert fields["lbase"]["value"] == "431"
+        assert fields["ltopo"]["value"] == "180"
+        assert fields["qtd"]["match_kind"] == "MATCH_REGRA"
+        assert all(
+            fields[f]["status"] != "NA"
+            for f in ("cliente", "of", "ov", "modelo", "esp", "lbase", "ltopo", "qtd")
+        )
+
+    def test_forced_model_candidate_selects_real_plan_row_and_fills_line(self):
+        refs = {
+            "available": True,
+            "of_to_entries": {
+                "262771": [{
+                    "ov": "260001",
+                    "cliente": "ESTOQUE MTG",
+                    "designacao": "CGC2E45DI",
+                    "esp": 3,
+                    "lbase": 431,
+                    "ltopo": 180,
+                }],
+            },
+            "clientes_plan": frozenset({"ESTOQUE MTG"}),
+            "lotes_sap_full": {},
+        }
+        sheet_data = {
+            "template_name": "quinadora_pav4", "header": {}, "footer": {},
+            "rows": [{"modelo": "C6C2E45DI", "qtd": "90"}],
+        }
+
+        scoring, *_ = shadow_score(sheet_data, None, refs)
+        row = scoring["rows"][0]
+        fields = row["fields"]
+
+        assert row["winner_of"] == "262771"
+        assert row["winner_mode"] == "forced"
+        assert fields["cliente"]["value"] == "ESTOQUE MTG"
+        assert fields["of"]["value"] == "262771"
+        assert fields["ov"]["value"] == "260001"
+        assert fields["modelo"]["value"] == "CGC2E45DI"
+        assert fields["esp"]["value"] == "3"
+        assert fields["lbase"]["value"] == "431"
+        assert fields["ltopo"]["value"] == "180"
+        assert all(
+            fields[f]["status"] != "NA"
+            for f in ("cliente", "of", "ov", "modelo", "esp", "lbase", "ltopo", "qtd")
+        )
+
+    def test_forced_top1_selects_best_plausible_row_without_real_candidate(self):
+        refs = {
+            "available": True,
+            "of_to_entries": {
+                "262771": [{
+                    "ov": "260001",
+                    "cliente": "ESTOQUE MTG",
+                    "designacao": "CGC2E45DI",
+                    "esp": 3,
+                    "lbase": 431,
+                    "ltopo": 180,
+                }],
+            },
+            "clientes_plan": frozenset({"ESTOQUE MTG"}),
+            "lotes_sap_full": {},
+        }
+        sheet_data = {
+            "template_name": "quinadora_pav4", "header": {}, "footer": {},
+            "rows": [{"cliente": "ABC", "qtd": "90"}],
+        }
+
+        scoring, *_ = shadow_score(sheet_data, None, refs)
+        row = scoring["rows"][0]
+        fields = row["fields"]
+
+        assert row["winner_of"] == "262771"
+        assert row["winner_mode"] == "forced_top1"
+        assert fields["cliente"]["value"] == "ESTOQUE MTG"
+        assert fields["of"]["value"] == "262771"
+        assert fields["modelo"]["value"] == "CGC2E45DI"
+        assert fields["cliente"]["match_kind"] == "MATCH_BEST_GUESS"
+        assert fields["qtd"]["match_kind"] == "MATCH_REGRA"
+
+    def test_empty_local_fields_with_winner_are_rule_matches_not_na(self):
+        sheet_data = {
+            "template_name": "robot", "header": {}, "footer": {},
+            "rows": [{
+                "cliente": "ELECNOR",
+                "of": "262107",
+                "modelo": "OMEGA 1200 H",
+                "qtd": "2",
+                "pri": "",
+                "sobras": "",
+            }],
+        }
+
+        scoring, *_ = shadow_score(sheet_data, None, _REFS)
+        fields = scoring["rows"][0]["fields"]
+
+        assert scoring["rows"][0]["winner_of"] == "262107"
+        assert fields["pri"]["status"] == "confirmed"
+        assert fields["pri"]["match_kind"] == "MATCH_REGRA_VAZIO"
+        assert fields["sobras"]["status"] == "confirmed"
+        assert fields["sobras"]["match_kind"] == "MATCH_REGRA_VAZIO"
 
     def test_of_ov_o_zero_variants_snap_to_plan_value(self):
         sheet_data = {
@@ -2402,7 +2553,7 @@ class TestGlobalWinnerScoring:
         for field in ("comp_mm", "larg_mm", "lbase", "ltopo", "esp"):
             assert fields[field]["status"] == "confirmed"
 
-    def test_field_outside_template_does_not_contribute_to_winner_score(self):
+    def test_field_outside_template_still_allows_forced_top1_winner(self):
         refs = {
             "available": True,
             "of_to_entries": {
@@ -2425,8 +2576,9 @@ class TestGlobalWinnerScoring:
         scoring, *_ = shadow_score(sheet_data, None, refs)
         row = scoring["rows"][0]
 
-        assert row["winner_of"] is None
-        assert row["winner_score"] is None
+        assert row["winner_of"] == "262900"
+        assert row["winner_mode"] == "forced_top1"
+        assert row["winner_score"] == 0.0
         assert row["fields"]["comp_mm"]["status"] == "confirmed"
         assert row["fields"]["comp_mm"]["source"] == "syntax"
 
@@ -3133,7 +3285,7 @@ class TestLaserDbaseDtopo:
         assert _is_very_different("dbase", "1000", "1200") is True
         assert _is_very_different("dtopo", "1000", "1200") is True
 
-    def test_dbase_dtopo_without_plan_pool_go_to_review(self):
+    def test_dbase_dtopo_without_canonical_values_are_forced_with_warning(self):
         """Campos cruzáveis preenchidos sem pool de plan não ficam NA neutro."""
         refs = {
             "available": True,
@@ -3158,9 +3310,18 @@ class TestLaserDbaseDtopo:
         scoring, *_ = shadow_score(sheet_data, None, refs)
         fields = scoring["rows"][0]["fields"]
 
-        assert scoring["rows"][0]["winner_of"] is None
-        assert fields["dbase"]["status"] == "very_different"
-        assert fields["dtopo"]["status"] == "very_different"
+        assert scoring["rows"][0]["winner_of"] == "262107"
+        assert scoring["rows"][0]["winner_mode"] == "forced_top1"
+        assert fields["dbase"]["status"] == "confirmed"
+        assert fields["dbase"]["match_kind"] == "MATCH_BEST_GUESS"
+        assert fields["dbase"]["warning"] == (
+            "Winner escolhido, mas sem valor canónico para este campo."
+        )
+        assert fields["dtopo"]["status"] == "confirmed"
+        assert fields["dtopo"]["match_kind"] == "MATCH_BEST_GUESS"
+        assert fields["dtopo"]["warning"] == (
+            "Winner escolhido, mas sem valor canónico para este campo."
+        )
 
 
 class TestNoRefTemplateFields:
@@ -3183,7 +3344,7 @@ class TestNoRefTemplateFields:
             assert fields[field]["status"] == "confirmed"
             assert fields[field]["source"] == "syntax"
 
-    def test_invalid_gemini_numeric_no_ref_field_goes_to_review(self):
+    def test_invalid_gemini_numeric_with_winner_is_forced_rule_match(self):
         sheet_data = {
             "template_name": "gasparini",
             "header": {}, "footer": {},
@@ -3194,11 +3355,12 @@ class TestNoRefTemplateFields:
         m2 = result["rows"][0]["fields"]["m2"]
 
         assert m2["value"] == "ABC"
-        assert m2["status"] == "NO_MATCH"
+        assert m2["status"] == "MATCH"
         assert m2["ref_source"] == "syntax"
-        assert result["to_analisar"][0]["field_path"] == "rows[0].m2"
+        assert m2["match_kind"] == "MATCH_REGRA_FORCADO"
+        assert not result["to_analisar"]
 
-    def test_invalid_sobras_no_ref_field_goes_to_review(self):
+    def test_invalid_sobras_with_winner_is_forced_rule_match(self):
         sheet_data = {
             "template_name": "manual",
             "header": {}, "footer": {},
@@ -3210,9 +3372,10 @@ class TestNoRefTemplateFields:
 
         assert result["rows"][0]["fields"]["qtd"]["status"] == "MATCH"
         assert sobras["value"] == "ABC"
-        assert sobras["status"] == "NO_MATCH"
+        assert sobras["status"] == "MATCH"
         assert sobras["ref_source"] == "syntax"
-        assert result["to_analisar"][0]["field_path"] == "rows[0].sobras"
+        assert sobras["match_kind"] == "MATCH_REGRA_FORCADO"
+        assert not result["to_analisar"]
 
     def test_plausible_sobras_no_ref_field_confirms(self):
         sheet_data = {
@@ -3224,7 +3387,7 @@ class TestNoRefTemplateFields:
         scoring, *_ = shadow_score(sheet_data, None, _REFS)
         assert scoring["rows"][0]["fields"]["sobras"]["status"] == "confirmed"
 
-    def test_invalid_cesta_n_no_ref_field_goes_to_review(self):
+    def test_invalid_cesta_n_with_winner_is_forced_rule_match(self):
         sheet_data = {
             "template_name": "expedicao",
             "header": {}, "footer": {},
@@ -3235,9 +3398,10 @@ class TestNoRefTemplateFields:
         cesta = result["rows"][0]["fields"]["cesta_n"]
 
         assert cesta["value"] == "ABC"
-        assert cesta["status"] == "NO_MATCH"
+        assert cesta["status"] == "MATCH"
         assert cesta["ref_source"] == "syntax"
-        assert result["to_analisar"][0]["field_path"] == "rows[0].cesta_n"
+        assert cesta["match_kind"] == "MATCH_REGRA_FORCADO"
+        assert not result["to_analisar"]
 
     def test_plausible_cesta_n_no_ref_field_confirms(self):
         for value in ("12", "CESTA 12"):
@@ -3431,7 +3595,7 @@ class TestR132MaqFustes:
         scoring, *_ = shadow_score(sheet_data, None, _REFS)
         assert scoring["rows"][0]["fields"]["qtd_metros"]["status"] == "confirmed"
 
-    def test_maq_fustes_invalid_qtd_metros_goes_to_review(self):
+    def test_maq_fustes_invalid_qtd_metros_with_winner_is_forced_rule_match(self):
         sheet_data = {
             "template_name": "maq_fustes",
             "header": {}, "footer": {},
@@ -3441,14 +3605,32 @@ class TestR132MaqFustes:
         result = cross_check_sheet(sheet_data, None, _REFS)
         qtd_metros = result["rows"][0]["fields"]["qtd_metros"]
 
-        assert qtd_metros["status"] == "NO_MATCH"
+        assert qtd_metros["status"] == "MATCH"
         assert qtd_metros["ref_source"] == "syntax"
-        assert result["to_analisar"][0]["field_path"] == "rows[0].qtd_metros"
+        assert qtd_metros["match_kind"] == "MATCH_REGRA_FORCADO"
+        assert not result["to_analisar"]
 
-    def test_two_sided_templates_map(self):
+    def test_two_sided_templates_map(self, monkeypatch):
         """Garantia: o map em ocr_runner aponta maq_fustes → maq_fustes_paragens."""
-        from app.web.ocr_runner import TWO_SIDED_TEMPLATES
-        assert TWO_SIDED_TEMPLATES.get("maq_fustes") == "maq_fustes_paragens"
+        import importlib
+        import sys
+        from types import SimpleNamespace
+
+        if "app.web.ocr_runner" in sys.modules:
+            ocr_runner = sys.modules["app.web.ocr_runner"]
+        else:
+            monkeypatch.setitem(
+                sys.modules,
+                "ocr6",
+                SimpleNamespace(
+                    PROMPT="",
+                    PROMPT_HASH="",
+                    load_prompt=lambda _path: ("", ""),
+                    process_image=lambda *_args, **_kwargs: None,
+                ),
+            )
+            ocr_runner = importlib.import_module("app.web.ocr_runner")
+        assert ocr_runner.TWO_SIDED_TEMPLATES.get("maq_fustes") == "maq_fustes_paragens"
 
     def test_side_detect_prompt_mentions_both_options(self):
         """O prompt de side-detect tem que mencionar ambos os cabeçalhos
