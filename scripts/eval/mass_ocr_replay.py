@@ -36,7 +36,7 @@ REPO = Path(__file__).resolve().parents[2]
 DEFAULT_DATASET = Path(
     "/Users/martimnicolau/Downloads/kb_71c811b8ce384f1697a3aa091c0e547b"
 )
-DEFAULT_MODEL = "yasserrmd/Nanonets-OCR2-3B:latest"
+DEFAULT_MODEL = "qwen3-vl:8b"
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 CRITICAL_SHEET_IDS = (1838, 1839, 1840, 1843, 1851)
 REPORTS_BASE = REPO / "reports" / "mass_ocr_runs"
