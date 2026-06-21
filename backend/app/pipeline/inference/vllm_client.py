@@ -21,6 +21,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import time
 from dataclasses import dataclass
 from functools import lru_cache
@@ -35,7 +36,6 @@ from app.config import Settings, get_settings
 from app.observability.logger import get_logger
 from app.pipeline.inference.schemas import KanbanExtraction
 from app.pipeline.inference.schemas_strict import KANBAN_JSON_SCHEMA, grammar_version
-from app.pipeline.inference.response_parser import parse_ocr_response
 from app.pipeline.preprocessing import preprocess as preprocess_image
 from app.pipeline.region_detection import split_kanban
 
@@ -100,16 +100,54 @@ def _load_prompt_at(path: Path) -> tuple[str, str]:
     return text, digest
 
 
+_MISSING_COMMA_BETWEEN_OBJECTS = re.compile(r"}(\s*\n\s*){")
+
+
+def _repair_llm_json(text: str) -> str:
+    """Patch the most common LLM JSON glitch in our outputs.
+
+    Qwen2.5-VL through Ollama occasionally drops the comma separating
+    sibling row objects in the ``rows`` array, e.g.::
+
+        { ... "ltopo": "509"}
+            {"pri": "264", ... }
+
+    Inject the missing comma. Anything else stays untouched.
+    """
+    return _MISSING_COMMA_BETWEEN_OBJECTS.sub(r"},\1{", text)
+
+
 def _clean_json(raw: str) -> dict[str, Any]:
-    """Recover a dict from JSON first, then Nanonets-style HTML tables."""
-    return parse_ocr_response(raw)
+    """Recover a JSON object from a free-form VLM response.
 
+    Two-tier recovery:
 
-def _section_payload(data: dict[str, Any], section: str) -> dict[str, Any]:
-    nested = data.get(section)
-    if isinstance(nested, dict):
-        return nested
-    return data
+    1. **Strip + extract.** Remove ``<think>...</think>``, take the
+       first fenced ``{...}`` block if any, trim to the outer braces.
+    2. **Strict parse** with :func:`json.loads`.
+    3. **Comma-repair pass** with :func:`_repair_llm_json` for the
+       common missing-inter-row-comma failure, then strict parse again.
+
+    A more forgiving parser (``json_repair``) was tried at this layer
+    and reverted: it silently accepted partial JSON with extra empty
+    rows, which inflated hallucination metrics by 40+ pp on the
+    benchmark while only recovering 1 sheet. Phase 4 grammars are the
+    right fix for the residual cases.
+    """
+    text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+    if "```" in text:
+        for part in text.split("```"):
+            stripped = part.strip().lstrip("json").strip()
+            if stripped.startswith("{"):
+                text = stripped
+                break
+    start, end = text.find("{"), text.rfind("}") + 1
+    candidate = text[start:end] if (start != -1 and end > start) else text
+    try:
+        return json.loads(candidate)  # type: ignore[no-any-return]
+    except json.JSONDecodeError:
+        repaired = _repair_llm_json(candidate)
+        return json.loads(repaired)  # type: ignore[no-any-return]
 
 
 # Qwen2.5-VL uses 14x14 vision patches and the merger module groups them
@@ -470,13 +508,11 @@ def extract_with_crops(
     total_latency += lat_f
     total_tokens += tok_f
 
-    header_payload = _section_payload(header_data, "header") if isinstance(header_data, dict) else {}
     table_rows = table_data.get("rows", []) if isinstance(table_data, dict) else []
-    footer_payload = _section_payload(footer_data, "footer") if isinstance(footer_data, dict) else {}
     combined_payload = {
-        "header": header_payload,
+        "header": header_data if isinstance(header_data, dict) else {},
         "rows": table_rows if isinstance(table_rows, list) else [],
-        "footer": footer_payload,
+        "footer": footer_data if isinstance(footer_data, dict) else {},
     }
     extraction = KanbanExtraction.model_validate(combined_payload)
 

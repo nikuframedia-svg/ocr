@@ -3,13 +3,13 @@
 OCR pipeline for Metalogalva industrial Kanban production sheets.
 
 **Status:** Production baseline (R117) — Ollama nativo Windows
-serving `yasserrmd/Nanonets-OCR2-3B:latest` com `OCR_NO_THINK=1`. Roadmap de 8 fases em
+serving `qwen3-vl:8b` com `OCR_NO_THINK=1`. Roadmap de 8 fases em
 `docs/MIGRATION.md` (R105 runbook) e `CLAUDE.md` (resumo).
 
 ## Stack
 
 - Python 3.11 + uv + Pydantic v2 + structlog
-- **Ollama** (native Windows) serving `yasserrmd/Nanonets-OCR2-3B:latest`. The web OCR path uses
+- **Ollama** (native Windows) serving `qwen3-vl:8b`. The web OCR path uses
   Ollama's native API; scripts can use the OpenAI-compatible endpoint at
   `http://localhost:11434/v1`. `OCR_NO_THINK=1` desliga
   reasoning blocks for more stable JSON and lower latency.
@@ -31,7 +31,7 @@ serving `yasserrmd/Nanonets-OCR2-3B:latest` com `OCR_NO_THINK=1`. Roadmap de 8 f
   RTX 5060 Ti 16GB)
 - Recent NVIDIA driver
 - Python 3.11 + [uv](https://docs.astral.sh/uv/) on the host
-- Enough free disk for `yasserrmd/Nanonets-OCR2-3B:latest`; keep extra space for legacy/test
+- Enough free disk for `qwen3-vl:8b`; keep extra space for legacy/test
   models if benchmarking alternatives
 
 ## Quick start
@@ -45,11 +45,11 @@ cp .env.example .env
 
 # 3. Install Ollama and pull the model (once)
 #    Windows: install OllamaSetup.exe, then in any shell:
-ollama pull yasserrmd/Nanonets-OCR2-3B:latest   # production OCR model
+ollama pull qwen3-vl:8b   # production OCR model
 
 # 4. Sanity-check the endpoint
 uv run python scripts/check_vllm.py
-# Expected: {"status": "ok", "model": "yasserrmd/Nanonets-OCR2-3B:latest", ...}
+# Expected: {"status": "ok", "model": "qwen3-vl:8b", ...}
 
 # 5. Extract one (or many) Kanbans → CSV + side-by-side HTML
 uv run python scripts/extract.py inputs/originais/AugustoMonteiro_2026.04.16.JPG --html

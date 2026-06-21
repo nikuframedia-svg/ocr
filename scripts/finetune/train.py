@@ -18,10 +18,9 @@ import json
 from pathlib import Path
 
 # ---- Constantes a confirmar na Metalogalva -------------------------------
-# O modelo de producao no Ollama chama-se
-# 'yasserrmd/Nanonets-OCR2-3B:latest'. O fine-tuning precisa do modelo BASE
-# equivalente no HuggingFace/Unsloth. Confirma com:
-#     ollama show yasserrmd/Nanonets-OCR2-3B:latest
+# O modelo de producao no Ollama chama-se 'qwen3-vl:8b'. O fine-tuning precisa
+# do modelo BASE equivalente no HuggingFace/Unsloth. Confirma com:
+#     ollama show qwen3-vl:8b
 # e ajusta BASE_MODEL para o id correspondente antes de treinar.
 BASE_MODEL = "unsloth/Qwen2.5-VL-7B-Instruct"   # <-- confirmar vs 'ollama show'
 LORA_RANK = 16
