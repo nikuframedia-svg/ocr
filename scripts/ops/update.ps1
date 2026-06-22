@@ -42,12 +42,28 @@ foreach ($f in $protect) {
 # --- Buscar o codigo novo -------------------------------------------------
 # --ff-only: se por algum motivo nao for um avanco simples, para com erro
 # em vez de criar um merge confuso. Nesse caso copia o ecra e mostra ao Claude.
+#
+# R223 — os dados runtime (data/images, data/events.jsonl, data/kernel_state.json,
+# os JSON de cross-check, os aliases) DEIXARAM de ser tracked (passaram a
+# gitignored). Antes, como a app os reescrevia e estavam tracked, o working tree
+# estava sempre "sujo" e este pull abortava -> o codigo novo nunca chegava ao
+# disco (a fabrica chegou a estar 22 commits atras). Agora o working tree fica
+# limpo e o fast-forward passa sempre. (A transicao inicial dessa folha — passar
+# os ficheiros para untracked sem perder dados — e' feita UMA vez, ver runbook.)
+$before = (git -C $root rev-parse HEAD)
 Write-Host "A buscar codigo novo (git pull)..."
 git -C $root pull --ff-only origin main
-if (-not $?) {
+if ($LASTEXITCODE -ne 0) {
   Write-Host ""
   Write-Host "ERRO: o 'git pull' falhou. Copia este ecra e mostra ao Claude."
   exit 1
+}
+$after = (git -C $root rev-parse HEAD)
+Write-Host "HEAD: $before -> $after"
+if ($before -eq $after) {
+  Write-Host "(nada novo — ja estavas na versao mais recente do GitHub)"
+} else {
+  Write-Host "OK: codigo actualizado. A reiniciar para carregar a versao nova."
 }
 
 # --- Reiniciar o servidor -------------------------------------------------

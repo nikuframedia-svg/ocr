@@ -28,9 +28,53 @@ if (Test-Path $envFile) {
     Write-Host "(no .env at $envFile - using defaults inline below)"
 }
 
-# Kill any stragglers
-Get-Process | Where-Object { $_.Name -in @("python","cloudflared") } | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 1
+# R223 — parar o servidor antigo de forma FIÁVEL.
+# Bug anterior: matava só processos cujo Name era exactamente "python", mas na
+# Metalogalva o worker real corre como "python3.12.exe" (Python da Microsoft
+# Store; o .venv é um stub que arranca esse interpretador). Esse worker NUNCA
+# era morto -> ficava agarrado à porta 8080 e o uvicorn novo não conseguia
+# bind, servindo codigo velho indefinidamente. Agora matamos QUEM É DONO da
+# porta 8080 (seja qual for o nome) + qualquer python deste repo a correr
+# uvicorn + o cloudflared.
+function Get-Port8080Owners {
+  # PIDs que estao a OUVIR na 8080 (array, mesmo com 0/1/N). -ExpandProperty
+  # garante inteiros (nao objectos) no pipe.
+  return @(Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue |
+    Select-Object -ExpandProperty OwningProcess -ErrorAction SilentlyContinue |
+    Where-Object { $_ } | Sort-Object -Unique)
+}
+function Stop-Port8080 {
+  foreach ($procId in (Get-Port8080Owners)) {
+    Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+    Write-Host "  morto PID $procId (dono da porta 8080)"
+  }
+}
+Stop-Port8080
+# Qualquer python deste repo a correr uvicorn (apanha o stub .venv E o worker da
+# Store, ambos com 'uvicorn' + caminho do repo na linha de comando).
+Get-CimInstance Win32_Process -Filter "Name LIKE 'python%'" -ErrorAction SilentlyContinue |
+  Where-Object { $_.CommandLine -and ($_.CommandLine -like "*uvicorn*") -and ($_.CommandLine -like "*$root*") } |
+  ForEach-Object {
+    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    Write-Host "  morto PID $($_.ProcessId) ($($_.Name) uvicorn deste repo)"
+  }
+Get-Process cloudflared -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+# Confirmar que a porta 8080 ficou MESMO livre antes de arrancar (senão o novo
+# falha o bind em silêncio e o velho continua a servir).
+if ((Get-Port8080Owners).Count -gt 0) {
+  Stop-Port8080; Start-Sleep -Seconds 2
+  $stillBusy = Get-Port8080Owners
+  if ($stillBusy.Count -gt 0) { Write-Host "AVISO: porta 8080 ainda ocupada por PID(s): $($stillBusy -join ', ') — o arranque pode falhar." }
+}
+
+# R223 — limpar bytecode compilado. __pycache__ e' gitignored, logo um git pull
+# nunca o actualiza; um .pyc velho (de outra versao do Python ou outro commit)
+# podia fazer o processo novo servir codigo antigo. Apagamos e desligamos a
+# escrita de .pyc para o arranque ser deterministico.
+Get-ChildItem -Path $root -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
+  Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+$env:PYTHONDONTWRITEBYTECODE = "1"
 
 # Production OCR uses qwen3-vl:8b. Disable reasoning blocks via
 # OCR_NO_THINK=1; older Qwen3 tests showed extra "thinking" tokens can hurt
@@ -66,6 +110,28 @@ $uv = Start-Process -FilePath "$root\.venv\Scripts\python.exe" `
 $uv.Id | Out-File -Encoding ascii "$logs\uvicorn.pid"
 Write-Host "UVICORN_PID=$($uv.Id)"
 Start-Sleep -Seconds 4
+
+# R223 — health-check: confirmar que o servidor NOVO respondeu. O conteudo de
+# /health mostra o ENGINE_VERSION + git SHA realmente carregados, por isso isto
+# tambem PROVA que versao esta viva (fim do "atualizei e ficou igual" cego).
+$healthy = $false
+for ($i = 0; $i -lt 30; $i++) {
+  try {
+    $r = Invoke-WebRequest -Uri "http://127.0.0.1:8080/health" -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
+    if ($r.StatusCode -eq 200) { $healthy = $true; Write-Host "HEALTH_OK: $($r.Content)"; break }
+  } catch { Start-Sleep -Milliseconds 700 }
+}
+if (-not $healthy) {
+  # NB: $uv e' o stub do .venv; com o Python da Store ele pode terminar apos
+  # lancar o worker real, por isso nao testamos $uv.Id (daria falso "crash").
+  # O sinal fiavel e' o proprio /health. Em falha, mostramos diagnostico util.
+  $own = Get-Port8080Owners
+  Write-Host "ERRO: o servidor novo NAO respondeu em http://127.0.0.1:8080/health apos ~20s."
+  if ($own.Count -gt 0) { Write-Host "      (porta 8080 ocupada por PID(s): $($own -join ', '))" }
+  else { Write-Host "      (ninguem esta a ouvir na porta 8080 — o uvicorn nao arrancou)" }
+  Write-Host "      O deploy PODE nao ter pegado. Ultimas linhas de data\_logs\uvicorn.err:"
+  Get-Content "$logs\uvicorn.err" -Tail 15 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "      | $_" }
+}
 
 # R65 - cloudflared auto-detect (PATH, then common install locations).
 $cflar = (Get-Command cloudflared -ErrorAction SilentlyContinue).Source

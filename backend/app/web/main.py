@@ -249,6 +249,51 @@ def home(request: Request) -> RedirectResponse:
     return RedirectResponse(target, status_code=302)
 
 
+_GIT_SHA_CACHE: str | None = None
+
+
+def _git_short_sha() -> str:
+    """R223 — git short-SHA do código a correr, para o /health.
+
+    Calculado uma vez (cache). Permite confirmar, de fora, QUE versão está
+    mesmo viva na fábrica — o sintoma "atualizei e ficou igual" era, na raiz,
+    um processo a servir código antigo sem forma de o ver."""
+    global _GIT_SHA_CACHE
+    if _GIT_SHA_CACHE is not None:
+        return _GIT_SHA_CACHE
+    sha = "unknown"
+    try:
+        import subprocess
+        repo_root = Path(__file__).resolve().parents[3]
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(repo_root), capture_output=True, text=True, timeout=3,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            sha = out.stdout.strip()
+    except Exception:  # noqa: BLE001
+        pass
+    _GIT_SHA_CACHE = sha
+    return sha
+
+
+@app.get("/health")
+def health() -> JSONResponse:
+    """R223 — versão viva VISÍVEL (diagnóstico de deploy).
+
+    O `start.ps1` faz health-check a este endpoint após reiniciar; o conteúdo
+    mostra o ENGINE_VERSION + git SHA realmente carregados, para nunca mais
+    haver dúvida sobre o que está a correr."""
+    from app.pipeline.scoring_engine import ENGINE_VERSION
+    return JSONResponse({
+        "status": "ok",
+        "engine_version": ENGINE_VERSION,
+        "git_sha": _git_short_sha(),
+        "python": sys.version.split()[0],
+        "pid": os.getpid(),
+    })
+
+
 @app.get("/capture", response_class=HTMLResponse)
 def capture_page(request: Request) -> Response:
     # R114 — operadores para dropdown de "Quem está a validar?" em
@@ -964,7 +1009,16 @@ def _build_cc_maps(sheet_id: int) -> tuple[
             _run_and_store_cross_check(sheet_id, rebuild_from_raw=rebuild_from_raw)
             cc = load_sheet_cross_check(sheet_id)
         except Exception:  # noqa: BLE001
-            pass
+            # R223 — NÃO engolir em silêncio. Esta regeneração on-demand é o que
+            # aplica um motor novo às folhas antigas ao abri-las; se falhava
+            # (refs indisponíveis, db, cross_check_sheet a rebentar), a folha
+            # ficava a mostrar o motor ANTIGO (ou cinza) sem qualquer aviso —
+            # mascarando um deploy que não pegou. Logar para stderr/uvicorn.err.
+            print(
+                f"[cross-check] regeneração on-demand falhou para sheet "
+                f"{sheet_id}: {traceback.format_exc()}",
+                file=sys.stderr, flush=True,
+            )
     sheet = db.get_sheet(sheet_id) or {}
     snapped_map = _build_snapped_map_from_raw(sheet)
     if not cc:
