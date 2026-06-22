@@ -449,14 +449,15 @@ class TestShadowScore:
             for item in result["to_analisar"]
         )
 
-    def test_larg_mm_stocksap_over_10mm_substitutes_reference(self):
+    def test_larg_mm_stocksap_over_color_tolerance_substitutes_reference(self):
         from app.pipeline.scoring_engine import cross_check_sheet
 
+        # R222/D7 — limiar de COR de larg = 50 (30/05). 320 vs 250 = 70 > 50.
         sheet_data = {
             "template_name": "bobine_formato",
             "header": {},
             "footer": {},
-            "rows": [{"lote": "M26B0307", "larg_mm": "261"}],
+            "rows": [{"lote": "M26B0307", "larg_mm": "320"}],
         }
 
         result = cross_check_sheet(sheet_data, None, _REFS)
@@ -466,7 +467,7 @@ class TestShadowScore:
         assert larg["status"] == "MATCH"
         assert larg["ref"] == "250"
         assert larg["ref_source"] == "sap"
-        assert larg["match_kind"] == "MATCH_FORCADO"
+        assert larg["match_kind"] in ("MATCH_FORCADO", "MATCH_BEST_GUESS")
         assert larg["forced_from_status"] == "very_different"
 
     def test_larg_mm_stocksap_within_10mm_can_snap(self):
@@ -512,7 +513,7 @@ class TestShadowScore:
         assert larg["status"] == "MATCH"
         assert larg["ref_source"] == "plan"
 
-    def test_larg_mm_plan_over_10mm_substitutes_reference_without_sap(self):
+    def test_larg_mm_plan_over_color_tolerance_substitutes_reference_without_sap(self):
         refs = {
             "available": True,
             "of_to_entries": {
@@ -526,30 +527,23 @@ class TestShadowScore:
             "clientes_plan": frozenset({"ACME"}),
             "lotes_sap_full": {},
         }
+        # R222/D7 — 320 vs 250 = 70 > limiar de cor 50 → very_different. Sem
+        # SAP, o winner forçado substitui pelo plano e marca forced_from_status.
         sheet_data = {
             "template_name": "bobine_formato",
             "header": {},
             "footer": {},
-            "rows": [{"of": "262500", "larg_mm": "261"}],
+            "rows": [{"of": "262500", "larg_mm": "320"}],
         }
 
         result = cross_check_sheet(sheet_data, None, refs)
         larg = result["rows"][0]["fields"]["larg_mm"]
 
         assert larg["value"] == "250"
-        assert larg["status"] == "NO_MATCH"
+        assert larg["status"] == "MATCH"
         assert larg["ref_source"] == "plan"
         assert larg["ref"] == "250"
-        assert {
-            "section": "rows",
-            "row_index": 0,
-            "field": "larg_mm",
-            "field_path": "rows[0].larg_mm",
-            "value": "261",
-            "ref": "250",
-            "ref_source": "plan",
-            "reason": "Motor propõe valor muito diferente do OCR",
-        } in result["to_analisar"]
+        assert larg["forced_from_status"] == "very_different"
 
     def test_larg_mm_prefers_stocksap_over_plan_and_substitutes_when_lote_present(self):
         refs = {
@@ -565,32 +559,37 @@ class TestShadowScore:
             "clientes_plan": frozenset({"ACME"}),
             "lotes_sap_full": {"LOTEX": {"larg": 300, "esp": 2.5}},
         }
+        # R222/D7 — SAP larg 300; OCR 370 (delta 70 > limiar de cor 50) → revisão.
         sheet_data = {
             "template_name": "bobine_formato",
             "header": {},
             "footer": {},
-            "rows": [{"of": "262500", "lote": "LOTEX", "larg_mm": "250"}],
+            "rows": [{"of": "262500", "lote": "LOTEX", "larg_mm": "370"}],
         }
 
         result = cross_check_sheet(sheet_data, None, refs)
         larg = result["rows"][0]["fields"]["larg_mm"]
 
         assert larg["value"] == "300"
-        assert larg["status"] == "NO_MATCH"
+        assert larg["status"] == "MATCH"
         assert larg["ref"] == "300"
         assert larg["ref_source"] == "sap"
+        assert larg["forced_from_status"] == "very_different"
 
     @pytest.mark.parametrize(
-        ("field", "ocr_value", "ref_value", "visible_value", "legacy_status"),
+        ("field", "ocr_value", "ref_value"),
         [
-            ("comp_mm", "1251", "1200", "1200", "NO_MATCH"),
-            ("lbase", "61", "50", "50", "NO_MATCH"),
-            ("ltopo", "41", "30", "30", "NO_MATCH"),
-            ("esp", "2,7", "2,6", "2,6", "NO_MATCH"),
+            # R222/D7 — deltas abaixo do limiar de COR de 30/05 (comp 200,
+            # lbase/ltopo 30, esp 0,5): substituem (snapped/MATCH), já não
+            # vermelho como na versão apertada.
+            ("comp_mm", "1251", "1200"),
+            ("lbase", "61", "50"),
+            ("ltopo", "41", "30"),
+            ("esp", "2,7", "2,6"),
         ],
     )
-    def test_plan_numeric_values_above_validation_tolerance_go_to_review(
-        self, field, ocr_value, ref_value, visible_value, legacy_status
+    def test_plan_numeric_small_diffs_snap_within_color_tolerance(
+        self, field, ocr_value, ref_value
     ):
         from app.pipeline.scoring_engine import cross_check_sheet
 
@@ -604,21 +603,93 @@ class TestShadowScore:
         result = cross_check_sheet(sheet_data, None, _REFS)
         cell = result["rows"][0]["fields"][field]
 
-        assert cell["value"] == visible_value
-        assert cell["status"] == legacy_status
+        assert cell["value"] == ref_value
+        assert cell["status"] == "MATCH"
         assert cell["ref_source"] == "plan"
         assert cell["ref"] == ref_value
-        if legacy_status == "NO_MATCH":
-            assert {
-                "section": "rows",
-                "row_index": 0,
-                "field": field,
-                "field_path": f"rows[0].{field}",
-                "value": ocr_value,
-                "ref": ref_value,
-                "ref_source": "plan",
-                "reason": "Motor propõe valor muito diferente do OCR",
-            } in result["to_analisar"]
+        # já não vai para a fila de revisão
+        assert all(item.get("field") != field for item in result["to_analisar"])
+
+    def test_plan_numeric_big_diff_with_strong_winner_goes_to_review(self):
+        """R222/D7 — acima do limiar de COR de 30/05, com winner forte (a
+        identidade ainda bate), a célula fica vermelha (NO_MATCH/rever)."""
+        from app.pipeline.scoring_engine import cross_check_sheet
+
+        sheet_data = {
+            "template_name": "bobine_formato",
+            "header": {},
+            "footer": {},
+            "rows": [{"of": "262107", "esp": "3,3"}],
+        }
+
+        result = cross_check_sheet(sheet_data, None, _REFS)
+        esp = result["rows"][0]["fields"]["esp"]
+
+        assert esp["value"] == "2,6"
+        assert esp["status"] == "NO_MATCH"
+        assert esp["ref_source"] == "plan"
+
+    def test_winner_without_canonical_fills_field_from_sibling_entry(self):
+        """R222/D4 — o winner (linha do plano) não tem `ov`, mas uma linha-irmã
+        da mesma OF tem. Em vez de ficar em MATCH_REGRA_VAZIO, o motor vai
+        buscar o `ov` coerente à irmã (olhando os outros campos da linha)."""
+        from app.pipeline.scoring_engine import cross_check_sheet
+
+        refs = {
+            "available": True,
+            "of_to_entries": {
+                "300001": [
+                    # winner: bate of+cliente+comp+lbase, mas sem ov
+                    {"of": "300001", "ov": "", "cliente": "ACME",
+                     "comp": 5000, "lbase": 100, "designacao": "OMEGA 5000 H"},
+                    # irmã da mesma OF: tem o ov, mas diverge no resto
+                    {"of": "300001", "ov": "2599", "cliente": "BETA",
+                     "comp": 9000, "designacao": "SIGMA 9000 H"},
+                ],
+            },
+            "of_to_ovs": {"300001": frozenset({"2599"})},
+            "clientes_plan": frozenset({"ACME", "BETA"}),
+            "lotes_sap_full": {},
+        }
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"of": "300001", "cliente": "ACME",
+                      "comp_mm": "5000", "lbase": "100", "ov": ""}],
+        }
+
+        result = cross_check_sheet(sheet_data, None, refs)
+        ov = result["rows"][0]["fields"]["ov"]
+        assert ov["value"] == "2599"
+        assert ov["source"] == "plan"
+        assert ov["ref"] == "2599"
+
+    def test_winner_without_canonical_and_no_sibling_stays_empty_rule(self):
+        """R222/D4 — controlo: sem nenhuma linha de onde tirar o `ov`, mantém o
+        comportamento anterior (MATCH_REGRA_VAZIO, sem inventar valor)."""
+        from app.pipeline.scoring_engine import cross_check_sheet
+
+        refs = {
+            "available": True,
+            "of_to_entries": {
+                "300001": [
+                    {"of": "300001", "ov": "", "cliente": "ACME",
+                     "comp": 5000, "lbase": 100, "designacao": "OMEGA 5000 H"},
+                ],
+            },
+            "of_to_ovs": {"300001": frozenset()},
+            "clientes_plan": frozenset({"ACME"}),
+            "lotes_sap_full": {},
+        }
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"of": "300001", "cliente": "ACME",
+                      "comp_mm": "5000", "lbase": "100", "ov": ""}],
+        }
+
+        result = cross_check_sheet(sheet_data, None, refs)
+        ov = result["rows"][0]["fields"]["ov"]
+        assert ov["value"] == ""
+        assert ov.get("match_kind") == "MATCH_REGRA_VAZIO"
 
     @pytest.mark.parametrize(
         ("field", "ocr_value", "ref_value"),
@@ -1724,13 +1795,16 @@ class TestShadowScore:
         assert fields["ov"]["status"] == "snapped"
         assert fields["cliente"]["status"] == "confirmed"
         assert fields["modelo"]["status"] == "confirmed"
+        # R222/D7 — deltas (comp 51, lbase 11, ltopo 11) ficam abaixo do limiar
+        # de COR de 30/05 (200/30/30): substituem (snapped) mas já não vermelho.
+        # Continuam fora da tolerância de SCORING (não inflam o winner_score).
         for field, ref in (
             ("comp_mm", "1500"),
             ("lbase", "60"),
             ("ltopo", "40"),
         ):
             assert fields[field]["value"] == ref
-            assert fields[field]["status"] == "very_different"
+            assert fields[field]["status"] == "snapped"
 
 
 class TestFindWinner:
@@ -2826,8 +2900,9 @@ class TestGlobalWinnerScoring:
         for field in ("comp_mm", "lbase", "ltopo", "esp"):
             assert fields[field]["status"] == "confirmed"
 
-    def test_obra_concluida_is_metadata_after_global_winner(self):
-        """Obra concluída acompanha o winner global sem alterar células."""
+    def test_obra_concluida_paints_whole_row_red(self):
+        """R222 (reverte R163): obra concluída na fase pinta a linha inteira de
+        vermelho (very_different / source="obra_concluida")."""
         refs = {
             **_REFS,
             "of_to_entries": {
@@ -2862,12 +2937,14 @@ class TestGlobalWinnerScoring:
         assert row["winner_score"] > 5
         assert row["obra_concluida"] is True
         assert all(
-            cell.get("source") != "obra_concluida"
+            cell.get("source") == "obra_concluida"
+            and cell["status"] == "very_different"
             for cell in row["fields"].values()
         )
 
-    def test_obra_concluida_is_row_warning_not_cell_error(self):
-        """Fase cheia no plan não pode transformar uma linha certa em NO_MATCH."""
+    def test_obra_concluida_forces_whole_row_to_review(self):
+        """R222 (reverte R163): mesmo com a linha a bater certo com o plano, a
+        fase cheia força very_different/source="obra_concluida" (rever)."""
         refs = {
             **_REFS,
             "of_to_entries": {
@@ -2905,12 +2982,13 @@ class TestGlobalWinnerScoring:
         fields = row["fields"]
 
         assert row["obra_concluida"] is True
-        assert all(cell.get("source") != "obra_concluida" for cell in fields.values())
-        for field in (
-            "cliente", "ov", "of", "modelo", "comp_mm",
-            "larg_mm", "lote", "esp", "lbase", "ltopo",
-        ):
-            assert fields[field]["status"] == "confirmed"
+        # R222 — obra concluída força very_different/source="obra_concluida" em
+        # toda a linha, mesmo quando o OCR bate certo com o plano.
+        assert all(
+            cell.get("source") == "obra_concluida"
+            and cell["status"] == "very_different"
+            for cell in fields.values()
+        )
 
     def test_score_propagated_to_legacy_cell(self):
         """Legacy cell carrega `score` (winner score) — usado no audit."""
@@ -3257,7 +3335,8 @@ class TestAcabamentoPreservesOperatorReference:
         assert row["winner_score"] is not None
         assert fields["of"]["value"] == "257504"
         assert fields["of"]["status"] == "snapped"
-        assert fields["modelo"]["value"] == "CAO8E10B"
+        # R222/D8 — modelo no Acabamento volta à designação COMPLETA do plan.
+        assert fields["modelo"]["value"] == "CAO8E10B - ESP 3"
         assert fields["modelo"]["status"] == "snapped"
         assert fields["qtd"]["status"] == "confirmed"
 

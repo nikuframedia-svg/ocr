@@ -311,6 +311,22 @@ _VERY_DIFF_NUM_ABS = {             # diferença absoluta > X = revisão humana
     "dtopo": 30.0,
 }
 
+# R222 — limiar SÓ para a COR vermelha (_is_very_different), restaurado aos
+# valores de 30/05 (v9_R134). Separado de `_VERY_DIFF_NUM_ABS` de propósito:
+# aquele rege a SELEÇÃO de winner (score_entry, _entry_field_similarity,
+# candidatos, ambiguidade) e fica apertado; este só decide quando pintar
+# vermelho, e volta a ser tolerante como em maio (menos falso-vermelho).
+_COLOR_NUM_ABS = {                 # 30/05 — diferença absoluta > X = vermelho
+    "comp_mm": 200.0,
+    "larg_mm": 50.0,
+    "lbase": 30.0,
+    "ltopo": 30.0,
+    "esp": 0.5,
+    # R128 — LASER
+    "dbase": 30.0,
+    "dtopo": 30.0,
+}
+
 # Legendas para a UI (status → label PT-PT)
 _STATUS_LABELS = {
     "confirmed":      "Confirmado",
@@ -365,8 +381,9 @@ _STATUS_LABELS = {
 # de modelo que o score; O/0 em modelo já não impede winner diagnóstico.
 # R162 — espessura recupera vírgula perdida no OCR (26 → 2,6) apenas quando
 # a variante /10 bate a referência; erros grandes continuam em revisão.
-# R163 — obra_concluida deixa de pintar a linha inteira como NO_MATCH. A fase
-# cheia no plan é aviso/metadata; não transforma células certas em erro.
+# R163 — obra_concluida deixou de pintar a linha inteira como NO_MATCH (fase
+# cheia = aviso/metadata). REVERTIDO em R222: volta a forçar very_different /
+# source="obra_concluida" em toda a linha (ver _score_row + _all_eligible_phase_full).
 # R164 — legado: header/footer sem referência real deixavam de contar como
 # MATCH só por estarem preenchidos. Em R216, usam regra/sintaxe local.
 # R165 — header.pernr validado contra ListaColaboradores e contra
@@ -456,7 +473,13 @@ _STATUS_LABELS = {
 # R221 — melhor linha plausível: campos errados/vazios deixam de bloquear.
 # Linha não vazia com refs escolhe sempre strong/forced/forced_top1; valores
 # locais vazios com winner viram MATCH_REGRA_VAZIO em vez de NA.
-ENGINE_VERSION = "v21_R221"
+# R222 — alinhar com 30/05: (D7) cor vermelha numérica usa _COLOR_NUM_ABS
+# tolerante (scoring fica apertado); (D6) obra_concluida volta a pintar a linha
+# inteira de vermelho + bloquear auto-substituição (reverte R163); (D8) modelo
+# no Acabamento volta à designação completa; (D4 novo) winner sem canónico para
+# um campo busca valor coerente noutra entry (_winner_field_fallback_proposal).
+# BUMP obrigatório: força regeneração dos cross-check JSON antigos.
+ENGINE_VERSION = "v22_R222"
 
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
@@ -1318,11 +1341,35 @@ def _all_eligible_phase_full(
     current_phase: str | None,
     winner: dict | None = None,
 ) -> bool:
-    """R125 — aviso de obra concluída só existe depois de winner válido."""
-    _ = (candidates_by_field, row, refs)
-    if not current_phase or not winner:
+    """R125 (restaurado R222) — True se TODAS as entries elegíveis (score≥1)
+    desta linha estão concluídas em `current_phase`. Sinaliza "obra concluída":
+    o operador está a registar produção numa OF/peça já fechada nesse setor.
+    False quando `current_phase` é None, não há candidatos elegíveis, ou pelo
+    menos uma linha ainda tem espaço. (R163 revertido: volta a forçar vermelho
+    no `_score_row`.) O param `winner` é aceite por compat. de chamada mas não
+    é usado — a deteção é sobre TODAS as entries elegíveis, não só o winner."""
+    _ = winner
+    if not current_phase:
         return False
-    return _phase_is_full(winner, current_phase)
+    entries_by_key: dict[tuple, dict] = {}
+    for field in _PLAN_FIELDS:
+        for cand in candidates_by_field.get(field, []):
+            for e in cand.get("plan_entries", []):
+                k = _entry_key(e)
+                entries_by_key.setdefault(k, e)
+    if not entries_by_key:
+        return False
+    found_eligible = False
+    for k, e in entries_by_key.items():
+        if "_of" not in e:
+            e = dict(e)
+            e["_of"] = k[0]
+        if score_entry(e, row, refs) < 1:
+            continue
+        found_eligible = True
+        if not _phase_is_full(e, current_phase):
+            return False
+    return found_eligible
 
 
 # Detecção de "muito diferente" ---------------------------------------------
@@ -1338,7 +1385,9 @@ def _is_very_different(field: str, ocr_value: str, proposed: str) -> bool:
             return False
         if field == "esp" and _num_matches(field, ocr_value, proposed, 0.05):
             return False
-        abs_max = _VERY_DIFF_NUM_ABS.get(field, 0)
+        # R222 — cor usa o limiar tolerante de 30/05 (_COLOR_NUM_ABS), não o
+        # limiar apertado do scoring (_VERY_DIFF_NUM_ABS).
+        abs_max = _COLOR_NUM_ABS.get(field, 0)
         if abs(ocr_n - prop_n) > abs_max:
             return True
         return False
@@ -1664,8 +1713,8 @@ def _entry_field_canonical(field: str, entry: dict, template_name: str | None = 
         des = " ".join(str(entry.get("designacao") or "").split())
         if not des:
             return ""
-        if template_name == "acabamento":
-            return _model_first_token(des) or des
+        # R222 (reverte D8) — modelo = designação COMPLETA do plan também no
+        # Acabamento (antes usava _model_first_token / código curto).
         return des
     if field == "cliente":
         return str(entry.get("cliente") or "").strip()
@@ -1704,6 +1753,62 @@ def _winner_ambiguous_for_field(
     return False
 
 
+def _winner_field_fallback_proposal(
+    field: str,
+    winner: dict,
+    candidates: list[dict],
+    row: dict,
+    refs: dict,
+    idx: dict | None,
+    template_name: str | None = None,
+) -> str | None:
+    """R222/D4 — o winner não tem valor canónico para `field`. Em vez de cair
+    logo em MATCH_FORCADO_SEM_CANONICO, procura noutra entry do plano um valor
+    que faça sentido para esta linha. Reúne um pool — candidatos top-K do
+    campo + rivais quase-empatados + entries com a mesma OF do winner — e
+    escolhe a entry de maior afinidade pelos OUTROS campos da linha
+    (`_entry_global_score` sem `field`) que tenha esse campo preenchido.
+    Devolve esse valor canónico, ou None se nada fizer sentido."""
+    pool: list[dict] = []
+    for cand in candidates or []:
+        pool.extend(cand.get("plan_entries") or [])
+    pool.extend(winner.get("_rivals") or [])
+    winner_of = winner.get("_of") or winner.get("of")
+    if winner_of and idx:
+        for entry in _all_plan_entries(idx).values():
+            if (entry.get("_of") or entry.get("of")) == winner_of:
+                pool.append(entry)
+    if not pool:
+        return None
+
+    other_fields = frozenset(_PLAN_FIELDS) - {field}
+    seen: set[tuple] = set()
+    scored: list[tuple[float, int, str]] = []
+    for entry in pool:
+        key = _entry_key(entry)
+        if key in seen:
+            continue
+        seen.add(key)
+        value = _entry_field_canonical(field, entry, template_name)
+        if not value:
+            continue
+        affinity, exact, _reasons, _raw = _entry_global_score(
+            entry, row, refs, other_fields
+        )
+        scored.append((float(affinity), int(exact), value))
+    if not scored:
+        return None
+
+    # Maior afinidade pelos OUTROS campos; desempata por nº de campos exatos.
+    scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    best_affinity, _best_exact, best_value = scored[0]
+    # Exige um mínimo de afinidade para não inventar a partir de uma entry
+    # aleatória do plano (mesmo limiar do modo `forced`).
+    if best_affinity < _MIN_FORCED_WINNER_SCORE:
+        return None
+    return best_value
+
+
 def _apply_winner_to_field(
     field: str,
     ocr_value: str,
@@ -1713,6 +1818,7 @@ def _apply_winner_to_field(
     row: dict,
     has_field_reference: bool,
     template_name: str | None = None,
+    idx: dict | None = None,
 ) -> dict:
     if field in _NO_REF_FIELDS:
         return _score_no_ref_row_cell(field, ocr_value)
@@ -1807,13 +1913,10 @@ def _apply_winner_to_field(
         elif field == "ov":
             proposed = str(winner.get("ov") or "").strip()
         elif field == "modelo":
+            # R222 (reverte D8) — designação COMPLETA do plan também no
+            # Acabamento (antes usava _model_first_token / código curto).
             des = " ".join(str(winner.get("designacao") or "").split())
-            if not des:
-                proposed = ocr_value or None
-            elif template_name == "acabamento":
-                proposed = _model_first_token(des) or des
-            else:
-                proposed = des
+            proposed = des if des else (ocr_value or None)
         elif field == "cliente":
             proposed = str(winner.get("cliente") or "").strip()
         elif field in ("comp_mm", "larg_mm", "lbase", "ltopo", "esp", "dbase", "dtopo"):
@@ -1831,42 +1934,53 @@ def _apply_winner_to_field(
 
     if not proposed:
         if winner is not None:
-            if ocr_value:
+            # R222/D4 — winner sem valor canónico para este campo: antes de
+            # cair em MATCH_FORCADO_SEM_CANONICO, procura nas outras entries
+            # plausíveis (mesma OF do winner, rivais, candidatos top-K) a que
+            # melhor combina com os OUTROS campos da linha e usa o valor dela.
+            # Se achar, cai no fluxo normal abaixo (guarda de ambiguidade R219
+            # + _finish_cell).
+            proposed = _winner_field_fallback_proposal(
+                field, winner, candidates, row, refs, idx, template_name
+            )
+        if not proposed:
+            if winner is not None:
+                if ocr_value:
+                    return _mark_winner_cell(
+                        _make_cell(
+                            _format_value(field, ocr_value),
+                            "confirmed",
+                            "syntax",
+                            ref_source=_field_ref_source(field, refs, row),
+                            match_kind="MATCH_FORCADO_SEM_CANONICO",
+                            warning="Winner escolhido, mas sem valor canónico para este campo.",
+                        ),
+                        winner,
+                    )
                 return _mark_winner_cell(
-                    _make_cell(
-                        _format_value(field, ocr_value),
-                        "confirmed",
-                        "syntax",
-                        ref_source=_field_ref_source(field, refs, row),
-                        match_kind="MATCH_FORCADO_SEM_CANONICO",
-                        warning="Winner escolhido, mas sem valor canónico para este campo.",
-                    ),
+                    _empty_rule_cell(field, ref_source=_field_ref_source(field, refs, row)),
                     winner,
                 )
-            return _mark_winner_cell(
-                _empty_rule_cell(field, ref_source=_field_ref_source(field, refs, row)),
-                winner,
-            )
-        if field == "cliente" and ocr_value:
-            for cand in candidates or []:
-                proposed_cliente = str(cand.get("value") or "").strip()
-                if not cand.get("plan_entries") or not proposed_cliente:
-                    continue
-                if _cliente_values_match(ocr_value, proposed_cliente, refs):
-                    return _make_cell(
-                        _format_value(field, ocr_value),
-                        "confirmed",
-                        "ocr_raw",
-                        proposed=_format_value(field, proposed_cliente),
-                        ref_source="plan",
-                        score=None,
-                    )
-        if winner is None and ocr_value and has_field_reference:
-            return _make_cell(
-                ocr_value, "very_different", "ocr_raw",
-                ref_source=_field_ref_source(field, refs, row),
-            )
-        return _make_cell(ocr_value, "NA", "ocr_raw")
+            if field == "cliente" and ocr_value:
+                for cand in candidates or []:
+                    proposed_cliente = str(cand.get("value") or "").strip()
+                    if not cand.get("plan_entries") or not proposed_cliente:
+                        continue
+                    if _cliente_values_match(ocr_value, proposed_cliente, refs):
+                        return _make_cell(
+                            _format_value(field, ocr_value),
+                            "confirmed",
+                            "ocr_raw",
+                            proposed=_format_value(field, proposed_cliente),
+                            ref_source="plan",
+                            score=None,
+                        )
+            if winner is None and ocr_value and has_field_reference:
+                return _make_cell(
+                    ocr_value, "very_different", "ocr_raw",
+                    ref_source=_field_ref_source(field, refs, row),
+                )
+            return _make_cell(ocr_value, "NA", "ocr_raw")
 
     score = winner.get("_score") if winner else None
 
@@ -1977,10 +2091,12 @@ def _score_row(
       - campo próprio do template sem referência (cesta_n, m2, sobras, ...) →
         regra local, para não deixar valores preenchidos neutros.
 
-    R125: quando `current_phase` é passado, desempata o winner entre
-    linhas ainda com espaço nessa fase e, se TODAS as linhas candidatas
-    estiverem fechadas nessa fase, marca a linha com `obra_concluida=True`.
-    R163: isto é apenas aviso/metadata; não altera os estados das células.
+    R125 (restaurado R222): quando `current_phase` é passado, desempata o
+    winner entre linhas ainda com espaço nessa fase e, se TODAS as linhas
+    candidatas estiverem fechadas nessa fase, marca a linha inteira como
+    "obra_concluída" — todos os campos passam a `very_different` com
+    `source="obra_concluida"`, sinalizando vermelho na UI e bloqueando a
+    auto-substituição. (R222 reverte o R163, que tornara isto só metadata.)
     """
     cc_fields = set(cross_check_fields)
 
@@ -2030,6 +2146,7 @@ def _score_row(
                 candidates_by_field.get(field, []), refs, row,
                 _has_field_reference_pool(field, refs, idx, row),
                 template_name=template_name,
+                idx=idx,
             )
         elif field in _NO_REF_FIELDS:
             result = _score_no_ref_row_cell(
@@ -2060,6 +2177,18 @@ def _score_row(
             )
         fields_out[k] = extra_cell
         _tally(extra_cell["status"])
+
+    # R125 (restaurado R222 — reverte R163): obra concluída na fase força a
+    # linha inteira a `very_different` / `source="obra_concluida"`. Isso pinta
+    # vermelho na UI e bloqueia a auto-substituição em `_maybe_apply_snap`
+    # (que ignora `source=="obra_concluida"`).
+    if obra_concluida:
+        snapped = confirmed = na = very_diff = 0
+        for fn, cell in fields_out.items():
+            fields_out[fn] = _make_cell(
+                cell.get("value", ""), "very_different", "obra_concluida",
+            )
+            very_diff += 1
 
     total = snapped + confirmed + na + very_diff
     row_out = {
