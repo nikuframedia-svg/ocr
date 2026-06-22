@@ -96,3 +96,17 @@ data/cross_sheet.json
 lexicons/sap_plan_mined.json
 lexicons/learned_overlay.json
 kanban_refs/04_Documentacao/_refs_status.json
+
+# R223 — MESMO problema do R121, mas estes ficheiros tinham ficado tracked e a
+# app reescreve-os a cada folha. Isso mantinha o working tree SEMPRE sujo e
+# fazia o `git pull --ff-only` da fábrica ABORTAR (os commits do dev tocavam-lhes
+# e havia conflito local) -> o código novo nunca chegava ao disco (a fábrica
+# chegou a 22 commits atrás). Untracked via `git rm --cached`; os ficheiros no
+# disco ficam intactos. A migração PC↔Portátil destes dados, se precisares, é
+# por cópia explícita (não por git).
+data/images/
+data/events.jsonl
+data/kernel_state.json
+kanban_refs/03_Cross_Check/
+lexicons/operador_aliases.json
+lexicons/cliente_aliases.json

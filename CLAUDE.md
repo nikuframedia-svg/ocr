@@ -35,8 +35,11 @@ Audit trail do agente Qwen em `backend/app/pipeline/qwen_agent.py` +
   subdirs `finetune/`, `data/`, `ops/` para utilitários R105+
 - `kanban_refs/` — SAP refs factory (StockSAP, plan_colunas_cpis, ListaColaboradores)
 - `inputs/originais/`, `ground_truth/`, `lexicons/` — dataset histórico (TRACKED em R64)
-- `data/app.db`, `data/images/`, `data/cross_sheet.json` — estado runtime
-  (TRACKED deliberadamente para a migração PC↔Portátil)
+- `data/`, `kanban_refs/03_Cross_Check/`, `lexicons/{operador,cliente}_aliases.json`
+  — estado runtime, **gitignored** (R121+R223). Eram tracked, mas como a app os
+  reescreve, mantinham o working tree sujo e faziam o `git pull` da fábrica
+  abortar (deploy não pegava). Migração destes dados PC↔Portátil é por cópia
+  explícita, não por git.
 - `docs/MIGRATION.md` — runbook PC→Portátil (R105)
 - `prompts/ocr6_v3.txt` — prompt canónico
 
