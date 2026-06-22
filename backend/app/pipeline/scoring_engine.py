@@ -283,6 +283,18 @@ _FORCED_WINNER_MIN_SIM = {
 }
 _MIN_FORCED_WINNER_SCORE = 0.01
 _MIN_FORCED_TOP1_SCORE = -999.0
+# R223 — votação holística: um campo "concorda" quando a similaridade >= isto.
+# O winner passa a ser quem concorda em MAIS campos (todos com peso igual), e
+# não quem soma mais peso — para nenhum campo (ex.: um modelo exato) mandar
+# sozinho e arrastar para a encomenda errada.
+_AGREE_THRESHOLD = 0.55
+# R223 — para campos NUMÉRICOS/dimensão exige-se quase-exato para "concordar":
+# um OF/cliente mal lido é um misread (conta em fuzzy), mas uma medida 0,4 ao
+# lado é mesmo outra medida — não pode contar como concordância só pela cauda
+# do decay numérico (senão peças com a mesma medida viram rivais falsas).
+_AGREE_NUM_THRESHOLD = 0.9
+# R223 — campos de IDENTIDADE (identificam a peça): of/ov/cliente/modelo.
+_IDENTITY_FIELDS = frozenset({"of", "ov", "cliente", "modelo"})
 
 _FIELD_SCORE_WEIGHTS = {
     "of": 1.00,
@@ -479,7 +491,11 @@ _STATUS_LABELS = {
 # no Acabamento volta à designação completa; (D4 novo) winner sem canónico para
 # um campo busca valor coerente noutra entry (_winner_field_fallback_proposal).
 # BUMP obrigatório: força regeneração dos cross-check JSON antigos.
-ENGINE_VERSION = "v22_R222"
+# R223 — seleção de winner reescrita: votação HOLÍSTICA (ganha quem concorda em
+# mais campos, todos com peso igual; nenhum campo manda sozinho) + realinhamento
+# ref-validado da OF (quando o OCR a põe na coluna OV/PRI) + palpites fracos
+# ficam vermelho/rever em vez de verde-confiante. BUMP obrigatório.
+ENGINE_VERSION = "v23_R223"
 
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
@@ -769,10 +785,13 @@ def _entry_global_score(
     row: dict,
     refs: dict,
     score_fields: set[str] | frozenset[str] | None = None,
-) -> tuple[float, int, list[dict], float]:
+) -> tuple[float, int, list[dict], float, int, int, int]:
     total = 0.0
     raw_total = 0.0
     exact = 0
+    agree = 0
+    agree_id = 0  # R223 — campos de IDENTIDADE a concordar (of/ov/cliente/modelo)
+    exact_id = 0  # R223 — of/ov batem EXATO (identificador único = decisivo)
     reasons: list[dict] = []
     fields = score_fields if score_fields is not None else _PLAN_FIELDS
     for field in fields:
@@ -781,22 +800,34 @@ def _entry_global_score(
         sim = _entry_field_similarity(field, entry, row, refs)
         if sim is None:
             continue
-        raw_total += max(0.0, min(1.0, sim))
-        weight = _FIELD_SCORE_WEIGHTS.get(field, 0.30)
         clamped = max(0.0, min(1.0, sim))
+        raw_total += clamped
+        # R223 — contagem holística (peso igual entre campos). Identidade
+        # concorda em fuzzy (misreads); dimensão só concorda perto do exato.
+        agree_thr = _AGREE_THRESHOLD if field in _IDENTITY_FIELDS else _AGREE_NUM_THRESHOLD
+        if sim >= agree_thr:
+            agree += 1
+            if field in _IDENTITY_FIELDS:
+                agree_id += 1
+        weight = _FIELD_SCORE_WEIGHTS.get(field, 0.30)
         contribution = clamped * weight
         if sim <= 0.10:
             contribution -= weight * 0.15
         total += contribution
         if sim >= 1.0:
             exact += 1
+            # R223 — uma OF/OV escrita EXATA é um identificador único; essa
+            # entry é decisiva e não pode ser ultrapassada por outra OF que só
+            # bate fuzzy + mais um campo (senão escolhia peça de outra encomenda).
+            if field in ("of", "ov"):
+                exact_id = 1
         reasons.append({
             "field": field,
             "sim": round(float(sim), 3),
             "weight": weight,
             "points": round(float(contribution), 3),
         })
-    return total, exact, reasons, raw_total
+    return total, exact, reasons, raw_total, agree, exact_id, agree_id
 
 
 def _row_has_any_value(row: dict) -> bool:
@@ -1163,16 +1194,17 @@ def _best_scored_entry(
     refs: dict,
     current_phase: str | None,
     score_fields: set[str] | frozenset[str] | None = None,
-    min_global_score: float = _MIN_GLOBAL_WINNER_SCORE,
+    min_agree: int = 1,
 ) -> dict | None:
-    """Escolhe a melhor entry do plan.
+    """Escolhe a melhor entry do plan por VOTAÇÃO HOLÍSTICA (R223).
 
-    R218 — MISTURA contagem + soma: o critério principal é
-    ``combined = exact_score + global_score`` (um campo que bate certo vale o
-    dobro de um campo só "parecido"). A contagem domina; a soma graduada afina e
-    desempata. R213 mantém-se: nenhum campo veta, cada campo vale 0..1.
-    Os rivais quase-empatados (``combined`` a <= ``_WINNER_MARGIN`` do melhor)
-    ficam em ``winner['_rivals']`` para a guarda de ambiguidade.
+    Critério principal: ``agree`` = nº de campos que concordam (sim >=
+    _AGREE_THRESHOLD), TODOS com peso igual — ganha quem concorda em mais
+    campos, robusto a qualquer campo estar mal lido. A soma graduada das
+    similaridades (``raw``) desempata. Nenhum campo (nem um modelo exato)
+    manda sozinho. Devolve None se nada concorda em >= ``min_agree`` campos.
+    Rivais quase-empatados (mesmo agree, raw a <= _WINNER_MARGIN) ficam em
+    ``winner['_rivals']`` para a guarda de ambiguidade.
     """
     from app.pipeline.of_consumption import remaining as _remaining
 
@@ -1181,34 +1213,38 @@ def _best_scored_entry(
         if "_of" not in e:
             e = dict(e)
             e["_of"] = k[0]
-        global_score, exact_score, reasons, raw_score = _entry_global_score(
-            e, row, refs, score_fields
+        global_score, exact_score, reasons, raw_score, agree, exact_id, agree_id = (
+            _entry_global_score(e, row, refs, score_fields)
         )
-        combined = exact_score + global_score
         phase_full = 1 if (current_phase and _phase_is_full(e, current_phase)) else 0
         # R138 — remaining consciente do setor (mesma medida do wizard).
         rem = _remaining(e, phase=current_phase)
         rem_sort = 9e9 if rem == float("inf") else rem
+        # R223 — ordena por: identidade EXATA (of/ov) decide primeiro → mais
+        # campos a concordar (votação holística) → maior soma graduada → setor
+        # com espaço → menor remaining.
         eligible.append((
-            -combined, -global_score, -exact_score, phase_full, rem_sort,
-            order, e, reasons, raw_score,
+            -exact_id, -agree, -raw_score, phase_full, rem_sort,
+            order, e, reasons, raw_score, global_score, exact_score, agree,
+            exact_id, agree_id,
         ))
 
     if not eligible:
         return None
     eligible.sort()
     best = eligible[0]
-    best_combined = -best[0]
-    best_global = -best[1]
-    best_exact = -best[2]
+    best_exact_id = -best[0]
+    best_agree = -best[1]
+    best_raw = -best[2]
     best_rem_sort = best[4]
-    if best_global < min_global_score:
+    if best_agree < min_agree:
         return None
     winner = dict(best[6])
     winner["_score"] = round(float(best[8]), 3)
-    winner["_weighted_score"] = round(float(best_global), 3)
-    winner["_exact_score"] = int(best_exact)
-    winner["_combined"] = round(float(best_combined), 3)
+    winner["_agree"] = int(best_agree)
+    winner["_weighted_score"] = round(float(best[9]), 3)
+    winner["_exact_score"] = int(best[10])
+    winner["_combined"] = round(float(best_agree + best_raw), 3)
     winner["_score_reasons"] = sorted(
         best[7],
         key=lambda reason: abs(float(reason.get("points") or 0.0)),
@@ -1216,13 +1252,20 @@ def _best_scored_entry(
     )[:6]
     if best_rem_sort < 9e9:
         winner["_remaining"] = best_rem_sort
-    # R218 — rivais quase-empatados (eligible já ordenado por combined desc).
+    # R223 — rivais (para a guarda de ambiguidade): entries genuinamente
+    # empatadas — mesma classe de identidade exata, mesmo nº de campos a
+    # concordar, e soma graduada dentro de _WINNER_MARGIN. Assim uma OF escrita
+    # exata (ex.: 262107) não ganha "rivais" de OFs diferentes (fuzzy) e não
+    # marca tudo vermelho por falsa ambiguidade.
     rivals: list[dict] = []
     for cand in eligible[1:]:
-        if best_combined - (-cand[0]) <= _WINNER_MARGIN:
-            rivals.append(cand[6])
-        else:
-            break
+        cand_exact_id = -cand[0]
+        cand_agree = -cand[1]
+        cand_raw = -cand[2]
+        if (cand_exact_id != best_exact_id or cand_agree != best_agree
+                or (best_raw - cand_raw) > _WINNER_MARGIN):
+            break  # eligible ordenado: identidade/agree caiu ou raw longe
+        rivals.append(cand[6])
     if rivals:
         winner["_rivals"] = rivals
     return winner
@@ -1239,14 +1282,17 @@ def _candidate_entries_by_key(
     candidates_by_field: dict[str, list[dict]],
     score_fields: set[str] | frozenset[str] | None = None,
 ) -> dict[tuple, dict]:
+    """R223 — pool LARGO para a votação holística: a união das entries de
+    TODOS os candidatos top-K de cada campo (fuzzy incluído), para a votação
+    ter as entries certas a considerar mesmo quando nenhum campo bate exato.
+    (Antes só entravam candidatos com "evidência real"/exata, o que deixava
+    a votação cega à encomenda certa quando estava mal lida.)"""
     allowed = set(score_fields or _PLAN_FIELDS)
     entries_by_key: dict[tuple, dict] = {}
     for field in _PLAN_FIELDS:
         if field not in allowed:
             continue
         for cand in candidates_by_field.get(field, []):
-            if not _candidate_is_real_evidence(field, cand):
-                continue
             for entry in cand.get("plan_entries", []):
                 key = _entry_key(entry)
                 entries_by_key.setdefault(key, entry)
@@ -1278,6 +1324,26 @@ def _phase_is_full(entry: dict, phase: str) -> bool:
     return p >= q
 
 
+def _realign_misplaced_of(row: dict, idx: dict | None) -> dict:
+    """R223 — repõe a OF quando o OCR a colocou na coluna errada (OV/PRI).
+    SÓ realinha quando o número é MESMO uma OF do plano (ref-validado) — nunca
+    às cegas (ex.: um nº de OV de 6 dígitos que não seja OF fica onde está)."""
+    of_keys = (idx or {}).get("of_keys") or set()
+    if not of_keys:
+        return row
+    if normalize_of(row.get("of")) in of_keys:
+        return row  # a OF já é válida → nada a fazer
+    for src in ("ov", "pri"):
+        cand = normalize_of(row.get(src))
+        if cand and cand in of_keys:
+            row = dict(row)
+            row["of"] = cand
+            if src == "ov":
+                row["ov"] = ""  # era a OF, não a OV
+            return row
+    return row
+
+
 def _find_winner_entry(
     candidates_by_field: dict[str, list[dict]],
     row: dict,
@@ -1287,50 +1353,33 @@ def _find_winner_entry(
     score_fields: set[str] | frozenset[str] | None = None,
     force_top1: bool = True,
 ) -> dict | None:
-    """Escolhe a entry do plan: strong → forced → forced_top1."""
-    forced_entries = _candidate_entries_by_key(candidates_by_field, score_fields)
-    if forced_entries:
-        winner = _best_scored_entry(
-            forced_entries, row, refs, current_phase, score_fields
-        )
-        if winner is not None:
-            winner["_winner_mode"] = "strong"
-            return winner
-        winner = _best_scored_entry(
-            forced_entries,
-            row,
-            refs,
-            current_phase,
-            score_fields,
-            min_global_score=_MIN_FORCED_WINNER_SCORE,
-        )
-        if winner is not None:
-            winner["_winner_mode"] = "forced"
-            return winner
-
-    if not force_top1 or not _row_has_any_value(row):
-        return None
-
-    entries_by_key = _all_plan_entries(idx or {})
-    if not entries_by_key:
-        for field in _PLAN_FIELDS:
-            for cand in candidates_by_field.get(field, []):
-                for entry in cand.get("plan_entries", []):
-                    key = _entry_key(entry)
-                    entries_by_key.setdefault(key, entry)
-    if not entries_by_key:
-        return None
-
-    winner = _best_scored_entry(
-        entries_by_key,
-        row,
-        refs,
-        current_phase,
-        score_fields,
-        min_global_score=_MIN_FORCED_TOP1_SCORE,
+    """R223 — votação holística sobre um pool LARGO de candidatos (todos os
+    top-K de cada campo). Full-scan do plano só como fallback se o pool não
+    der vencedor. A confiança (modo) vem do nº de campos que concordam."""
+    pool = _candidate_entries_by_key(candidates_by_field, score_fields)
+    winner = (
+        _best_scored_entry(pool, row, refs, current_phase, score_fields)
+        if pool else None
     )
+
+    if winner is None and force_top1 and _row_has_any_value(row):
+        # R223 — fallback: varre o plano todo caso o pool de candidatos tenha
+        # falhado a entry certa. Exige >=1 campo a concordar (min_agree=1) — uma
+        # linha sem NENHUM campo a bater fica sem winner (NA), em vez de forçar
+        # uma peça aleatória. ("só se não encontrar mesmo nada é que não põe".)
+        entries_by_key = _all_plan_entries(idx or {}) or pool
+        if entries_by_key:
+            winner = _best_scored_entry(
+                entries_by_key, row, refs, current_phase, score_fields
+            )
+
     if winner is not None:
-        winner["_winner_mode"] = "forced_top1"
+        # R223 — confiança: >=2 campos a concordar OU pelo menos um campo
+        # exato (identidade real) → winner forte; 1 só campo fuzzy = palpite
+        # fraco → as células ficam vermelhas/rever (não verde-confiante).
+        agree = int(winner.get("_agree") or 0)
+        exact = int(winner.get("_exact_score") or 0)
+        winner["_winner_mode"] = "strong" if (agree >= 2 or exact >= 1) else "weak_guess"
     return winner
 
 
@@ -1419,9 +1468,9 @@ def _make_cell(value: str, status: str, source: str, **extra) -> dict:
 
 def _winner_match_kind(winner: dict | None) -> str | None:
     mode = (winner or {}).get("_winner_mode")
-    if mode == "forced":
-        return "MATCH_FORCADO"
-    if mode == "forced_top1":
+    # R223 — palpite fraco (1 só campo fuzzy a concordar) é marcado como
+    # "best guess" para a UI o mostrar como rever; um winner forte não precisa.
+    if mode == "weak_guess":
         return "MATCH_BEST_GUESS"
     return None
 
@@ -1438,10 +1487,10 @@ def _mark_winner_cell(cell: dict, winner: dict | None) -> dict:
     match_kind = _winner_match_kind(winner)
     if match_kind:
         out["match_kind"] = match_kind
-        if out.get("status") == "very_different":
-            out["forced_from_status"] = "very_different"
-            out["status"] = "snapped"
-            out["label"] = _STATUS_LABELS["snapped"]
+        # R223 — NÃO forçar very_different→snapped. Um palpite (ou um campo que
+        # diverge do canónico) mantém-se vermelho/rever; nunca verde-confiante
+        # numa peça incerta. O valor canónico continua a ser aplicado, mas a
+        # cor é honesta.
     return out
 
 
@@ -1792,8 +1841,8 @@ def _winner_field_fallback_proposal(
         value = _entry_field_canonical(field, entry, template_name)
         if not value:
             continue
-        affinity, exact, _reasons, _raw = _entry_global_score(
-            entry, row, refs, other_fields
+        affinity, exact, _reasons, _raw, _agree, _exact_id, _agree_id = (
+            _entry_global_score(entry, row, refs, other_fields)
         )
         scored.append((float(affinity), int(exact), value))
     if not scored:
@@ -2099,6 +2148,10 @@ def _score_row(
     auto-substituição. (R222 reverte o R163, que tornara isto só metadata.)
     """
     cc_fields = set(cross_check_fields)
+
+    # R223 — realinhar a OF se o OCR a colocou na coluna errada (OV/PRI), antes
+    # de gerar candidatos, para o resto da linha usar a OF correta.
+    row = _realign_misplaced_of(row, idx)
 
     # Candidatos para todos os campos declarados no template como validáveis.
     # OF/OV são apenas campos normais no score global; não filtram o winner.

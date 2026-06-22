@@ -378,7 +378,10 @@ class TestShadowScore:
         assert esp["status"] == "confirmed"
         assert esp["source"] == "sap"
 
-    def test_blank_esp_with_forced_top1_stays_green_empty_rule(self):
+    def test_blank_esp_with_winner_stays_green_empty_rule(self):
+        # R223 — `lote` (LOTEX) é só um lote SAP, não uma OF do plano, por isso
+        # sozinho não dá winner. A linha leva a OF real (111111) para haver
+        # winner; com winner, o `esp` em branco fica verde por regra de vazio.
         refs = {
             "available": True,
             "of_to_entries": {
@@ -396,18 +399,19 @@ class TestShadowScore:
             "template_name": "bobine_formato",
             "header": {},
             "footer": {},
-            "rows": [{"lote": "LOTEX", "esp": ""}],
+            "rows": [{"of": "111111", "lote": "LOTEX", "esp": ""}],
         }
 
         scoring, *_ = shadow_score(sheet_data, None, refs)
         esp = scoring["rows"][0]["fields"]["esp"]
 
         assert scoring["rows"][0]["winner_of"] == "111111"
-        assert scoring["rows"][0]["winner_mode"] == "forced_top1"
+        # OF exata é identidade real → winner forte (já não "forced_top1").
+        assert scoring["rows"][0]["winner_mode"] == "strong"
         assert esp["value"] == ""
         assert esp["status"] == "confirmed"
         assert esp["empty_ok"] is True
-        assert esp["match_kind"] == "MATCH_BEST_GUESS"
+        assert esp["match_kind"] == "MATCH_REGRA_VAZIO"
 
     @pytest.mark.parametrize(
         ("row", "field", "ref_value", "ref_source"),
@@ -453,6 +457,7 @@ class TestShadowScore:
         from app.pipeline.scoring_engine import cross_check_sheet
 
         # R222/D7 — limiar de COR de larg = 50 (30/05). 320 vs 250 = 70 > 50.
+        # R223 — já não se força verde: a divergência fica vermelha (NO_MATCH).
         sheet_data = {
             "template_name": "bobine_formato",
             "header": {},
@@ -463,12 +468,14 @@ class TestShadowScore:
         result = cross_check_sheet(sheet_data, None, _REFS)
         larg = result["rows"][0]["fields"]["larg_mm"]
 
+        # O valor canónico do SAP é substituído, mas a cor é honesta (vermelho).
         assert larg["value"] == "250"
-        assert larg["status"] == "MATCH"
+        assert larg["status"] == "NO_MATCH"
         assert larg["ref"] == "250"
         assert larg["ref_source"] == "sap"
-        assert larg["match_kind"] in ("MATCH_FORCADO", "MATCH_BEST_GUESS")
-        assert larg["forced_from_status"] == "very_different"
+        # R223 — sem MATCH_FORCADO/forced_from_status: o campo diverge do
+        # canónico e fica very_different (vermelho), nunca verde-confiante.
+        assert "forced_from_status" not in larg
 
     def test_larg_mm_stocksap_within_10mm_can_snap(self):
         sheet_data = {
@@ -527,8 +534,9 @@ class TestShadowScore:
             "clientes_plan": frozenset({"ACME"}),
             "lotes_sap_full": {},
         }
-        # R222/D7 — 320 vs 250 = 70 > limiar de cor 50 → very_different. Sem
-        # SAP, o winner forçado substitui pelo plano e marca forced_from_status.
+        # R222/D7 — 320 vs 250 = 70 > limiar de cor 50 → very_different. R223 —
+        # sem SAP, o winner do plano substitui pelo valor canónico, mas a célula
+        # fica vermelha (NO_MATCH), já não verde forçado.
         sheet_data = {
             "template_name": "bobine_formato",
             "header": {},
@@ -540,10 +548,10 @@ class TestShadowScore:
         larg = result["rows"][0]["fields"]["larg_mm"]
 
         assert larg["value"] == "250"
-        assert larg["status"] == "MATCH"
+        assert larg["status"] == "NO_MATCH"
         assert larg["ref_source"] == "plan"
         assert larg["ref"] == "250"
-        assert larg["forced_from_status"] == "very_different"
+        assert "forced_from_status" not in larg
 
     def test_larg_mm_prefers_stocksap_over_plan_and_substitutes_when_lote_present(self):
         refs = {
@@ -560,6 +568,7 @@ class TestShadowScore:
             "lotes_sap_full": {"LOTEX": {"larg": 300, "esp": 2.5}},
         }
         # R222/D7 — SAP larg 300; OCR 370 (delta 70 > limiar de cor 50) → revisão.
+        # R223 — substitui pelo SAP (preferido sobre o plano) mas fica vermelho.
         sheet_data = {
             "template_name": "bobine_formato",
             "header": {},
@@ -571,10 +580,10 @@ class TestShadowScore:
         larg = result["rows"][0]["fields"]["larg_mm"]
 
         assert larg["value"] == "300"
-        assert larg["status"] == "MATCH"
+        assert larg["status"] == "NO_MATCH"
         assert larg["ref"] == "300"
         assert larg["ref_source"] == "sap"
-        assert larg["forced_from_status"] == "very_different"
+        assert "forced_from_status" not in larg
 
     @pytest.mark.parametrize(
         ("field", "ocr_value", "ref_value"),
@@ -612,19 +621,30 @@ class TestShadowScore:
 
     def test_plan_numeric_big_diff_with_strong_winner_goes_to_review(self):
         """R222/D7 — acima do limiar de COR de 30/05, com winner forte (a
-        identidade ainda bate), a célula fica vermelha (NO_MATCH/rever)."""
+        identidade ainda bate), a célula fica vermelha (NO_MATCH/rever).
+
+        R223 — a linha leva identidade real (of+cliente+comp) para o winner ser
+        inequivocamente a 262107; com a votação holística, uma linha só com
+        `of` + `esp` divergente escolheria a peça errada (ver nota SUSPEITO no
+        relatório). Com a identidade certa, o esp diverge do canónico → vermelho.
+        """
         from app.pipeline.scoring_engine import cross_check_sheet
 
         sheet_data = {
             "template_name": "bobine_formato",
             "header": {},
             "footer": {},
-            "rows": [{"of": "262107", "esp": "3,3"}],
+            "rows": [{
+                "of": "262107", "cliente": "ELECNOR", "comp_mm": "1200",
+                "esp": "3,3",
+            }],
         }
 
         result = cross_check_sheet(sheet_data, None, _REFS)
-        esp = result["rows"][0]["fields"]["esp"]
+        row = result["rows"][0]
+        esp = row["fields"]["esp"]
 
+        assert row["winner_of"] == "262107"
         assert esp["value"] == "2,6"
         assert esp["status"] == "NO_MATCH"
         assert esp["ref_source"] == "plan"
@@ -752,7 +772,10 @@ class TestShadowScore:
         # Sem ListaColaboradores, operador preenchido valida por regra local.
         assert scoring["header"]["operador"]["status"] == "confirmed"
 
-    def test_zero_score_dimension_forces_best_plausible_winner(self):
+    def test_zero_score_dimension_yields_no_winner(self):
+        # R223 — uma dimensão isolada (comp 9999) que não bate com nenhuma entry
+        # (score zero) já não força a "melhor peça plausível": sem campo a
+        # concordar, não há winner e o campo fica vermelho para revisão.
         sheet_data = {
             "template_name": "bobine_formato",
             "header": {},
@@ -765,14 +788,16 @@ class TestShadowScore:
 
         row = scoring["rows"][0]
         comp = row["fields"]["comp_mm"]
-        assert row["winner_of"] == "262107"
-        assert row["winner_mode"] == "forced_top1"
-        assert comp["value"] == "1200"
-        assert comp["status"] == "snapped"
-        assert comp["match_kind"] == "MATCH_BEST_GUESS"
+        assert row["winner_of"] is None
+        assert row["winner_mode"] is None
+        assert comp["value"] == "9999"
+        assert comp["status"] == "very_different"
         assert total == snapped + confirmed + na + scoring["summary"]["very_different"]
 
-    def test_unknown_cliente_with_plan_pool_forces_best_plausible_winner(self):
+    def test_unknown_cliente_with_plan_pool_yields_no_winner(self):
+        # R223 — um cliente fantasma que não bate com nenhuma entry não força a
+        # melhor peça plausível: sem campo a concordar, não há winner e o
+        # cliente fica vermelho (rever), preservando o valor lido pelo OCR.
         sheet_data = {
             "template_name": "bobine_formato",
             "header": {},
@@ -784,11 +809,10 @@ class TestShadowScore:
 
         row = scoring["rows"][0]
         cliente = row["fields"]["cliente"]
-        assert row["winner_of"] == "262107"
-        assert row["winner_mode"] == "forced_top1"
-        assert cliente["value"] == "ELECNOR"
-        assert cliente["status"] == "snapped"
-        assert cliente["match_kind"] == "MATCH_BEST_GUESS"
+        assert row["winner_of"] is None
+        assert row["winner_mode"] is None
+        assert cliente["value"] == "CLIENTE FANTASMA"
+        assert cliente["status"] == "very_different"
 
     def test_known_cliente_alone_can_fill_row_with_may_policy(self):
         sheet_data = {
@@ -813,15 +837,16 @@ class TestShadowScore:
         assert cliente["status"] == "confirmed"
         assert cliente["value"] == "ELECNOR"
         assert cliente["source"] == "plan"
+        # R223 — o winner substitui o OCR errado pelo valor canónico do plano,
+        # mas como diverge do que o operador escreveu (999999/8888888/ZZZ) a
+        # célula fica vermelha (very_different/NO_MATCH), nunca verde forçado.
         assert row["fields"]["of"]["value"] == "262107"
-        assert row["fields"]["of"]["status"] == "snapped"
-        assert row["fields"]["of"]["match_kind"] == "MATCH_FORCADO"
+        assert row["fields"]["of"]["status"] == "very_different"
+        assert "match_kind" not in row["fields"]["of"]
         assert row["fields"]["ov"]["value"] == "2410001"
-        assert row["fields"]["ov"]["status"] == "snapped"
-        assert row["fields"]["ov"]["match_kind"] == "MATCH_FORCADO"
+        assert row["fields"]["ov"]["status"] == "very_different"
         assert row["fields"]["modelo"]["value"] == "OMEGA 1200 H"
-        assert row["fields"]["modelo"]["status"] == "snapped"
-        assert row["fields"]["modelo"]["match_kind"] == "MATCH_FORCADO"
+        assert row["fields"]["modelo"]["status"] == "very_different"
         assert result["rows"][0]["fields"]["cliente"]["status"] == "MATCH"
 
     def test_cliente_without_plan_pool_goes_to_review(self):
@@ -1456,7 +1481,9 @@ class TestShadowScore:
                 {
                     "template_name": "bobine_formato",
                     "header": {}, "footer": {},
-                    "rows": [{"pri": value}],
+                    # R223 — precisa de uma OF real para haver winner (uma linha
+                    # só com `pri` inválido já não força peça aleatória).
+                    "rows": [{"of": "262107", "pri": value}],
                 },
                 None,
                 _REFS,
@@ -1487,7 +1514,7 @@ class TestShadowScore:
         for value in ("ABC", "5,0", "5.0", "-1", "12345"):
             sheet_data = {
                 "template_name": "bobine_formato", "header": {}, "footer": {},
-                "rows": [{"qtd": value}],
+                "rows": [{"of": "262107", "qtd": value}],
             }
 
             result = cross_check_sheet(sheet_data, None, _REFS)
@@ -1984,7 +2011,10 @@ class TestGlobalWinnerScoring:
         fields = row["fields"]
 
         assert row["winner_of"] == "262771"
-        assert row["winner_mode"] == "forced"
+        # R223 — só o `modelo` (fuzzy C6C2E45DI≈CGC2E45DI) concorda: 1 campo →
+        # palpite fraco (weak_guess), não "forced". Continua a preencher a linha
+        # a partir da entry vencedora, mas as células ficam MATCH_BEST_GUESS.
+        assert row["winner_mode"] == "weak_guess"
         assert fields["cliente"]["value"] == "ESTOQUE MTG"
         assert fields["of"]["value"] == "262771"
         assert fields["ov"]["value"] == "260001"
@@ -1997,7 +2027,10 @@ class TestGlobalWinnerScoring:
             for f in ("cliente", "of", "ov", "modelo", "esp", "lbase", "ltopo", "qtd")
         )
 
-    def test_forced_top1_selects_best_plausible_row_without_real_candidate(self):
+    def test_unmatched_cliente_yields_no_winner_and_no_forced_fill(self):
+        # R223 — sem votação holística a concordar em pelo menos 1 campo, NÃO
+        # há winner: um cliente que não bate com nada ("ABC") já não força a
+        # melhor peça plausível ("só se não encontrar mesmo nada é que não põe").
         refs = {
             "available": True,
             "of_to_entries": {
@@ -2022,12 +2055,15 @@ class TestGlobalWinnerScoring:
         row = scoring["rows"][0]
         fields = row["fields"]
 
-        assert row["winner_of"] == "262771"
-        assert row["winner_mode"] == "forced_top1"
-        assert fields["cliente"]["value"] == "ESTOQUE MTG"
-        assert fields["of"]["value"] == "262771"
-        assert fields["modelo"]["value"] == "CGC2E45DI"
-        assert fields["cliente"]["match_kind"] == "MATCH_BEST_GUESS"
+        assert row["winner_of"] is None
+        assert row["winner_mode"] is None
+        # Cliente preenchido sem winner não fica verde forçado: fica vermelho
+        # (very_different) para o operador conferir, e não invade outros campos.
+        assert fields["cliente"]["value"] == "ABC"
+        assert fields["cliente"]["status"] == "very_different"
+        assert fields["of"]["status"] == "NA"
+        assert fields["modelo"]["status"] == "NA"
+        # qtd informativo continua a validar por regra local.
         assert fields["qtd"]["match_kind"] == "MATCH_REGRA"
 
     def test_empty_local_fields_with_winner_are_rule_matches_not_na(self):
@@ -2627,7 +2663,10 @@ class TestGlobalWinnerScoring:
         for field in ("comp_mm", "larg_mm", "lbase", "ltopo", "esp"):
             assert fields[field]["status"] == "confirmed"
 
-    def test_field_outside_template_still_allows_forced_top1_winner(self):
+    def test_field_outside_template_does_not_produce_winner(self):
+        # R223 — `comp_mm` existe no JSON sujo mas o template `soldline` não o
+        # cruza, por isso não entra na votação holística: nenhum campo cruzável
+        # tem sinal → sem winner (em vez de forçar a melhor peça plausível).
         refs = {
             "available": True,
             "of_to_entries": {
@@ -2650,9 +2689,10 @@ class TestGlobalWinnerScoring:
         scoring, *_ = shadow_score(sheet_data, None, refs)
         row = scoring["rows"][0]
 
-        assert row["winner_of"] == "262900"
-        assert row["winner_mode"] == "forced_top1"
-        assert row["winner_score"] == 0.0
+        assert row["winner_of"] is None
+        assert row["winner_mode"] is None
+        assert row["winner_score"] is None
+        # O campo fora do schema valida por regra local (não fica NA neutro).
         assert row["fields"]["comp_mm"]["status"] == "confirmed"
         assert row["fields"]["comp_mm"]["source"] == "syntax"
 
@@ -3364,8 +3404,11 @@ class TestLaserDbaseDtopo:
         assert _is_very_different("dbase", "1000", "1200") is True
         assert _is_very_different("dtopo", "1000", "1200") is True
 
-    def test_dbase_dtopo_without_canonical_values_are_forced_with_warning(self):
-        """Campos cruzáveis preenchidos sem pool de plan não ficam NA neutro."""
+    def test_dbase_dtopo_without_canonical_values_go_to_review(self):
+        """R223 — dbase/dtopo preenchidos mas a única entry do plano não tem
+        esses campos (logo não concordam em nada): sem winner, as células ficam
+        vermelhas (very_different) para revisão, em vez de forçar um winner sem
+        valor canónico e pintar de verde-confiante."""
         refs = {
             "available": True,
             "of_to_entries": {
@@ -3389,18 +3432,10 @@ class TestLaserDbaseDtopo:
         scoring, *_ = shadow_score(sheet_data, None, refs)
         fields = scoring["rows"][0]["fields"]
 
-        assert scoring["rows"][0]["winner_of"] == "262107"
-        assert scoring["rows"][0]["winner_mode"] == "forced_top1"
-        assert fields["dbase"]["status"] == "confirmed"
-        assert fields["dbase"]["match_kind"] == "MATCH_BEST_GUESS"
-        assert fields["dbase"]["warning"] == (
-            "Winner escolhido, mas sem valor canónico para este campo."
-        )
-        assert fields["dtopo"]["status"] == "confirmed"
-        assert fields["dtopo"]["match_kind"] == "MATCH_BEST_GUESS"
-        assert fields["dtopo"]["warning"] == (
-            "Winner escolhido, mas sem valor canónico para este campo."
-        )
+        assert scoring["rows"][0]["winner_of"] is None
+        assert scoring["rows"][0]["winner_mode"] is None
+        assert fields["dbase"]["status"] == "very_different"
+        assert fields["dtopo"]["status"] == "very_different"
 
 
 class TestNoRefTemplateFields:
@@ -3424,10 +3459,12 @@ class TestNoRefTemplateFields:
             assert fields[field]["source"] == "syntax"
 
     def test_invalid_gemini_numeric_with_winner_is_forced_rule_match(self):
+        # R223 — precisa de uma identidade real do plano (of) para haver winner;
+        # é o winner que perdoa o `m2` ilegível como MATCH_REGRA_FORCADO.
         sheet_data = {
             "template_name": "gasparini",
             "header": {}, "footer": {},
-            "rows": [{"m2": "ABC"}],
+            "rows": [{"of": "262107", "m2": "ABC"}],
         }
 
         result = cross_check_sheet(sheet_data, None, _REFS)
@@ -3440,10 +3477,11 @@ class TestNoRefTemplateFields:
         assert not result["to_analisar"]
 
     def test_invalid_sobras_with_winner_is_forced_rule_match(self):
+        # R223 — `of` real dá winner; o winner perdoa o `sobras` ilegível.
         sheet_data = {
             "template_name": "manual",
             "header": {}, "footer": {},
-            "rows": [{"qtd": "5", "sobras": "ABC"}],
+            "rows": [{"of": "262107", "qtd": "5", "sobras": "ABC"}],
         }
 
         result = cross_check_sheet(sheet_data, None, _REFS)
@@ -3467,10 +3505,11 @@ class TestNoRefTemplateFields:
         assert scoring["rows"][0]["fields"]["sobras"]["status"] == "confirmed"
 
     def test_invalid_cesta_n_with_winner_is_forced_rule_match(self):
+        # R223 — `of` real dá winner; o winner perdoa o `cesta_n` ilegível.
         sheet_data = {
             "template_name": "expedicao",
             "header": {}, "footer": {},
-            "rows": [{"qtd": "5", "cesta_n": "ABC"}],
+            "rows": [{"of": "262107", "qtd": "5", "cesta_n": "ABC"}],
         }
 
         result = cross_check_sheet(sheet_data, None, _REFS)
@@ -3675,10 +3714,11 @@ class TestR132MaqFustes:
         assert scoring["rows"][0]["fields"]["qtd_metros"]["status"] == "confirmed"
 
     def test_maq_fustes_invalid_qtd_metros_with_winner_is_forced_rule_match(self):
+        # R223 — `of` real dá winner; o winner perdoa o `qtd_metros` ilegível.
         sheet_data = {
             "template_name": "maq_fustes",
             "header": {}, "footer": {},
-            "rows": [{"qtd_metros": "ABC"}],
+            "rows": [{"of": "262107", "qtd_metros": "ABC"}],
         }
 
         result = cross_check_sheet(sheet_data, None, _REFS)
@@ -3758,18 +3798,23 @@ class TestR218WinnerMixAndAmbiguityGuard:
     de ambiguidade (rivais quase-empatados que discordam num campo → não
     substituir esse campo)."""
 
-    def test_mix_prefers_more_exact_matches_over_higher_fuzzy_sum(self):
-        """A linha que bate CERTO em mais campos vence a que só soma muitos
-        quase-acertos — ao contrário da soma pura (que escolheria a 262108)."""
+    def test_mix_prefers_entry_that_agrees_in_more_fields(self):
+        """R223 — votação HOLÍSTICA: ganha quem concorda em MAIS campos, todos
+        com peso igual (substitui o critério R218 do nº de exatos). A 262107
+        concorda em 3 campos REAIS (cliente + comp + larg, dentro da tolerância)
+        e a 262108 só em 1 (cliente) — as suas medidas estão TODAS um pouco fora
+        da tolerância, e dimensão fora da tolerância NÃO concorda (R223: medida
+        0,4 ao lado é mesmo outra medida, não conta pela cauda do decay). Logo
+        ganha a 262107 (3 concordâncias reais > 1)."""
         refs = {
             "available": True,
             "of_to_entries": {
-                # A: 3 acertos exatos (cliente, comp, larg), resto longe → soma 3.0
+                # A: 3 exatos (cliente, comp, larg) mas lbase/ltopo/esp absurdos.
                 "262107": [{
                     "ov": "A1", "cliente": "ELECNOR", "designacao": "LINHA A",
                     "comp": 1000, "larg": 200, "lbase": 9999, "ltopo": 9999, "esp": 99.0,
                 }],
-                # B: 1 exato (cliente) + 5 quase-acertos a 0.6 → soma 4.0 (> A!)
+                # B: consistentemente perto em todos os 6 campos (agree=6).
                 "262108": [{
                     "ov": "B1", "cliente": "ELECNOR", "designacao": "LINHA B",
                     "comp": 1070, "larg": 214, "lbase": 114, "ltopo": 74, "esp": 3.45,
@@ -3787,9 +3832,11 @@ class TestR218WinnerMixAndAmbiguityGuard:
         winner = _find_winner_entry({}, row, refs, idx)
 
         assert winner is not None
-        # MISTURA escolhe A (3 acertos certos), não B (soma maior mas 1 acerto).
+        # Votação holística: 262107 concorda em 3 campos reais (cliente+comp+larg
+        # dentro da tolerância); as medidas da 262108 estão fora da tolerância e
+        # não contam → só concorda no cliente (1). Ganha a 262107.
         assert winner["_of"] == "262107"
-        assert winner["_exact_score"] == 3
+        assert winner["_agree"] == 3
 
     def test_ambiguity_substitutes_winner_and_flags_red(self):
         """R219 — duas linhas com a MESMA OF e o resto ilegível: a OF confirma;
