@@ -54,19 +54,31 @@ _CLIENTE_OCR_TOKEN_ALIASES = {
 }
 
 
-def _norm_ascii_upper(value: object) -> str:
-    d = unicodedata.normalize("NFKD", str(value or ""))
+@lru_cache(maxsize=200_000)
+def _norm_ascii_upper_cached(s: str) -> str:
+    d = unicodedata.normalize("NFKD", s)
     return "".join(c for c in d if not unicodedata.combining(c)).strip().upper()
 
 
-def _cliente_tokens(value: object) -> tuple[str, ...]:
-    norm = _norm_ascii_upper(value)
+def _norm_ascii_upper(value: object) -> str:
+    # R225 — cache por valor distinto: as ~22k chaves do plano são normalizadas
+    # em CADA linha; cachear (função pura) colapsa para 1x. Output idêntico.
+    return _norm_ascii_upper_cached(str(value or ""))
+
+
+@lru_cache(maxsize=200_000)
+def _cliente_tokens_cached(s: str) -> tuple[str, ...]:
+    norm = _norm_ascii_upper(s)
     cleaned = re.sub(r"[^A-Z0-9]+", " ", norm)
     return tuple(
         _CLIENTE_OCR_TOKEN_ALIASES.get(tok, tok)
         for tok in cleaned.split()
         if tok and tok not in _CLIENTE_STOPWORDS
     )
+
+
+def _cliente_tokens(value: object) -> tuple[str, ...]:
+    return _cliente_tokens_cached(str(value or ""))
 
 
 def _cliente_compact(value: object) -> str:
@@ -614,12 +626,17 @@ def _model_first_token(value: object) -> str:
     return text.split(" - ", 1)[0].strip()
 
 
-def _model_compact(value: object) -> str:
-    raw = str(value or "")
+@lru_cache(maxsize=200_000)
+def _model_compact_cached(raw: str) -> str:
     raw = re.sub(r"(?i)\bN[º°]\s*(?=\d)", "N", raw)
     norm = _norm_ascii_upper(raw)
     norm = re.sub(r"\bNO\s*(?=\d)", "N", norm)
     return re.sub(r"[^A-Z0-9]+", "", norm)
+
+
+def _model_compact(value: object) -> str:
+    # R225 — cache (as designações do plano repetem-se em todas as linhas).
+    return _model_compact_cached(str(value or ""))
 
 
 def _model_compact_variants(value: object) -> list[str]:
@@ -724,11 +741,32 @@ def _numeric_similarity(field: str, value: object, candidate: object, tolerance:
     return max(0.0, 1.0 - ((best_delta - tolerance) / decay_window))
 
 
-def _entry_field_similarity(field: str, entry: dict, row: dict, refs: dict) -> float | None:
-    value = row.get(field)
-    if _is_missing_ocr(value):
-        return None
+_PLAN_ATTR_BY_FIELD = {
+    "comp_mm": "comp",
+    "larg_mm": "larg",
+    "lbase": "lbase",
+    "ltopo": "ltopo",
+    "esp": "esp",
+    "dbase": "dbase",
+    "dtopo": "dtopo",
+}
 
+
+def _entry_attr_for_field(field: str, entry: dict) -> object:
+    """R225 — valor da ENTRY que determina a similaridade do campo (chave do
+    memo por-linha; o lado do `row` é constante dentro de uma linha)."""
+    if field == "of":
+        return entry.get("_of") or entry.get("of")
+    if field == "ov":
+        return entry.get("ov")
+    if field == "cliente":
+        return entry.get("cliente")
+    if field == "modelo":
+        return entry.get("designacao")
+    return entry.get(_PLAN_ATTR_BY_FIELD.get(field))
+
+
+def _efs_compute(field: str, entry: dict, row: dict, refs: dict, value: object) -> float | None:
     if field == "of":
         entry_value = entry.get("_of") or entry.get("of")
         return _identifier_similarity(value, entry_value, pad_of=True)
@@ -761,15 +799,7 @@ def _entry_field_similarity(field: str, entry: dict, row: dict, refs: dict) -> f
             return None
         return max(_str_sim(model, c) / 100.0 for c in candidates)
 
-    plan_attr = {
-        "comp_mm": "comp",
-        "larg_mm": "larg",
-        "lbase": "lbase",
-        "ltopo": "ltopo",
-        "esp": "esp",
-        "dbase": "dbase",
-        "dtopo": "dtopo",
-    }.get(field)
+    plan_attr = _PLAN_ATTR_BY_FIELD.get(field)
     if plan_attr:
         candidate = entry.get(plan_attr)
         if candidate in (None, ""):
@@ -780,11 +810,33 @@ def _entry_field_similarity(field: str, entry: dict, row: dict, refs: dict) -> f
     return None
 
 
+def _entry_field_similarity(
+    field: str, entry: dict, row: dict, refs: dict, cache: dict | None = None,
+) -> float | None:
+    value = row.get(field)
+    if _is_missing_ocr(value):
+        return None
+    if cache is None:
+        return _efs_compute(field, entry, row, refs, value)
+    # R225 — memo por-linha: a similaridade depende só do valor do campo da ENTRY
+    # (o `row`/`refs` são constantes na linha) → calcula 1x por valor distinto.
+    # As ~1300 entries do mesmo cliente passam a 1 cálculo, não 1300. Resultado
+    # IDÊNTICO ao caminho sem cache (correção-preservante por construção).
+    ck = (field, str(_entry_attr_for_field(field, entry)))
+    if ck in cache:
+        return cache[ck]
+    r = _efs_compute(field, entry, row, refs, value)
+    cache[ck] = r
+    return r
+
+
 def _entry_global_score(
     entry: dict,
     row: dict,
     refs: dict,
     score_fields: set[str] | frozenset[str] | None = None,
+    cache: dict | None = None,
+    collect_reasons: bool = True,
 ) -> tuple[float, int, list[dict], float, int, int, int]:
     total = 0.0
     raw_total = 0.0
@@ -797,7 +849,7 @@ def _entry_global_score(
     for field in fields:
         if field not in _PLAN_FIELDS:
             continue
-        sim = _entry_field_similarity(field, entry, row, refs)
+        sim = _entry_field_similarity(field, entry, row, refs, cache=cache)
         if sim is None:
             continue
         clamped = max(0.0, min(1.0, sim))
@@ -821,12 +873,13 @@ def _entry_global_score(
             # bate fuzzy + mais um campo (senão escolhia peça de outra encomenda).
             if field in ("of", "ov"):
                 exact_id = 1
-        reasons.append({
-            "field": field,
-            "sim": round(float(sim), 3),
-            "weight": weight,
-            "points": round(float(contribution), 3),
-        })
+        if collect_reasons:
+            reasons.append({
+                "field": field,
+                "sim": round(float(sim), 3),
+                "weight": weight,
+                "points": round(float(contribution), 3),
+            })
     return total, exact, reasons, raw_total, agree, exact_id, agree_id
 
 
@@ -1070,14 +1123,19 @@ def _candidates_for_field(field: str, row: dict, refs: dict, idx: dict) -> list[
                 if len(out) >= _TOP_K:
                     break
 
-        for k, s in _topk_by_similarity(
-            idx["des_keys"],
-            lambda key: _model_candidate_similarity(ocr_value, key),
-            _TOP_K,
-        ):
-            _append_model_candidate(k, s, des_to_entries[k])
-            if len(out) >= _TOP_K:
-                break
+        # R225 — só varrer as ~12k designações (Levenshtein) se ainda faltarem
+        # candidatos. Quando o modelo bate bem (exact/model_ft já encheram o
+        # top-K), `out[:_TOP_K]` ignoraria estes na mesma → resultado idêntico,
+        # mas poupa o scan caro no caso comum.
+        if len(out) < _TOP_K:
+            for k, s in _topk_by_similarity(
+                idx["des_keys"],
+                lambda key: _model_candidate_similarity(ocr_value, key),
+                _TOP_K,
+            ):
+                _append_model_candidate(k, s, des_to_entries[k])
+                if len(out) >= _TOP_K:
+                    break
         return out[:_TOP_K]
 
     if field == "cliente":
@@ -1214,13 +1272,22 @@ def _best_scored_entry(
     """
     from app.pipeline.of_consumption import remaining as _remaining
 
+    # R225 — memo de similaridade por-linha: o pool tem ~12k entries mas poucos
+    # valores distintos por campo; calcular a similaridade 1x por valor distinto
+    # (não 1x por entry) corta o grosso do custo sem mudar nenhum resultado.
+    _sim_cache: dict = {}
+    # R225 — só construir os `reasons` (dict por campo por entry) quando são
+    # precisos: o traço (opt-in) usa-os para todos; sem traço, recalculamos só
+    # os do vencedor no fim. Poupa ~1,7M dicts/folha no caso de produção.
+    _want_reasons = trace is not None
     eligible: list[tuple] = []
     for order, (k, e) in enumerate(entries_by_key.items()):
         if "_of" not in e:
             e = dict(e)
             e["_of"] = k[0]
         global_score, exact_score, reasons, raw_score, agree, exact_id, agree_id = (
-            _entry_global_score(e, row, refs, score_fields)
+            _entry_global_score(e, row, refs, score_fields, cache=_sim_cache,
+                                collect_reasons=_want_reasons)
         )
         phase_full = 1 if (current_phase and _phase_is_full(e, current_phase)) else 0
         # R138 — remaining consciente do setor (mesma medida do wizard).
@@ -1280,8 +1347,15 @@ def _best_scored_entry(
     winner["_weighted_score"] = round(float(best[9]), 3)
     winner["_exact_score"] = int(best[10])
     winner["_combined"] = round(float(best_agree + best_raw), 3)
+    # R225 — se os reasons não foram colhidos (caso de produção), recalcula só
+    # os do vencedor (idêntico ao que seria colhido; usa o cache quente).
+    winner_reasons = best[7]
+    if not _want_reasons:
+        winner_reasons = _entry_global_score(
+            best[6], row, refs, score_fields, cache=_sim_cache, collect_reasons=True,
+        )[2]
     winner["_score_reasons"] = sorted(
-        best[7],
+        winner_reasons,
         key=lambda reason: abs(float(reason.get("points") or 0.0)),
         reverse=True,
     )[:6]
@@ -1876,6 +1950,7 @@ def _winner_field_fallback_proposal(
     other_fields = frozenset(_PLAN_FIELDS) - {field}
     seen: set[tuple] = set()
     scored: list[tuple[float, int, str]] = []
+    _sim_cache: dict = {}
     for entry in pool:
         key = _entry_key(entry)
         if key in seen:
@@ -1885,7 +1960,7 @@ def _winner_field_fallback_proposal(
         if not value:
             continue
         affinity, exact, _reasons, _raw, _agree, _exact_id, _agree_id = (
-            _entry_global_score(entry, row, refs, other_fields)
+            _entry_global_score(entry, row, refs, other_fields, cache=_sim_cache)
         )
         scored.append((float(affinity), int(exact), value))
     if not scored:
