@@ -507,7 +507,10 @@ _STATUS_LABELS = {
 # mais campos, todos com peso igual; nenhum campo manda sozinho) + realinhamento
 # ref-validado da OF (quando o OCR a põe na coluna OV/PRI) + palpites fracos
 # ficam vermelho/rever em vez de verde-confiante. BUMP obrigatório.
-ENGINE_VERSION = "v23_R223"
+# R226 — o winner passa a ser a COMBINAÇÃO (agree) e nenhum campo a 100% manda
+# sozinho (exact_id deixa de decidir). Muda decisões → BUMP obrigatório para
+# as folhas antigas regenerarem com a correção.
+ENGINE_VERSION = "v24_R226"
 
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
