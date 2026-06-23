@@ -868,9 +868,10 @@ def _entry_global_score(
         total += contribution
         if sim >= 1.0:
             exact += 1
-            # R223 — uma OF/OV escrita EXATA é um identificador único; essa
-            # entry é decisiva e não pode ser ultrapassada por outra OF que só
-            # bate fuzzy + mais um campo (senão escolhia peça de outra encomenda).
+            # R226 — of/ov exato. JÁ NÃO decide o winner sozinho (isso passou a
+            # ser a COMBINAÇÃO — `agree`); serve só de (a) desempate FINAL entre
+            # entries com o mesmo agree E raw, e (b) discriminador de ambiguidade
+            # (uma OF exata não é "rival" de uma OF fuzzy parecida).
             if field in ("of", "ov"):
                 exact_id = 1
         if collect_reasons:
@@ -1293,11 +1294,13 @@ def _best_scored_entry(
         # R138 — remaining consciente do setor (mesma medida do wizard).
         rem = _remaining(e, phase=current_phase)
         rem_sort = 9e9 if rem == float("inf") else rem
-        # R223 — ordena por: identidade EXATA (of/ov) decide primeiro → mais
-        # campos a concordar (votação holística) → maior soma graduada → setor
-        # com espaço → menor remaining.
+        # R226 — ordena por: nº de campos a concordar (COMBINAÇÃO holística)
+        # primeiro → maior soma graduada (raw) → identidade EXATA só como
+        # DESEMPATE final (já não decide sozinha) → setor com espaço → menor
+        # remaining. (R223 punha o exact_id à frente e uma OF exata mandava
+        # sozinha; ver R226 em _entry_global_score.)
         eligible.append((
-            -exact_id, -agree, -raw_score, phase_full, rem_sort,
+            -agree, -raw_score, -exact_id, phase_full, rem_sort,
             order, e, reasons, raw_score, global_score, exact_score, agree,
             exact_id, agree_id,
         ))
@@ -1335,9 +1338,9 @@ def _best_scored_entry(
             for cand in eligible[:_TRACE_TOP_K]
         ]
     best = eligible[0]
-    best_exact_id = -best[0]
-    best_agree = -best[1]
-    best_raw = -best[2]
+    best_agree = -best[0]
+    best_raw = -best[1]
+    best_exact_id = -best[2]
     best_rem_sort = best[4]
     if best_agree < min_agree:
         return None
@@ -1368,12 +1371,12 @@ def _best_scored_entry(
     # marca tudo vermelho por falsa ambiguidade.
     rivals: list[dict] = []
     for cand in eligible[1:]:
-        cand_exact_id = -cand[0]
-        cand_agree = -cand[1]
-        cand_raw = -cand[2]
+        cand_agree = -cand[0]
+        cand_raw = -cand[1]
+        cand_exact_id = -cand[2]
         if (cand_exact_id != best_exact_id or cand_agree != best_agree
                 or (best_raw - cand_raw) > _WINNER_MARGIN):
-            break  # eligible ordenado: identidade/agree caiu ou raw longe
+            break  # eligible ordenado: agree caiu, raw longe, ou exato≠fuzzy
         rivals.append(cand[6])
     if rivals:
         winner["_rivals"] = rivals

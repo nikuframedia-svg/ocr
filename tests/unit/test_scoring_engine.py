@@ -1475,6 +1475,23 @@ class TestShadowScore:
         assert qtd["status"] == "MATCH"
         assert qtd["match_kind"] == "MATCH_REGRA"
 
+    def test_exact_of_does_not_override_contradicting_cliente(self):
+        # R226 — uma OF exata NÃO pode mandar sozinha. Se o OCR lê a OF errada
+        # (262108, que no plano é de OUTRO cliente) mas o cliente e o modelo
+        # apontam claramente para 262107, a COMBINAÇÃO decide: ganha 262107
+        # (ELECNOR), não 262108 (MTG BELUX). Era o bug real ENEDIS->ANIBAL PALMA:
+        # um único dígito mal lido trocava a encomenda toda.
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"of": "262108", "cliente": "ELECNOR", "modelo": "OMEGA 1200 H"}],
+        }
+        result = cross_check_sheet(sheet_data, None, _REFS)
+        row = result["rows"][0]
+        assert row["winner_of"] == "262107"
+        cliente = row["fields"]["cliente"]
+        assert cliente["value"] == "ELECNOR"     # cliente preservado (não MTG BELUX)
+        assert cliente["status"] == "MATCH"
+
     def test_invalid_pri_with_winner_is_forced_rule_match(self):
         for value in ("xxx", "ABC", "--", "A1234", "123456"):
             result = cross_check_sheet(
