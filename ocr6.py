@@ -42,10 +42,11 @@ from app.pipeline.scoring_engine import normalize_of  # noqa: E402
 # point at a remote Ollama (e.g. the desktop PC on the same LAN).
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 # MODEL is overridable via OCR_MODEL env var so we can benchmark different
-# Ollama models without forking the script. Default = qwen3-vl:8b.
+# Ollama models without forking the script. Default = qwen3.5:9b (R224 — lê
+# melhor que o qwen3-vl:8b nestes kanbans manuscritos; ver decisão do Luís).
 # Production server adds OCR_NO_THINK=1 to disable Qwen3 reasoning blocks
 # (older Qwen3 tests showed reasoning blocks hurt JSON stability/latency).
-MODEL = os.environ.get("OCR_MODEL", "qwen3-vl:8b")
+MODEL = os.environ.get("OCR_MODEL", "qwen3.5:9b")
 TIMEOUT_SEC = 600
 MAX_RETRIES = 2
 NUM_PREDICT = 8192
@@ -239,9 +240,51 @@ def image_to_base64(path: Path, max_edge: int = _MAX_IMAGE_LONG_EDGE) -> str:
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
+def _salvage_truncated_json(snippet: str) -> dict[str, Any] | None:
+    """R224 — recupera um JSON cortado a meio (modelo bateu no teto de tokens a
+    meio das linhas). Fecha os containers ainda abertos e tenta parsar; se
+    falhar, recua até ao `}` anterior (descarta a linha incompleta) e repete.
+    Devolve o JSON com o máximo de linhas completas, ou None."""
+    best = snippet
+    while best:
+        stack: list[str] = []
+        in_str = esc = False
+        balanced = True
+        for ch in best:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = not in_str
+            elif not in_str:
+                if ch in "{[":
+                    stack.append("}" if ch == "{" else "]")
+                elif ch in "}]":
+                    if not stack:
+                        balanced = False
+                        break
+                    stack.pop()
+        if balanced and not in_str:
+            candidate = best.rstrip().rstrip(",") + "".join(reversed(stack))
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                pass
+        cut = best.rfind("}")
+        if cut == -1:
+            return None
+        best = best[:cut]
+    return None
+
+
 def clean_json(raw: str) -> dict[str, Any]:
     """Remove <think>...</think>, markdown fences, e extrai o JSON."""
     text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+    # R224 — bloco <think> SEM fecho (o modelo divagou até ao teto sem fechar):
+    # o regex acima não o apanha; salta o prefixo até ao primeiro '{'.
+    if "<think>" in text and "{" in text:
+        text = text[text.index("{"):]
     if "```" in text:
         for part in text.split("```"):
             part = part.strip()
@@ -253,7 +296,15 @@ def clean_json(raw: str) -> dict[str, Any]:
     s, e = text.find("{"), text.rfind("}") + 1
     if s == -1 or e <= s:
         raise ValueError("JSON delimiters not found in response")
-    return json.loads(text[s:e])
+    try:
+        return json.loads(text[s:e])
+    except json.JSONDecodeError:
+        # R224 — JSON truncado: salvar as linhas completas em vez de perder a
+        # folha toda (recupera "header"+"rows" lidas até ao corte).
+        salvaged = _salvage_truncated_json(text[s:])
+        if salvaged is not None:
+            return salvaged
+        raise
 
 
 # ── Cliente Ollama ────────────────────────────────────────────────────────────
@@ -262,17 +313,23 @@ def ollama_request(image_b64: str) -> tuple[str | None, dict[str, Any]]:
     Faz request ao Ollama. Devolve (response_text, telemetria).
     telemetria inclui eval_count, eval_duration, total_duration.
     """
+    # Disable thinking for hybrid models (Qwen3 family). Without this, some
+    # builds emit extra reasoning tokens that degrade JSON output and latency.
+    # R224 — o `think:False` do Ollama nem sempre é honrado por builds custom
+    # (ex.: qwen3.5:9b): o "thinking" enche tokens até ao teto (8192) → folhas
+    # a demorar minutos e por vezes sem JSON. Reforçamos com a convenção Qwen
+    # `/no_think` no próprio prompt (cinto-e-suspensórios).
+    no_think = os.environ.get("OCR_NO_THINK", "").lower() in ("1", "true", "yes")
+    prompt_text = f"{PROMPT}\n/no_think" if no_think else PROMPT
     payload = {
         "model": MODEL,
-        "prompt": PROMPT,
+        "prompt": prompt_text,
         "images": [image_b64],
         "stream": False,
         "keep_alive": -1,
         "options": {"temperature": TEMPERATURE, "num_predict": NUM_PREDICT},
     }
-    # Disable thinking for hybrid models (Qwen3 family). Without this, some
-    # builds emit extra reasoning tokens that degrade JSON output and latency.
-    if os.environ.get("OCR_NO_THINK", "").lower() in ("1", "true", "yes"):
+    if no_think:
         payload["think"] = False
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(

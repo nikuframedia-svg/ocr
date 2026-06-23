@@ -76,7 +76,7 @@ Get-ChildItem -Path $root -Recurse -Directory -Filter "__pycache__" -ErrorAction
   Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 $env:PYTHONDONTWRITEBYTECODE = "1"
 
-# Production OCR uses qwen3-vl:8b. Disable reasoning blocks via
+# Production OCR uses qwen3.5:9b. Disable reasoning blocks via
 # OCR_NO_THINK=1; older Qwen3 tests showed extra "thinking" tokens can hurt
 # JSON stability and latency.
 # R65: only set if not already loaded from .env.
