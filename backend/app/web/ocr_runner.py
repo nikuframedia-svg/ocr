@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import sys
 import threading  # R117 — protege swap global de ocr6.PROMPT
+import time  # R224 — timing por passagem (profiling)
 from pathlib import Path
 from typing import Any
 
@@ -111,7 +112,9 @@ def _detect_side(image_path: Path) -> str:
     return side if side in ("F", "V") else "F"
 
 
-def _run_ocr(image_path: Path, template: Any = None) -> dict:
+def _run_ocr(image_path: Path, template: Any = None) -> tuple[dict, Any]:
+    """R224 — devolve (dict, metrics): o `ExtractionMetrics` (eval_count,
+    retries, model, duration_sec) deixa de ser descartado, para o profiling."""
     if template is not None:
         result = ocr6.process_image(
             image_path, idx=1, total=1,
@@ -128,6 +131,19 @@ def _run_ocr(image_path: Path, template: Any = None) -> dict:
         "header": result.header,
         "rows": result.rows,
         "footer": result.footer,
+    }, result.metrics
+
+
+def _ocr_metrics_dict(m: Any) -> dict | None:
+    """R224 — `ExtractionMetrics` → dict leve para o profiling."""
+    if m is None:
+        return None
+    return {
+        "eval_count": getattr(m, "eval_count", 0),
+        "retries": getattr(m, "retries", 0),
+        "duration_sec": round(getattr(m, "duration_sec", 0.0), 1),
+        "status": getattr(m, "status", None),
+        "rows_count": getattr(m, "rows_count", 0),
     }
 
 
@@ -238,7 +254,11 @@ def run_pipeline(image_path: Path) -> dict:
     (`_detect_side`, ~5s) que inspecciona o cabeçalho da tabela na foto
     e escolhe o template apropriado antes do Pass-2 completo.
     """
-    pass1_raw = _run_ocr(image_path)
+    timing: dict[str, int] = {}  # R224 — ms por etapa (profiling)
+
+    t = time.perf_counter()
+    pass1_raw, m1 = _run_ocr(image_path)
+    timing["pass1_ms"] = int((time.perf_counter() - t) * 1000)
     setor = (pass1_raw.get("header", {}) or {}).get("setor_maquina", "")
     template = detect_template(setor)
     if template.name == DEFAULT_TEMPLATE.name:
@@ -250,6 +270,7 @@ def run_pipeline(image_path: Path) -> dict:
     # é silenciosa (assume frente — caso mais comum); operador pode usar
     # `rerun_pipeline_for_template` se o template wrongly detected.
     if template.name in TWO_SIDED_TEMPLATES:
+        t = time.perf_counter()
         try:
             side = _detect_side(image_path)
             if side == "V":
@@ -260,7 +281,9 @@ def run_pipeline(image_path: Path) -> dict:
                 "— fallback to frente",
                 file=sys.stderr,
             )
+        timing["side_detect_ms"] = int((time.perf_counter() - t) * 1000)
 
+    m2 = None
     if template.name == DEFAULT_TEMPLATE.name:
         raw_extraction = pass1_raw
     else:
@@ -269,19 +292,31 @@ def run_pipeline(image_path: Path) -> dict:
         with _PROMPT_LOCK:
             prev = _swap_prompt(build_prompt(template))
             try:
-                pass2_raw = _run_ocr(image_path, template=template)
+                t = time.perf_counter()
+                pass2_raw, m2 = _run_ocr(image_path, template=template)
+                timing["pass2_ms"] = int((time.perf_counter() - t) * 1000)
             finally:
                 ocr6.PROMPT, ocr6.PROMPT_HASH = prev
         raw_extraction = _merge_pass2_into_pass1(pass1_raw, pass2_raw)
 
     raw_extraction["template_name"] = template.name
 
+    t = time.perf_counter()
     current, dq = _build_current_and_dq(raw_extraction, template)
+    timing["build_ms"] = int((time.perf_counter() - t) * 1000)
     return {
         "raw": raw_extraction,
         "dq": dq,
         "current": current,
         "template_name": template.name,
+        "timing": timing,
+        "metrics": {
+            "model": getattr(m1, "model", None),
+            "pass1": _ocr_metrics_dict(m1),
+            "pass2": _ocr_metrics_dict(m2),
+            "eval_count_total": (getattr(m1, "eval_count", 0) or 0)
+            + (getattr(m2, "eval_count", 0) or 0),
+        },
     }
 
 
@@ -289,13 +324,13 @@ def rerun_pipeline_for_template(image_path: Path, template_name: str) -> dict:
     """Forçar um template específico (operador corrigiu o setor)."""
     template = get_template(template_name)
     if template.name == DEFAULT_TEMPLATE.name:
-        raw_extraction = _run_ocr(image_path)
+        raw_extraction, _ = _run_ocr(image_path)
     else:
         # R117 — ver comentário em run_pipeline; mesmo motivo.
         with _PROMPT_LOCK:
             prev = _swap_prompt(build_prompt(template))
             try:
-                raw_extraction = _run_ocr(image_path, template=template)
+                raw_extraction, _ = _run_ocr(image_path, template=template)
             finally:
                 ocr6.PROMPT, ocr6.PROMPT_HASH = prev
 

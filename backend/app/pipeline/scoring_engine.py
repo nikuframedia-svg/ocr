@@ -1188,6 +1188,11 @@ def _all_plan_entries(idx: dict) -> dict[tuple, dict]:
     return entries_by_key
 
 
+# R224 — profiling: nº máximo de candidatos pontuados guardados por linha no
+# traço de match (o pool pode ter ~12k, quase todos sim≈0/ruído).
+_TRACE_TOP_K = 50
+
+
 def _best_scored_entry(
     entries_by_key: dict[tuple, dict],
     row: dict,
@@ -1195,6 +1200,7 @@ def _best_scored_entry(
     current_phase: str | None,
     score_fields: set[str] | frozenset[str] | None = None,
     min_agree: int = 1,
+    trace: dict | None = None,
 ) -> dict | None:
     """Escolhe a melhor entry do plan por VOTAÇÃO HOLÍSTICA (R223).
 
@@ -1230,8 +1236,37 @@ def _best_scored_entry(
         ))
 
     if not eligible:
+        if trace is not None:
+            trace["pool_size"] = 0
+            trace["candidates"] = []
         return None
     eligible.sort()
+    if trace is not None:
+        # R224 — traço de match: guarda os candidatos pontuados (ordenados) para
+        # se ver porque o 2º/3º perderam. Cap em _TRACE_TOP_K; pool_size real à
+        # parte (o pool pode ter milhares quase todos sim≈0).
+        trace["pool_size"] = len(eligible)
+        trace["candidates"] = [
+            {
+                "of": (cand[6] or {}).get("_of"),
+                "agree": int(cand[11]),
+                "exact": int(cand[10]),
+                "exact_id": int(cand[12]),
+                "raw": round(float(cand[8]), 3),
+                "weighted": round(float(cand[9]), 3),
+                "combined": round(float(int(cand[11]) + float(cand[8])), 3),
+                "field_sims": [
+                    {
+                        "field": r.get("field"),
+                        "sim": round(float(r.get("sim") or 0.0), 3),
+                        "weight": r.get("weight"),
+                        "points": round(float(r.get("points") or 0.0), 3),
+                    }
+                    for r in (cand[7] or [])
+                ],
+            }
+            for cand in eligible[:_TRACE_TOP_K]
+        ]
     best = eligible[0]
     best_exact_id = -best[0]
     best_agree = -best[1]
@@ -1352,13 +1387,14 @@ def _find_winner_entry(
     current_phase: str | None = None,
     score_fields: set[str] | frozenset[str] | None = None,
     force_top1: bool = True,
+    trace: dict | None = None,
 ) -> dict | None:
     """R223 — votação holística sobre um pool LARGO de candidatos (todos os
     top-K de cada campo). Full-scan do plano só como fallback se o pool não
     der vencedor. A confiança (modo) vem do nº de campos que concordam."""
     pool = _candidate_entries_by_key(candidates_by_field, score_fields)
     winner = (
-        _best_scored_entry(pool, row, refs, current_phase, score_fields)
+        _best_scored_entry(pool, row, refs, current_phase, score_fields, trace=trace)
         if pool else None
     )
 
@@ -1370,8 +1406,10 @@ def _find_winner_entry(
         entries_by_key = _all_plan_entries(idx or {}) or pool
         if entries_by_key:
             winner = _best_scored_entry(
-                entries_by_key, row, refs, current_phase, score_fields
+                entries_by_key, row, refs, current_phase, score_fields, trace=trace
             )
+            if trace is not None:
+                trace["fallback_full_scan"] = True
 
     if winner is not None:
         # R223 — confiança: >=2 campos a concordar OU pelo menos um campo
@@ -1380,6 +1418,11 @@ def _find_winner_entry(
         agree = int(winner.get("_agree") or 0)
         exact = int(winner.get("_exact_score") or 0)
         winner["_winner_mode"] = "strong" if (agree >= 2 or exact >= 1) else "weak_guess"
+    if trace is not None:
+        trace["candidates_by_field"] = {
+            f: len(candidates_by_field.get(f, []) or [])
+            for f in ("of", "ov", "cliente", "modelo")
+        }
     return winner
 
 
@@ -2130,6 +2173,7 @@ def _score_row(
     current_phase: str | None = None,
     template_name: str | None = None,
     force_top1: bool = True,
+    trace_sink: list | None = None,
 ) -> tuple[dict, int, int, int, int, int]:
     """R123 / R125 — itera os `row_fields` do template (não os 10 fixos
     do bobine).
@@ -2161,6 +2205,7 @@ def _score_row(
             candidates_by_field[field] = _candidates_for_field(field, row, refs, idx)
 
     score_fields = cc_fields & set(_PLAN_FIELDS)
+    wt: dict | None = {} if trace_sink is not None else None
     winner = _find_winner_entry(
         candidates_by_field,
         row,
@@ -2169,6 +2214,7 @@ def _score_row(
         current_phase,
         score_fields,
         force_top1=force_top1,
+        trace=wt,
     )
 
     obra_concluida = _all_eligible_phase_full(
@@ -2242,6 +2288,35 @@ def _score_row(
                 cell.get("value", ""), "very_different", "obra_concluida",
             )
             very_diff += 1
+
+    # R224 — profiling: traço da pontuação de match desta linha (candidatos,
+    # vencedor, e o que cada campo decidiu/substituiu). Só quando pedido.
+    if trace_sink is not None:
+        decisions = []
+        for fn in row_fields:
+            if fn not in cc_fields:
+                continue
+            cell = fields_out.get(fn) or {}
+            decisions.append({
+                "field": fn,
+                "ocr_value": str(row.get(fn) or "").strip(),
+                "final_value": str(cell.get("value") or ""),
+                "engine_status": cell.get("status"),
+                "source": cell.get("source"),
+                "match_kind": cell.get("match_kind"),
+            })
+        trace_sink.append({
+            "row_index": row_idx,
+            "pool_size": (wt or {}).get("pool_size"),
+            "candidates_by_field": (wt or {}).get("candidates_by_field"),
+            "fallback_full_scan": (wt or {}).get("fallback_full_scan", False),
+            "winner_of": (winner or {}).get("_of") if winner else None,
+            "winner_combined": (winner or {}).get("_combined") if winner else None,
+            "winner_mode": (winner or {}).get("_winner_mode") if winner else None,
+            "obra_concluida": obra_concluida,
+            "candidates": (wt or {}).get("candidates", []),
+            "decisions": decisions,
+        })
 
     total = snapped + confirmed + na + very_diff
     row_out = {
@@ -2677,6 +2752,7 @@ def shadow_score(
     sheet_data: dict,
     dq_audit: dict | None,
     refs: dict,
+    trace_sink: list | None = None,
 ) -> tuple[dict, int, int, int, int, int]:
     """Retorna (scoring, total, snapped, confirmed, na, duration_ms).
 
@@ -2709,6 +2785,7 @@ def shadow_score(
             i, row, refs, idx, row_fields, cross_check_fields,
             current_phase, canonical_template_name,
             force_top1=getattr(template, "has_production_rows", True),
+            trace_sink=trace_sink,
         )
         out_rows.append(row_out)
         snapped += s
@@ -2815,13 +2892,20 @@ def cross_check_sheet(
     sheet_data: dict,
     dq_audit: dict | None,
     refs: dict,
+    collect_trace: bool = False,
 ) -> dict:
     """R109 — Entry point oficial. Wraps shadow_score, devolve output no
     formato legacy esperado pela UI (status MATCH/NO_MATCH/NA, summary,
     rows, header, footer, to_analisar).
+
+    R224 — `collect_trace=True` devolve também `result["trace"]` (traço de
+    match por linha: pool, candidatos pontuados, vencedor, decisões). Não é
+    guardado no JSON do cross (o `store_cross_check` ignora a chave); serve o
+    profiling. Sem o flag, custo zero.
     """
+    trace_sink: list | None = [] if collect_trace else None
     scoring, _total, _snapped, _confirmed, _na, duration_ms = shadow_score(
-        sheet_data, dq_audit, refs,
+        sheet_data, dq_audit, refs, trace_sink=trace_sink,
     )
 
     # Reconstruir rows no shape legacy
@@ -2932,7 +3016,7 @@ def cross_check_sheet(
         if v["status"] == "NO_MATCH":
             to_analisar.append(_review_item("footer", field, v))
 
-    return {
+    result = {
         "checked_at": scoring.get("checked_at"),
         "engine_version": scoring.get("engine_version"),
         "template_name": scoring.get("template_name"),
@@ -2944,6 +3028,9 @@ def cross_check_sheet(
         "refs_loaded_at": refs.get("loaded_at"),
         "duration_ms": duration_ms,
     }
+    if trace_sink is not None:
+        result["trace"] = trace_sink
+    return result
 
 
 __all__ = ["shadow_score", "cross_check_sheet", "CROSS_CHECK_STATUSES",

@@ -67,6 +67,7 @@ EVENT_TYPES = frozenset({
     "r98_cycle_completed",
     "qwen_session",
     "shadow_run_completed",
+    "sheet_profiled",  # R224 — timing por etapa + resumo do profiling por folha
 })
 
 

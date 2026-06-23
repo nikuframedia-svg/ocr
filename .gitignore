@@ -22,6 +22,7 @@ data/_logs/*.log
 data/_logs/*.err
 data/_logs/*.pid
 data/_logs/tunnel_url.txt
+data/_logs/profile*.jsonl
 data/dossier_pages/
 data/_design_ref/
 data/_design_ref_v2/

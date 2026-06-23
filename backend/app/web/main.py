@@ -15,6 +15,7 @@ import secrets
 import shutil
 import sys
 import threading
+import time  # R224 — timing por etapa (profiling)
 import traceback
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -161,6 +162,8 @@ def _process_sheet_ocr(sheet_id: int) -> None:
         if not img_path.exists():
             db.update_error(sheet_id, "image file missing")
             return
+        # R224 — distingue 1º processamento de reprocesso (já tinha OCR cru).
+        was_reprocess = bool(sheet.get("raw_extraction"))
         result = ocr_runner.run_pipeline(img_path)
         db.update_extraction(
             sheet_id=sheet_id,
@@ -169,7 +172,12 @@ def _process_sheet_ocr(sheet_id: int) -> None:
             sheet_data=result["current"],
         )
         try:
-            _run_and_store_cross_check(sheet_id)
+            _run_and_store_cross_check(
+                sheet_id,
+                profile_trigger="ocr_reprocess" if was_reprocess else "ocr_process",
+                ocr_timing=result.get("timing"),
+                ocr_metrics=result.get("metrics"),
+            )
         except Exception as cc_err:  # noqa: BLE001
             print(f"[worker cross-check] sheet {sheet_id}: {cc_err}", file=sys.stderr)
             traceback.print_exc()
@@ -693,10 +701,49 @@ def _apply_codmaq_fill(
         return 0
 
 
+# ── R224 — profiling: tempo por etapa + traço de match por folha ──────────
+_PROFILE_LOG = _DATA_DIR / "_logs" / "profile.jsonl"
+_PROFILE_MAX_BYTES = 50_000_000
+
+
+def _profile_on() -> bool:
+    """Profiling ligado por defeito; kill-switch `PROFILE_DISABLED=1`."""
+    return os.environ.get("PROFILE_DISABLED", "").lower() not in ("1", "true", "yes")
+
+
+def _write_profile(record: dict) -> None:
+    """Append de um registo de profiling ao `data/_logs/profile.jsonl` +
+    evento kernel `sheet_profiled`. Nunca rebenta o pipeline (tudo try/except)."""
+    if not _profile_on():
+        return
+    try:
+        _PROFILE_LOG.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if _PROFILE_LOG.exists() and _PROFILE_LOG.stat().st_size > _PROFILE_MAX_BYTES:
+                _PROFILE_LOG.replace(_PROFILE_LOG.with_suffix(".jsonl.1"))
+        except Exception:  # noqa: BLE001
+            pass
+        with open(_PROFILE_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        try:
+            kernel.emit_event("sheet_profiled", {
+                "sheet_id": record.get("sheet_id"),
+                "trigger": record.get("trigger"),
+                "timing": record.get("timing"),
+            })
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _run_and_store_cross_check(
     sheet_id: int,
     *,
     rebuild_from_raw: bool = False,
+    profile_trigger: str | None = None,
+    ocr_timing: dict | None = None,
+    ocr_metrics: dict | None = None,
 ) -> dict | None:
     """Round 33 — invisible verification inline in /upload pipeline.
 
@@ -713,11 +760,16 @@ def _run_and_store_cross_check(
          sheet_data so the persisted JSON reflects the final state
       4. Persist JSON to ``C:\\kanban\\nifruka\\03_Cross_Check\\``
     """
+    _prof = profile_trigger is not None and _profile_on()
+    _ct: dict[str, int] = {}  # R224 — ms por sub-etapa do cross
+    _scoring_trace: list | None = None
     sheet = db.get_sheet(sheet_id)
     if sheet is None or not sheet.get("sheet_data"):
         return None
+    _t0 = time.perf_counter()
     watcher = get_watcher()
     refs = watcher.get_refs()
+    _ct["refs_ms"] = int((time.perf_counter() - _t0) * 1000)
     if not refs.get("available"):
         return None
 
@@ -725,12 +777,21 @@ def _run_and_store_cross_check(
     # snaps de versões anteriores podem já ter poluído `sheet_data`.
     # Recomeçamos do OCR cru e reaplicamos só edições humanas por célula.
     if rebuild_from_raw and sheet.get("status") != "validated":
+        _t0 = time.perf_counter()
         if _rebuild_sheet_data_from_raw(sheet_id, sheet):
             refreshed = db.get_sheet(sheet_id)
             if refreshed is not None:
                 sheet = refreshed
+        _ct["rebuild_ms"] = int((time.perf_counter() - _t0) * 1000)
 
-    result = cross_check_sheet(sheet["sheet_data"], sheet.get("dq_audit"), refs)
+    _t0 = time.perf_counter()
+    result = cross_check_sheet(
+        sheet["sheet_data"], sheet.get("dq_audit"), refs, collect_trace=_prof,
+    )
+    _ct["scoring1_ms"] = int((time.perf_counter() - _t0) * 1000)
+    # R224 — guarda o traço da 1ª pontuação (sobre os valores do OCR, antes das
+    # substituições) e RETIRA-o do `result` para não inchar o JSON do cross.
+    _scoring_trace = result.pop("trace", None)
     from app.cross_check.ref_watcher import refs_snapshot
     plan_path = getattr(watcher, "plan_path", None)
     result["refs_snapshot"] = refs_snapshot(refs, plan_path)
@@ -746,6 +807,7 @@ def _run_and_store_cross_check(
     if sheet.get("status") == "validated":
         n_overwritten = n_op_snapped = n_codmaq_filled = 0
     else:
+        _t0 = time.perf_counter()
         # Cross-check auto-overwrite: `snapped` e `very_different` concreto.
         n_overwritten = _apply_auto_overwrites(sheet_id, result, protected)
         # R70 — operator snap against ListaColaboradores (SAP employee list).
@@ -756,6 +818,7 @@ def _run_and_store_cross_check(
         # R85 — auto-fill cod_maquina from setor_maquina via maquinas.xlsx
         # lookup. Fills empty cod_maquina when setor maps to a known machine.
         n_codmaq_filled = _apply_codmaq_fill(sheet_id, sheet, refs, protected)
+        _ct["overwrites_ms"] = int((time.perf_counter() - _t0) * 1000)
     if n_overwritten > 0 or n_op_snapped > 0 or n_codmaq_filled > 0:
         # Re-fetch sheet (sheet_data was modified by apply_edit) and
         # re-run cross-check to refresh statuses against new values.
@@ -766,7 +829,9 @@ def _run_and_store_cross_check(
         refreshed = db.get_sheet(sheet_id)
         if refreshed is not None and refreshed.get("sheet_data"):
             sheet = refreshed
+            _t0 = time.perf_counter()
             result = cross_check_sheet(sheet["sheet_data"], sheet.get("dq_audit"), refs)
+            _ct["scoring2_ms"] = int((time.perf_counter() - _t0) * 1000)
             result["refs_snapshot"] = refs_snapshot(refs, plan_path)
 
     if sheet is None or not sheet.get("sheet_data"):
@@ -777,6 +842,7 @@ def _run_and_store_cross_check(
     date_iso = date_pt
     if len(date_pt) == 10 and date_pt[2] == "-":
         date_iso = f"{date_pt[6:10]}-{date_pt[3:5]}-{date_pt[0:2]}"
+    _t0 = time.perf_counter()
     store_cross_check(
         sheet_id=sheet_id,
         image_path=sheet["image_path"],
@@ -785,10 +851,28 @@ def _run_and_store_cross_check(
         sheet_status=sheet["status"],
         cross_check_result=result,
     )
+    _ct["store_ms"] = int((time.perf_counter() - _t0) * 1000)
     # R108 — shadow scoring engine corre em background, escreve em coluna
     # própria. Não bloqueia, não interfere com `result`. Try/except wrap
     # garante que qualquer falha no shadow não toca em produção.
     _spawn_shadow_scoring(sheet_id, sheet["sheet_data"], sheet.get("dq_audit"), refs)
+
+    # R224 — profiling: junta o timing do OCR (se veio do worker) + o timing do
+    # cross + o traço de match e escreve um registo por processamento.
+    if _prof:
+        timing = dict(ocr_timing or {})
+        timing.update(_ct)
+        timing["cross_total_ms"] = sum(_ct.values())
+        _write_profile({
+            "sheet_id": sheet_id,
+            "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "trigger": profile_trigger,
+            "template": result.get("template_name"),
+            "n_rows": len(result.get("rows", []) or []),
+            "timing": timing,
+            "ocr": ocr_metrics or {},
+            "scoring": _scoring_trace or [],
+        })
     return result
 
 
@@ -1006,7 +1090,10 @@ def _build_cc_maps(sheet_id: int) -> tuple[
                 (cc and cc.get("engine_version") != ENGINE_VERSION)
                 or (stale_cc and stale_cc.get("engine_version") != ENGINE_VERSION)
             )
-            _run_and_store_cross_check(sheet_id, rebuild_from_raw=rebuild_from_raw)
+            _run_and_store_cross_check(
+                sheet_id, rebuild_from_raw=rebuild_from_raw,
+                profile_trigger="view_regen",
+            )
             cc = load_sheet_cross_check(sheet_id)
         except Exception:  # noqa: BLE001
             # R223 — NÃO engolir em silêncio. Esta regeneração on-demand é o que
