@@ -1,13 +1,13 @@
 $ErrorActionPreference = "Stop"
 
-# R65 — derive root from script location (portable across machines).
+# R65 - derive root from script location (portable across machines).
 # Script lives in <repo>/scripts/ops/start.ps1; root is 2 levels up.
 $root = (Resolve-Path "$PSScriptRoot\..\..").Path
 $logs = "$root\data\_logs"
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
 Write-Host "REPO_ROOT=$root"
 
-# R65 — load .env file from repo root if it exists. Parses KEY=VALUE
+# R65 - load .env file from repo root if it exists. Parses KEY=VALUE
 # lines (skipping comments and blank lines). Lets the operator point
 # this runtime at a remote Ollama (OLLAMA_URL), local refs folder
 # (KANBAN_DOC_DIR), etc. without editing this script.
@@ -28,12 +28,12 @@ if (Test-Path $envFile) {
     Write-Host "(no .env at $envFile - using defaults inline below)"
 }
 
-# R223 — parar o servidor antigo de forma FIÁVEL.
-# Bug anterior: matava só processos cujo Name era exactamente "python", mas na
+# R223 - parar o servidor antigo de forma FIAVEL.
+# Bug anterior: matava so processos cujo Name era exactamente "python", mas na
 # Metalogalva o worker real corre como "python3.12.exe" (Python da Microsoft
-# Store; o .venv é um stub que arranca esse interpretador). Esse worker NUNCA
-# era morto -> ficava agarrado à porta 8080 e o uvicorn novo não conseguia
-# bind, servindo codigo velho indefinidamente. Agora matamos QUEM É DONO da
+# Store; o .venv e um stub que arranca esse interpretador). Esse worker NUNCA
+# era morto -> ficava agarrado a porta 8080 e o uvicorn novo nao conseguia
+# bind, servindo codigo velho indefinidamente. Agora matamos QUEM E DONO da
 # porta 8080 (seja qual for o nome) + qualquer python deste repo a correr
 # uvicorn + o cloudflared.
 function Get-Port8080Owners {
@@ -60,15 +60,15 @@ Get-CimInstance Win32_Process -Filter "Name LIKE 'python%'" -ErrorAction Silentl
   }
 Get-Process cloudflared -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
-# Confirmar que a porta 8080 ficou MESMO livre antes de arrancar (senão o novo
-# falha o bind em silêncio e o velho continua a servir).
+# Confirmar que a porta 8080 ficou MESMO livre antes de arrancar (senao o novo
+# falha o bind em silencio e o velho continua a servir).
 if ((Get-Port8080Owners).Count -gt 0) {
   Stop-Port8080; Start-Sleep -Seconds 2
   $stillBusy = Get-Port8080Owners
-  if ($stillBusy.Count -gt 0) { Write-Host "AVISO: porta 8080 ainda ocupada por PID(s): $($stillBusy -join ', ') — o arranque pode falhar." }
+  if ($stillBusy.Count -gt 0) { Write-Host "AVISO: porta 8080 ainda ocupada por PID(s): $($stillBusy -join ', ') - o arranque pode falhar." }
 }
 
-# R223 — limpar bytecode compilado. __pycache__ e' gitignored, logo um git pull
+# R223 - limpar bytecode compilado. __pycache__ e' gitignored, logo um git pull
 # nunca o actualiza; um .pyc velho (de outra versao do Python ou outro commit)
 # podia fazer o processo novo servir codigo antigo. Apagamos e desligamos a
 # escrita de .pyc para o arranque ser deterministico.
@@ -92,8 +92,8 @@ if (-not $env:OCR_NO_THINK) { $env:OCR_NO_THINK = "1" }
 if (-not $env:CC_STUB_VARIANT) { $env:CC_STUB_VARIANT = "w13" }
 
 # Start uvicorn detached.
-# DEV_RELOAD=1 (no .env do portátil de desenvolvimento) acrescenta --reload:
-# o servidor recarrega sozinho a cada edição de .py. Em producao a variavel
+# DEV_RELOAD=1 (no .env do portatil de desenvolvimento) acrescenta --reload:
+# o servidor recarrega sozinho a cada edicao de .py. Em producao a variavel
 # nao esta definida, por isso o comportamento mantem-se inalterado.
 $uvArgs = @("-m","uvicorn","backend.app.web.main:app","--host","0.0.0.0","--port","8080","--log-level","info")
 if ($env:DEV_RELOAD -eq "1") {
@@ -111,7 +111,7 @@ $uv.Id | Out-File -Encoding ascii "$logs\uvicorn.pid"
 Write-Host "UVICORN_PID=$($uv.Id)"
 Start-Sleep -Seconds 4
 
-# R223 — health-check: confirmar que o servidor NOVO respondeu. O conteudo de
+# R223 - health-check: confirmar que o servidor NOVO respondeu. O conteudo de
 # /health mostra o ENGINE_VERSION + git SHA realmente carregados, por isso isto
 # tambem PROVA que versao esta viva (fim do "atualizei e ficou igual" cego).
 $healthy = $false
@@ -128,7 +128,7 @@ if (-not $healthy) {
   $own = Get-Port8080Owners
   Write-Host "ERRO: o servidor novo NAO respondeu em http://127.0.0.1:8080/health apos ~20s."
   if ($own.Count -gt 0) { Write-Host "      (porta 8080 ocupada por PID(s): $($own -join ', '))" }
-  else { Write-Host "      (ninguem esta a ouvir na porta 8080 — o uvicorn nao arrancou)" }
+  else { Write-Host "      (ninguem esta a ouvir na porta 8080 - o uvicorn nao arrancou)" }
   Write-Host "      O deploy PODE nao ter pegado. Ultimas linhas de data\_logs\uvicorn.err:"
   Get-Content "$logs\uvicorn.err" -Tail 15 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "      | $_" }
 }
