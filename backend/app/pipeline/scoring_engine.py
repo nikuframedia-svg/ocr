@@ -111,6 +111,13 @@ def normalize_of(value: object) -> str:
     return s
 
 
+def _value_has_letters(value: object) -> bool:
+    """R231 — True se o valor tem letras. Uma OF do plano é SEMPRE numérica, por
+    isso um valor com letras na coluna OF é, quase de certeza, um código de
+    modelo que o OCR pôs na coluna errada."""
+    return any(c.isalpha() for c in str(value or ""))
+
+
 def _o_zero_variants(s: str) -> list[str]:
     """0/O swap variants (R93). Capped 8 variants, ≤3 swap positions."""
     if not s:
@@ -510,7 +517,9 @@ _STATUS_LABELS = {
 # R226 — o winner passa a ser a COMBINAÇÃO (agree) e nenhum campo a 100% manda
 # sozinho (exact_id deixa de decidir). Muda decisões → BUMP obrigatório para
 # as folhas antigas regenerarem com a correção.
-ENGINE_VERSION = "v24_R226"
+# R231 — código de modelo na coluna OF é encaminhado para o campo modelo
+# (realinhamento por conteúdo). Muda decisões nas linhas mal posicionadas → BUMP.
+ENGINE_VERSION = "v25_R231"
 
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
@@ -1439,23 +1448,60 @@ def _phase_is_full(entry: dict, phase: str) -> bool:
     return p >= q
 
 
-def _realign_misplaced_of(row: dict, idx: dict | None) -> dict:
-    """R223 — repõe a OF quando o OCR a colocou na coluna errada (OV/PRI).
-    SÓ realinha quando o número é MESMO uma OF do plano (ref-validado) — nunca
-    às cegas (ex.: um nº de OV de 6 dígitos que não seja OF fica onde está)."""
-    of_keys = (idx or {}).get("of_keys") or set()
-    if not of_keys:
+# R231 — similaridade mínima (0-100) contra o índice de modelos para aceitar que
+# um código na coluna OF é mesmo um modelo e o encaminhar para o campo modelo.
+# 72 inclui a família CD03P503->CD03P10B (~75) e exclui leituras garbled
+# (CBRBE6D ~67, '(49566D)' ~38), que ficam como estão para revisão humana.
+_REALIGN_MODEL_SIM = 72.0
+
+
+def _realign_misplaced_of(
+    row: dict, idx: dict | None, template_name: str | None = None
+) -> dict:
+    """R223 — repõe a OF quando o OCR a colocou na coluna errada (OV/PRI). SÓ
+    realinha quando o número é MESMO uma OF do plano (ref-validado) — nunca às
+    cegas (ex.: um nº de OV de 6 dígitos que não seja OF fica onde está).
+
+    R231 — quando a coluna OF traz um CÓDIGO DE MODELO (tem letras → não é uma
+    OF, que é sempre numérica) e a coluna modelo está vazia/lixo, encaminha-o
+    para o campo `modelo` para o índice de modelos o reconhecer. É o erro mais
+    comum: como a coluna OV vem em branco, o OCR desliza a linha — a OF real cai
+    na OV e o modelo cai na OF. O `of` original NÃO é apagado (preserva o dado)."""
+    if not idx:
         return row
-    if normalize_of(row.get("of")) in of_keys:
-        return row  # a OF já é válida → nada a fazer
-    for src in ("ov", "pri"):
-        cand = normalize_of(row.get(src))
-        if cand and cand in of_keys:
-            row = dict(row)
-            row["of"] = cand
-            if src == "ov":
-                row["ov"] = ""  # era a OF, não a OV
-            return row
+    of_keys = idx.get("of_keys") or set()
+
+    # Etapa 1 (R223) — OF numérica no sítio errado (OV/PRI) -> OF.
+    if of_keys:
+        if normalize_of(row.get("of")) in of_keys:
+            return row  # a OF já é válida → nada a fazer
+        for src in ("ov", "pri"):
+            cand = normalize_of(row.get(src))
+            if cand and cand in of_keys:
+                row = dict(row)
+                row["of"] = cand
+                if src == "ov":
+                    row["ov"] = ""  # era a OF, não a OV
+                return row
+
+    # Etapa 2 (R231) — CÓDIGO DE MODELO na coluna OF -> campo modelo. A
+    # `acabamento` leva mesmo códigos de peça na coluna OF (tem branch próprio).
+    if template_name == "acabamento":
+        return row
+    of_val = str(row.get("of") or "").strip()
+    if not (_value_has_letters(of_val) and len(_model_compact(of_val)) >= 4):
+        return row  # OF não tem letras (é numérica/vazia) ou é curta demais
+    modelo_val = str(row.get("modelo") or "").strip()
+    if not (_is_missing_ocr(modelo_val) or len(_model_compact(modelo_val)) < 4):
+        return row  # já há um modelo legível no sítio → não sobrepor
+    ft_keys = idx.get("model_ft_keys") or []
+    top = _topk_by_similarity(
+        ft_keys, lambda k: _model_candidate_similarity(of_val, k), 1
+    )
+    if (top[0][1] if top else 0.0) < _REALIGN_MODEL_SIM:
+        return row  # sem evidência forte de modelo → fica como está (rever)
+    row = dict(row)
+    row["modelo"] = of_val  # encaminha para o índice de modelos; mantém o `of`
     return row
 
 
@@ -2275,8 +2321,9 @@ def _score_row(
     cc_fields = set(cross_check_fields)
 
     # R223 — realinhar a OF se o OCR a colocou na coluna errada (OV/PRI), antes
-    # de gerar candidatos, para o resto da linha usar a OF correta.
-    row = _realign_misplaced_of(row, idx)
+    # de gerar candidatos, para o resto da linha usar a OF correta. R231 — e um
+    # código de modelo na coluna OF é encaminhado para o campo modelo.
+    row = _realign_misplaced_of(row, idx, template_name)
 
     # Candidatos para todos os campos declarados no template como validáveis.
     # OF/OV são apenas campos normais no score global; não filtram o winner.

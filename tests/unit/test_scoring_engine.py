@@ -21,6 +21,7 @@ from app.pipeline.scoring_engine import (
     _is_very_different,
     _lev_distance,
     _num_sim,
+    _realign_misplaced_of,
     _str_sim,
     cross_check_sheet,
     shadow_score,
@@ -3912,3 +3913,62 @@ class TestR218WinnerMixAndAmbiguityGuard:
 
         assert comp["value"] == "6000"
         assert "auto_apply" not in comp
+
+
+class TestContentRealign:
+    """R231 — um código de modelo na coluna OF é encaminhado para o campo
+    modelo (o erro mais comum: a linha desliza porque a OV vem em branco)."""
+
+    _IDX = {
+        "of_keys": {"262882", "260078"},
+        "model_ft_keys": ["CGC2E06D", "CLC8F08R", "OMEGA 1200 H"],
+    }
+
+    def _realign(self, of, modelo="", ov="", pri="", tpl=None):
+        return _realign_misplaced_of(
+            {"of": of, "modelo": modelo, "ov": ov, "pri": pri}, self._IDX, tpl
+        )
+
+    def test_model_code_in_of_moves_to_modelo(self):
+        out = self._realign("CGC2E6D", "60")        # CGC2E6D ~ CGC2E06D
+        assert out["modelo"] == "CGC2E6D"           # encaminhado p/ índice de modelos
+        assert out["of"] == "CGC2E6D"               # of preservado (não apaga)
+
+    def test_model_code_with_empty_modelo_moves(self):
+        out = self._realign("CLC8F09R", "")         # CLC8F09R ~ CLC8F08R
+        assert out["modelo"] == "CLC8F09R"
+
+    def test_illegible_code_stays(self):
+        out = self._realign("(49566D)", "")         # sem match forte de modelo
+        assert out["modelo"] == ""                  # fica como está (rever)
+        assert out["of"] == "(49566D)"
+
+    def test_numeric_of_not_touched(self):
+        out = self._realign("262882", "CD18M507B")  # OF numérica válida
+        assert out["modelo"] == "CD18M507B"         # Etapa 2 não dispara
+
+    def test_real_model_in_modelo_not_overwritten(self):
+        out = self._realign("CGC2E6D", "CBCBE06DI")  # já há modelo legível
+        assert out["modelo"] == "CBCBE06DI"
+
+    def test_acabamento_guard(self):
+        out = self._realign("CGC2E06D", "", tpl="acabamento")
+        assert out["modelo"] == ""                  # acabamento não realinha (branch próprio)
+
+    def test_of_in_ov_still_realigned_first(self):
+        # Etapa 1 (R223) intacta e prioritária: OF válida na coluna OV volta p/ OF
+        out = self._realign(of="PTJ19846T", modelo="3V", ov="262882")
+        assert out["of"] == "262882"
+        assert out["ov"] == ""
+
+    def test_full_cross_recovers_model_from_of_column(self):
+        # Integração: of traz o código de modelo (OMEGA1200H), modelo vazio →
+        # o cross encaminha-o e o winner resolve para a peça certa (262107).
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"of": "OMEGA1200H", "modelo": "", "cliente": "", "ov": ""}],
+        }
+        result = cross_check_sheet(sheet_data, None, _REFS)
+        row = result["rows"][0]
+        assert row["winner_of"] == "262107"
+        assert row["fields"]["cliente"]["value"] == "ELECNOR"
