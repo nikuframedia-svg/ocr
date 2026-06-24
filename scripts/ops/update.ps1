@@ -34,8 +34,13 @@ $protect = @(
 )
 foreach ($f in $protect) {
   if (Test-Path "$root\$f") {
-    git -C $root update-index --assume-unchanged $f 2>$null
-    if ($?) { Write-Host "  protegido: $f" }
+    # R232 - so protege ficheiros TRACKED. Os gitignored (data/app.db, etc.) nao
+    # precisam e o 'update-index --assume-unchanged' rebentava neles com
+    # 'fatal: Unable to mark file', abortando o update todo.
+    if (git -C $root ls-files -- $f) {
+      git -C $root update-index --assume-unchanged $f 2>$null
+      if ($?) { Write-Host "  protegido: $f" }
+    }
   }
 }
 
