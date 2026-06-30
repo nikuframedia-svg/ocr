@@ -4036,3 +4036,86 @@ class TestContentRealign:
         row = result["rows"][0]
         assert row["winner_of"] == "262107"
         assert row["fields"]["cliente"]["value"] == "ELECNOR"
+
+
+class TestCrossFieldFuzzyReconstruction:
+    def test_maq_fustes_reconstructs_ov_as_of_and_of_as_modelo(self):
+        refs = {
+            "available": True,
+            "of_to_entries": {
+                "254856": [{
+                    "ov": "2507714",
+                    "cliente": "TECPOLES GMBH",
+                    "designacao": "0854UJ73 - Nº2 0854U573 1/2",
+                }],
+                "261173": [{
+                    "ov": "2313840",
+                    "cliente": "LE HAVRE",
+                    "designacao": "CFH1F45DI_V - BASE INOX + FL PL - BASE",
+                }],
+            },
+            "clientes_plan": frozenset({"TECPOLES GMBH", "LE HAVRE"}),
+            "lotes_sap_full": {},
+        }
+        sheet_data = {
+            "template_name": "maq_fustes",
+            "header": {},
+            "footer": {},
+            "rows": [{
+                "cliente": "TECPOLES",
+                "ov": "254817",
+                "of": "TR5Y",
+                "modelo": "",
+            }],
+        }
+
+        scoring, *_ = shadow_score(sheet_data, None, refs)
+        row = scoring["rows"][0]
+        strategy = row["proposal_strategy"]
+
+        assert row["winner_of"] == "254856"
+        assert strategy["reconstruction_source"] == "cross_field_fuzzy"
+        assert strategy["hypothesis_level"] == "reconstructed"
+        assert strategy["tokens_explained"] >= 2
+        assert "ov:254817 -> of" in strategy["token_assignments"]
+        assert "of:TR5Y -> modelo" in strategy["token_assignments"]
+        assert row["fields"]["of"]["alteration_rule"] == "cross_field_reconstruction"
+        assert row["fields"]["of"]["proposal_source"] == "structural_realign"
+        assert row["fields"]["of"]["value"] == "254856"
+
+    def test_cross_field_does_not_move_when_original_field_is_clear(self):
+        refs = {
+            "available": True,
+            "of_to_entries": {
+                "262108": [{
+                    "ov": "2410002",
+                    "cliente": "MTG BELUX",
+                    "designacao": "OMEGA 1500 H",
+                }],
+                "262109": [{
+                    "ov": "262108",
+                    "cliente": "WRONG CLIENT",
+                    "designacao": "SHOULD NOT WIN",
+                }],
+            },
+            "clientes_plan": frozenset({"MTG BELUX", "WRONG CLIENT"}),
+            "lotes_sap_full": {},
+        }
+        sheet_data = {
+            "template_name": "bobine_formato",
+            "header": {},
+            "footer": {},
+            "rows": [{
+                "cliente": "MTG BELUX",
+                "ov": "2410002",
+                "of": "262108",
+                "modelo": "",
+            }],
+        }
+
+        scoring, *_ = shadow_score(sheet_data, None, refs)
+        row = scoring["rows"][0]
+
+        assert row["winner_of"] == "262108"
+        assert row["proposal_strategy"]["reconstruction_source"] == "none"
+        assert row["fields"]["of"]["alteration_rule"] == "own_field"

@@ -517,10 +517,10 @@ _STATUS_LABELS = {
 # R226 — o winner passa a ser a COMBINAÇÃO (agree) e nenhum campo a 100% manda
 # sozinho (exact_id deixa de decidir). Muda decisões → BUMP obrigatório para
 # as folhas antigas regenerarem com a correção.
-# R232 — proposta por estratégia: mantém substitute-everything, mas cada célula
-# passa a declarar se veio do próprio campo, identidade de linha, realinhamento
-# estrutural ou melhor hipótese fraca. Muda JSON/trace e decisões → BUMP.
-ENGINE_VERSION = "v26_R232"
+# R233 — investigação cross-field fuzzy: antes do winner, compara a hipótese
+# original com hipóteses em que tokens OCR suspeitos mudam de campo (ex. OV→OF,
+# OF→modelo), aceitando só quando a coerência global da linha melhora.
+ENGINE_VERSION = "v26_R233"
 
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
@@ -1466,6 +1466,9 @@ def _phase_is_full(entry: dict, phase: str) -> bool:
 # 72 inclui a família CD03P503->CD03P10B (~75) e exclui leituras garbled
 # (CBRBE6D ~67, '(49566D)' ~38), que ficam como estão para revisão humana.
 _REALIGN_MODEL_SIM = 72.0
+_CROSS_FIELD_MIN_GAIN = 0.25
+_CROSS_FIELD_CLEAR_GAIN = 0.75
+_CROSS_FIELD_CONFLICT_MARGIN = 0.25
 
 
 def _of_digit_confusion_candidate(value: object, of_keys: object) -> str:
@@ -1563,7 +1566,19 @@ def _winner_reason_sims(winner: dict | None) -> dict[str, float]:
 def _proposal_strategy_for_row(
     winner: dict | None,
     structure: dict,
+    reconstruction: dict | None = None,
 ) -> dict:
+    reconstruction = reconstruction or {}
+    reconstruction_source = str(reconstruction.get("reconstruction_source") or "none")
+    reconstruction_payload = {
+        "reconstruction_source": reconstruction_source,
+        "original_score": reconstruction.get("original_score", 0.0),
+        "reconstructed_score": reconstruction.get("reconstructed_score", 0.0),
+        "score_margin": reconstruction.get("score_margin", 0.0),
+        "tokens_explained": reconstruction.get("tokens_explained", 0),
+        "token_assignments": reconstruction.get("token_assignments") or [],
+        "hypothesis_name": reconstruction.get("hypothesis_name") or "",
+    }
     if winner is None:
         return {
             "hypothesis_level": "unidentified",
@@ -1572,6 +1587,7 @@ def _proposal_strategy_for_row(
             "dim_anchors": [],
             "structural_flags": structure.get("flags") or [],
             "of_class": structure.get("of_class") or "",
+            **reconstruction_payload,
         }
 
     sims = _winner_reason_sims(winner)
@@ -1584,7 +1600,10 @@ def _proposal_strategy_for_row(
         if f in _FIELD_SCORE_WEIGHTS and f not in _IDENTITY_FIELDS
         and sim >= _AGREE_NUM_THRESHOLD
     )
-    if len(identity_anchors) >= 2:
+    if reconstruction_source == "cross_field_fuzzy":
+        anchor_class = "cross_field_fuzzy"
+        level = str(reconstruction.get("hypothesis_level") or "weak_hypothesis")
+    elif len(identity_anchors) >= 2:
         anchor_class = "multi_identity"
         level = "confirmed"
     elif structure.get("structural_realign") and (identity_anchors or dim_anchors):
@@ -1610,6 +1629,7 @@ def _proposal_strategy_for_row(
         "dim_anchors": dim_anchors,
         "structural_flags": structure.get("flags") or [],
         "of_class": structure.get("of_class") or "",
+        **reconstruction_payload,
     }
 
 
@@ -1637,13 +1657,19 @@ def _decorate_proposal_cell(
     source = str(out.get("source") or "")
     ref_source = str(out.get("ref_source") or source)
     level = str(proposal_strategy.get("hypothesis_level") or "unidentified")
+    reconstruction_source = str(proposal_strategy.get("reconstruction_source") or "none")
 
     if source == "sap" or ref_source == "sap":
         rule, proposal_source, cell_level = "local_reference", "sap", "confirmed"
     elif source in {"syntax", "lexicon", "ferramenta", "maquinas", "colaboradores"}:
         rule, proposal_source, cell_level = "local_reference", "syntax", "confirmed"
     elif source == "plan":
-        if _field_has_own_winner_evidence(field, winner, row, refs):
+        if reconstruction_source == "cross_field_fuzzy":
+            rule = "cross_field_reconstruction"
+            proposal_source = (
+                "structural_realign" if level == "reconstructed" else "best_hypothesis"
+            )
+        elif _field_has_own_winner_evidence(field, winner, row, refs):
             rule, proposal_source = "own_field", "own_field"
         elif level == "confirmed":
             rule, proposal_source = "row_identity", "row_identity"
@@ -1720,6 +1746,320 @@ def _realign_misplaced_of(
     row = dict(row)
     row["modelo"] = of_val  # encaminha para o índice de modelos; mantém o `of`
     return row
+
+
+def _build_candidates_by_field(
+    row: dict,
+    raw_row: dict,
+    refs: dict,
+    idx: dict,
+    cc_fields: set[str],
+    structure: dict,
+) -> dict[str, list[dict]]:
+    candidates_by_field: dict[str, list[dict]] = {}
+    raw_of = str((raw_row or {}).get("of") or "").strip()
+    row_of = str((row or {}).get("of") or "").strip()
+    for field in _ROW_FIELDS:
+        if field not in cc_fields:
+            continue
+        if (
+            field == "of"
+            and structure.get("of_class") == "model_in_of"
+            and row_of == raw_of
+        ):
+            candidates_by_field[field] = []
+            continue
+        candidates_by_field[field] = _candidates_for_field(field, row, refs, idx)
+    return candidates_by_field
+
+
+def _candidate_best_sim(
+    field: str, value: object, refs: dict, idx: dict
+) -> float:
+    probe_row = {field: value}
+    candidates = _candidates_for_field(field, probe_row, refs, idx)
+    if not candidates:
+        return 0.0
+    sims = [float(c.get("sim") or 0.0) for c in candidates if c.get("plan_entries")]
+    return max(sims, default=0.0)
+
+
+def _own_field_is_clear(field: str, value: object, refs: dict, idx: dict) -> bool:
+    if _is_missing_ocr(value):
+        return False
+    threshold = {
+        "of": 95.0,
+        "ov": 95.0,
+        "modelo": 90.0,
+        "cliente": 90.0,
+    }.get(field, 95.0)
+    return _candidate_best_sim(field, value, refs, idx) >= threshold
+
+
+def _looks_like_numeric_identifier(value: object) -> bool:
+    compact = _identifier_compact(value)
+    return bool(compact.isdigit() and 5 <= len(compact) <= 7)
+
+
+def _looks_like_model_token(value: object) -> bool:
+    compact = _model_compact(value)
+    return bool(len(compact) >= 4 and any(ch.isalpha() for ch in compact))
+
+
+def _winner_identity_tokens(winner: dict | None) -> int:
+    if not winner:
+        return 0
+    count = 0
+    for reason in winner.get("_score_reasons") or []:
+        field = reason.get("field")
+        if field not in _IDENTITY_FIELDS:
+            continue
+        if float(reason.get("sim") or 0.0) >= _AGREE_THRESHOLD:
+            count += 1
+    return count
+
+
+def _winner_combined(winner: dict | None) -> float:
+    if not winner:
+        return -999.0
+    try:
+        return float(winner.get("_combined") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _winner_candidate_key(winner: dict | None) -> tuple | None:
+    if not winner:
+        return None
+    return _entry_key(winner)
+
+
+def _reconstruction_hypotheses(
+    raw_row: dict,
+    base_row: dict,
+    refs: dict,
+    idx: dict,
+    template_name: str | None,
+) -> list[dict]:
+    raw_of = str((raw_row or {}).get("of") or "").strip()
+    raw_ov = str((raw_row or {}).get("ov") or "").strip()
+    raw_modelo = str((raw_row or {}).get("modelo") or "").strip()
+    modelo_empty = _is_missing_ocr(raw_modelo) or len(_model_compact(raw_modelo)) < 4
+
+    hypotheses: list[dict] = []
+    seen: set[tuple] = set()
+
+    def _add(name: str, row: dict, assignments: list[str]) -> None:
+        key = tuple(sorted((k, str(v or "")) for k, v in row.items()))
+        if key in seen:
+            return
+        seen.add(key)
+        hypotheses.append({
+            "name": name,
+            "row": row,
+            "assignments": assignments,
+        })
+
+    can_ov_to_of = (
+        _looks_like_numeric_identifier(raw_ov)
+        and not _own_field_is_clear("ov", raw_ov, refs, idx)
+    )
+    can_of_to_model = (
+        template_name != "acabamento"
+        and modelo_empty
+        and _looks_like_model_token(raw_of)
+        and not _own_field_is_clear("of", raw_of, refs, idx)
+    )
+
+    if can_ov_to_of:
+        row = dict(base_row)
+        row["of"] = normalize_of(raw_ov)
+        row["ov"] = ""
+        _add("ov_to_of", row, [f"ov:{raw_ov} -> of"])
+
+    if can_of_to_model:
+        row = dict(base_row)
+        row["modelo"] = raw_of
+        if str(row.get("of") or "").strip() == raw_of:
+            row["of"] = ""
+        _add("of_to_modelo", row, [f"of:{raw_of} -> modelo"])
+
+    if can_ov_to_of and can_of_to_model:
+        row = dict(base_row)
+        row["of"] = normalize_of(raw_ov)
+        row["ov"] = ""
+        row["modelo"] = raw_of
+        _add(
+            "ov_to_of+of_to_modelo",
+            row,
+            [f"ov:{raw_ov} -> of", f"of:{raw_of} -> modelo"],
+        )
+
+    return hypotheses
+
+
+def _evaluate_row_hypothesis(
+    name: str,
+    row: dict,
+    assignments: list[str],
+    raw_row: dict,
+    refs: dict,
+    idx: dict,
+    cc_fields: set[str],
+    current_phase: str | None,
+    score_fields: set[str] | frozenset[str],
+    template_name: str | None,
+    force_top1: bool,
+    *,
+    trace: dict | None = None,
+) -> dict:
+    structure = _row_structure_analysis(raw_row, row, idx, template_name)
+    candidates = _build_candidates_by_field(row, raw_row, refs, idx, cc_fields, structure)
+    winner = _find_winner_entry(
+        candidates,
+        row,
+        refs,
+        idx,
+        current_phase,
+        score_fields,
+        force_top1=force_top1,
+        trace=trace,
+    )
+    return {
+        "name": name,
+        "row": row,
+        "assignments": assignments,
+        "structure": structure,
+        "candidates_by_field": candidates,
+        "winner": winner,
+        "score": _winner_combined(winner),
+        "tokens_explained": _winner_identity_tokens(winner),
+        "trace": trace,
+    }
+
+
+def _choose_row_reconstruction(
+    raw_row: dict,
+    base_row: dict,
+    refs: dict,
+    idx: dict,
+    cc_fields: set[str],
+    current_phase: str | None,
+    score_fields: set[str] | frozenset[str],
+    template_name: str | None,
+    force_top1: bool,
+    *,
+    trace_enabled: bool = False,
+) -> dict:
+    baseline_trace = {} if trace_enabled else None
+    baseline = _evaluate_row_hypothesis(
+        "original",
+        base_row,
+        [],
+        raw_row,
+        refs,
+        idx,
+        cc_fields,
+        current_phase,
+        score_fields,
+        template_name,
+        force_top1,
+        trace=baseline_trace,
+    )
+    hypotheses = [baseline]
+
+    base_structure = baseline["structure"]
+    raw_of = str((raw_row or {}).get("of") or "").strip()
+    raw_ov = str((raw_row or {}).get("ov") or "").strip()
+    suspicious = (
+        base_structure.get("structural_realign")
+        or (
+            _looks_like_model_token(raw_of)
+            and _looks_like_numeric_identifier(raw_ov)
+        )
+        or (
+            baseline["winner"] is not None
+            and _winner_identity_tokens(baseline["winner"]) < 2
+        )
+    )
+    if suspicious:
+        for hyp in _reconstruction_hypotheses(raw_row, base_row, refs, idx, template_name):
+            hypotheses.append(
+                _evaluate_row_hypothesis(
+                    hyp["name"],
+                    hyp["row"],
+                    hyp["assignments"],
+                    raw_row,
+                    refs,
+                    idx,
+                    cc_fields,
+                    current_phase,
+                    score_fields,
+                    template_name,
+                    force_top1,
+                    trace={} if trace_enabled else None,
+                )
+            )
+
+    hypotheses.sort(
+        key=lambda h: (
+            float(h.get("score") or -999.0),
+            int(h.get("tokens_explained") or 0),
+            1 if h.get("assignments") else 0,
+        ),
+        reverse=True,
+    )
+    best = hypotheses[0]
+    original_score = float(baseline.get("score") or -999.0)
+    best_score = float(best.get("score") or -999.0)
+    best_key = _winner_candidate_key(best.get("winner"))
+    rival_hypotheses = [
+        h for h in hypotheses[1:]
+        if _winner_candidate_key(h.get("winner")) != best_key
+    ]
+    second_score = (
+        float(rival_hypotheses[0].get("score") or -999.0)
+        if rival_hypotheses else -999.0
+    )
+    gain = best_score - original_score
+    second_margin = best_score - second_score
+    accepted = bool(best.get("assignments")) and gain >= _CROSS_FIELD_MIN_GAIN
+    if accepted and int(best.get("tokens_explained") or 0) < 2:
+        accepted = False
+
+    selected = best if accepted else baseline
+    selected_score = float(selected.get("score") or -999.0)
+    reconstructed_score = best_score if best.get("assignments") else selected_score
+
+    if accepted:
+        if (selected.get("winner") or {}).get("_rivals") or second_margin <= _CROSS_FIELD_CONFLICT_MARGIN:
+            level = "conflict"
+        elif gain >= _CROSS_FIELD_CLEAR_GAIN:
+            level = "reconstructed"
+        else:
+            level = "weak_hypothesis"
+        source = "cross_field_fuzzy"
+    elif selected["structure"].get("structural_realign"):
+        level = ""
+        source = "structural_realign"
+    else:
+        level = ""
+        source = "none"
+
+    selected["reconstruction"] = {
+        "accepted": accepted,
+        "reconstruction_source": source,
+        "hypothesis_name": selected["name"],
+        "hypothesis_level": level,
+        "original_score": round(max(original_score, 0.0), 3),
+        "reconstructed_score": round(max(reconstructed_score, 0.0), 3),
+        "score_margin": round(gain if accepted else 0.0, 3),
+        "second_margin": round(second_margin if accepted else 0.0, 3),
+        "tokens_explained": int(selected.get("tokens_explained") or 0),
+        "token_assignments": selected.get("assignments") or [],
+        "hypotheses": len(hypotheses),
+    }
+    return selected
 
 
 def _find_winner_entry(
@@ -2542,36 +2882,32 @@ def _score_row(
     # R223 — realinhar a OF se o OCR a colocou na coluna errada (OV/PRI), antes
     # de gerar candidatos, para o resto da linha usar a OF correta. R231 — e um
     # código de modelo na coluna OF é encaminhado para o campo modelo.
-    row = _realign_misplaced_of(row, idx, template_name)
-    structure = _row_structure_analysis(raw_row, row, idx, template_name)
-
-    # Candidatos para todos os campos declarados no template como validáveis.
-    # OF/OV são apenas campos normais no score global; não filtram o winner.
-    candidates_by_field: dict[str, list[dict]] = {}
-    for field in _ROW_FIELDS:
-        if field in cc_fields:
-            if field == "of" and structure.get("of_class") == "model_in_of":
-                candidates_by_field[field] = []
-                continue
-            candidates_by_field[field] = _candidates_for_field(field, row, refs, idx)
-
+    base_row = _realign_misplaced_of(row, idx, template_name)
     score_fields = cc_fields & set(_PLAN_FIELDS)
-    wt: dict | None = {} if trace_sink is not None else None
-    winner = _find_winner_entry(
-        candidates_by_field,
-        row,
+    selected_hypothesis = _choose_row_reconstruction(
+        raw_row,
+        base_row,
         refs,
         idx,
+        cc_fields,
         current_phase,
         score_fields,
-        force_top1=force_top1,
-        trace=wt,
+        template_name,
+        force_top1,
+        trace_enabled=trace_sink is not None,
     )
+    row = selected_hypothesis["row"]
+    structure = selected_hypothesis["structure"]
+    candidates_by_field = selected_hypothesis["candidates_by_field"]
+    winner = selected_hypothesis["winner"]
+    wt: dict | None = selected_hypothesis.get("trace")
 
     obra_concluida = _all_eligible_phase_full(
         candidates_by_field, row, refs, current_phase, winner
     )
-    proposal_strategy = _proposal_strategy_for_row(winner, structure)
+    proposal_strategy = _proposal_strategy_for_row(
+        winner, structure, selected_hypothesis.get("reconstruction")
+    )
 
     fields_out: dict[str, dict] = {}
     snapped = confirmed = na = very_diff = 0

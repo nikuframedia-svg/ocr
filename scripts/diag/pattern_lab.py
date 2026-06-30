@@ -370,6 +370,7 @@ def build_dataset(
                         or row_strategy.get("hypothesis_level")
                         or ""
                     ),
+                    "reconstruction_source": row_strategy.get("reconstruction_source") or "",
                     "winner_of": row.get("winner_of"),
                     "winner_mode": row.get("winner_mode") or "-",
                     "winner_combined": row.get("winner_combined"),
@@ -408,6 +409,11 @@ def build_dataset(
                 "winner_combined": row.get("winner_combined") or "",
                 "hypothesis_level": row_strategy.get("hypothesis_level") or "",
                 "proposal_anchor_class": row_strategy.get("anchor_class") or "",
+                "reconstruction_source": row_strategy.get("reconstruction_source") or "",
+                "reconstruction_hypothesis": row_strategy.get("hypothesis_name") or "",
+                "reconstruction_margin": row_strategy.get("score_margin") or "",
+                "reconstruction_tokens": row_strategy.get("tokens_explained") or "",
+                "token_assignments": ",".join(row_strategy.get("token_assignments") or []),
                 "structural_flags": ",".join(row_strategy.get("structural_flags") or []),
                 "strategy_of_class": row_strategy.get("of_class") or "",
                 "pool_size": row.get("pool_size") or 0,
@@ -598,6 +604,38 @@ def build_report(rows: list[dict[str, Any]], cells: list[dict[str, Any]], thresh
             f"{sum(r['risk'] > 0 for r in sub)} |"
         )
     w("")
+
+    w("## Cross-Field Reconstruction")
+    w("")
+    w("| Reconstruction source | Rows | XX rows | Risk rows | Mean margin |")
+    w("|---|---:|---:|---:|---:|")
+    by_recon: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        by_recon[row.get("reconstruction_source") or "-"].append(row)
+    for source, sub in sorted(by_recon.items(), key=lambda kv: len(kv[1]), reverse=True):
+        margins = [
+            float(r.get("reconstruction_margin") or 0.0)
+            for r in sub
+            if r.get("reconstruction_margin") not in ("", None)
+        ]
+        w(
+            f"| {source} | {len(sub)} | {sum(r['xx'] > 0 for r in sub)} | "
+            f"{sum(r['risk'] > 0 for r in sub)} | "
+            f"{(mean(margins) if margins else 0.0):.2f} |"
+        )
+    w("")
+    shifted = [
+        r for r in rows
+        if r.get("reconstruction_source") == "cross_field_fuzzy"
+    ]
+    if shifted:
+        w("| Token assignments | Rows |")
+        w("|---|---:|")
+        for assignment, count in Counter(
+            r.get("token_assignments") or "-" for r in shifted
+        ).most_common(15):
+            w(f"| {assignment} | {count} |")
+        w("")
 
     w("## OF-Letters Pattern")
     w("")
