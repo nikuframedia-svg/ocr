@@ -111,6 +111,16 @@ def test_acabamento_mtg2_alias_resolves_to_acabamento():
     assert get_template("acabamento_mtg2").name == "acabamento"
 
 
+def test_acabamento_fuzzy_setor_detection():
+    from app.templates_registry import detect_template
+
+    assert detect_template("MTG4").name == "acabamento"
+    assert detect_template("ACABAMEMTO MTG4").name == "acabamento"
+    assert detect_template("ACABAMENT0 MTG4").name == "acabamento"
+    assert detect_template("ACAMENTO MTG4").name == "acabamento"
+    assert detect_template("QUINADORA ADIRA MTG4").name == "quinadora_pav8"
+
+
 def test_default_pass1_shifted_acabamento_infers_acabamento_template(monkeypatch):
     import importlib
     import sys
@@ -147,6 +157,87 @@ def test_default_pass1_shifted_acabamento_infers_acabamento_template(monkeypatch
 
     assert inferred is not None
     assert inferred.name == "acabamento"
+
+
+def test_default_pass1_acabamento_shape_infers_despite_weak_setor(monkeypatch):
+    import importlib
+    import sys
+    from types import SimpleNamespace
+
+    if "app.web.ocr_runner" in sys.modules:
+        ocr_runner = sys.modules["app.web.ocr_runner"]
+    else:
+        monkeypatch.setitem(
+            sys.modules,
+            "ocr6",
+            SimpleNamespace(
+                PROMPT="",
+                PROMPT_HASH="",
+                load_prompt=lambda _path: ("", ""),
+                process_image=lambda *_args, **_kwargs: None,
+            ),
+        )
+        ocr_runner = importlib.import_module("app.web.ocr_runner")
+
+    inferred = ocr_runner._infer_template_from_default_pass1({
+        "header": {"setor_maquina": "MIG4"},
+        "rows": [
+            {
+                "cliente": "",
+                "ov": "",
+                "of": "263327",
+                "modelo": "3114VF01",
+                "qtd": "3",
+            },
+        ],
+        "footer": {},
+    })
+
+    assert inferred is not None
+    assert inferred.name == "acabamento"
+
+
+def test_default_pass1_real_bobine_does_not_infer_acabamento(monkeypatch):
+    import importlib
+    import sys
+    from types import SimpleNamespace
+
+    if "app.web.ocr_runner" in sys.modules:
+        ocr_runner = sys.modules["app.web.ocr_runner"]
+    else:
+        monkeypatch.setitem(
+            sys.modules,
+            "ocr6",
+            SimpleNamespace(
+                PROMPT="",
+                PROMPT_HASH="",
+                load_prompt=lambda _path: ("", ""),
+                process_image=lambda *_args, **_kwargs: None,
+            ),
+        )
+        ocr_runner = importlib.import_module("app.web.ocr_runner")
+
+    inferred = ocr_runner._infer_template_from_default_pass1({
+        "header": {"setor_maquina": ""},
+        "rows": [
+            {
+                "cliente": "MTG GMBH",
+                "ov": "2604379",
+                "of": "263380",
+                "modelo": "CGC2E10D5",
+                "qtd": "4",
+                "comp_mm": "9500",
+                "larg_mm": "950",
+                "lote": "M26B0065",
+                "esp": "4",
+                "lbase": "644",
+                "ltopo": "226",
+            },
+        ],
+        "footer": {},
+    })
+
+    assert inferred is None
 
 
 def test_acabamento_prompt_columns_and_no_forced_mtg4():

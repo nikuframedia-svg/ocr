@@ -48,8 +48,10 @@ Backward compat:
 """
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import dataclass, field as dc_field
-from typing import Iterable
+from difflib import SequenceMatcher
 
 
 @dataclass(frozen=True)
@@ -523,13 +525,90 @@ for _t in TEMPLATES.values():
 def _normalize_setor(raw: str) -> str:
     """Normalize a setor/máquina string for alias lookup.
 
-    Uppercases, strips whitespace, collapses internal whitespace runs.
-    Does NOT change punctuation (PAV.4 / PAV 4 are both valid aliases).
+    Uppercases, removes accents, turns punctuation into separators, and
+    collapses internal whitespace runs.
     """
     if not raw:
         return ""
-    s = " ".join(raw.split())  # collapse whitespace
-    return s.upper().strip()
+    decomposed = unicodedata.normalize("NFKD", str(raw))
+    no_marks = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    s = re.sub(r"[^A-Za-z0-9]+", " ", no_marks.upper())
+    return " ".join(s.split()).strip()
+
+
+_ALIAS_NORM_INDEX: dict[str, str] = {}
+for _t in TEMPLATES.values():
+    for _alias in _t.setor_aliases:
+        _ALIAS_NORM_INDEX[_normalize_setor(_alias)] = _t.name
+
+
+def _compact_setor(raw: str) -> str:
+    return re.sub(r"[^A-Z0-9]+", "", _normalize_setor(raw))
+
+
+def _is_acabamento_token(token: str) -> bool:
+    if len(token) < 5:
+        return False
+    cleaned = token.replace("0", "O")
+    if cleaned.startswith(("ACAB", "ACAM")):
+        return True
+    return SequenceMatcher(None, cleaned, "ACABAMENTO").ratio() >= 0.72
+
+
+def _looks_like_acabamento_setor(norm: str) -> bool:
+    if not norm:
+        return False
+    tokens = norm.split()
+    compact = "".join(tokens)
+    if any(_is_acabamento_token(t) for t in tokens):
+        return True
+    return _is_acabamento_token(compact)
+
+
+def _has_mtg_token(norm: str) -> bool:
+    if not norm:
+        return False
+    if re.search(r"\bMTG\s*[2345]\b", norm):
+        return True
+    return _compact_setor(norm) in {"MTG2", "MTG3", "MTG4", "MTG5"}
+
+
+def detect_template_with_reason(
+    setor_maquina: str | None,
+    *,
+    tpl_code: str | None = None,
+) -> tuple[TemplateSpec, str]:
+    """Return the detected template plus the rule that selected it."""
+    if not setor_maquina:
+        return DEFAULT_TEMPLATE, "default"
+
+    norm = _normalize_setor(setor_maquina)
+    if not norm:
+        return DEFAULT_TEMPLATE, "default"
+
+    name = _ALIAS_NORM_INDEX.get(norm)
+    if name is not None:
+        return TEMPLATES[name], "exact_alias"
+
+    for alias_up, tname in sorted(
+        _ALIAS_NORM_INDEX.items(), key=lambda kv: -len(kv[0])
+    ):
+        if alias_up and alias_up in norm:
+            return TEMPLATES[tname], "fuzzy_alias"
+
+    if tpl_code and tpl_code.upper() == "TPL102":
+        return TEMPLATES["gasparini"], "fuzzy_alias"
+
+    if "QUINADORA" in norm:
+        return TEMPLATES["quinadora_pav8"], "fuzzy_alias"
+
+    if _looks_like_acabamento_setor(norm):
+        return TEMPLATES["acabamento"], "fuzzy_alias"
+
+    if _has_mtg_token(norm):
+        return TEMPLATES["acabamento"], "mtg_token"
+
+    return DEFAULT_TEMPLATE, "default"
 
 
 def detect_template(
@@ -558,44 +637,10 @@ def detect_template(
     Returns:
         TemplateSpec — never None, fallback to DEFAULT_TEMPLATE
     """
-    if not setor_maquina:
-        return DEFAULT_TEMPLATE
-
-    norm = _normalize_setor(setor_maquina)
-    if not norm:
-        return DEFAULT_TEMPLATE
-
-    # Step 1 — exact alias match
-    name = _ALIAS_INDEX.get(norm)
-    if name is not None:
-        return TEMPLATES[name]
-
-    # Step 2 — substring match (alias is a contiguous token in input)
-    # Sorted by alias length DESC so "QUINADORA PAV.4" matches before "QUINADORA".
-    for alias_up, tname in sorted(
-        _ALIAS_INDEX.items(), key=lambda kv: -len(kv[0])
-    ):
-        if alias_up in norm:
-            return TEMPLATES[tname]
-
-    # Step 3 — TPL102 hint fallback (3 Gemini share schema)
-    if tpl_code and tpl_code.upper() == "TPL102":
-        return TEMPLATES["gasparini"]
-
-    # Step 3b — R138 fallback genérico de quinadora. O maquinas.xlsx tem
-    # várias quinadoras (P8 / CÓNICA P8 / ADIRA MTG4 / ADIRA 3M / MTG3 …) cujos
-    # labels não estão todos enumerados como aliases; todas partilham o schema
-    # do PAV.8. Qualquer setor com "QUINADORA" que não tenha batido acima →
-    # quinadora_pav8 (em vez do bobine_formato errado). GUIFIL e os labels P4
-    # já bateram nos Steps 1/2.
-    if "QUINADORA" in norm:
-        return TEMPLATES["quinadora_pav8"]
-
-    if "ACABAMENTO" in norm or "ACAB." in norm:
-        return TEMPLATES["acabamento"]
-
-    # Step 4 — fallback (legacy / unknown sheet)
-    return DEFAULT_TEMPLATE
+    template, _reason = detect_template_with_reason(
+        setor_maquina, tpl_code=tpl_code,
+    )
+    return template
 
 
 def get_template(name: str | None) -> TemplateSpec:
@@ -630,6 +675,7 @@ __all__ = [
     "TEMPLATES",
     "DEFAULT_TEMPLATE",
     "detect_template",
+    "detect_template_with_reason",
     "get_template",
     "all_phases",
     "templates_in_phase",

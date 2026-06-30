@@ -238,7 +238,7 @@
                       <div class="muted" style="font-size:10px;" x-text="row.cliente"></div>
                     </td>
                     <td style="padding:6px 8px;">
-                      <input type="number" inputmode="numeric"
+                      <input type="text" inputmode="numeric"
                              :value="row.qtd"
                              @input="row.qtd = $event.target.value"
                              style="width:100%; padding:6px; text-align:right;
@@ -266,7 +266,7 @@
                     Total colunas produzidas
                   </td>
                   <td :colspan="hasCesta(sheet) ? 2 : 1" style="padding:6px 8px;">
-                    <input type="number" inputmode="numeric"
+                    <input type="text" inputmode="numeric"
                            :value="sheet.colunas_produzidas"
                            @input="sheet.colunas_produzidas = $event.target.value"
                            style="width:100%; padding:6px; text-align:right;
@@ -284,11 +284,10 @@
         <button class="btn lg" style="flex:1;" @click="skipConfirm()">Saltar</button>
         <button class="btn lg primary" style="flex:2;"
                 @click="submitQtds()" :disabled="savingQtds">
-          <span x-show="!savingQtds && !anyCesta">Confirmar e gravar</span>
-          <span x-show="!savingQtds && anyCesta">Validar e enviar</span>
+          <span x-show="!savingQtds">Confirmar e gravar</span>
           <span x-show="savingQtds" style="display:flex; align-items:center; gap:8px;">
             <span class="spinner" style="width:16px; height:16px; border-width:2px;"></span>
-            <span x-text="anyCesta ? 'A validar…' : 'A gravar…'"></span>
+            <span>A gravar...</span>
           </span>
         </button>
       </div>
@@ -736,9 +735,16 @@ function captureApp() {
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({edits}),
         });
-        if (!res.ok) throw new Error('save failed');
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || body.ok === false || (body.errors || []).length > 0) {
+          const first = (body.errors || [])[0];
+          const detail = first && first.error ? first.error : `HTTP ${res.status}`;
+          throw new Error(detail);
+        }
       } catch (e) {
         alert('Erro a gravar quantidades: ' + e.message);
+        this.savingQtds = false;
+        return;
       }
       this.savingQtds = false;
       this.stage = 'done';

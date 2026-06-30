@@ -41,7 +41,7 @@ from app.pipeline.prompt_builder import (  # noqa: E402
 )
 from app.templates_registry import (  # noqa: E402
     DEFAULT_TEMPLATE,
-    detect_template,
+    detect_template_with_reason,
     get_template,
 )
 
@@ -198,28 +198,136 @@ def _looks_like_model_code(value: object) -> bool:
     return any(ch.isalpha() for ch in compact) and any(ch.isdigit() for ch in compact)
 
 
-def _looks_like_shifted_acabamento_row(row: dict) -> bool:
-    """Detect Acabamento read with the default Bobine columns.
+def _digits_only(value: object) -> str:
+    return "".join(ch for ch in str(value or "") if ch.isdigit())
 
-    Typical bad shape: cliente empty, Acabamento OF/reference shifted into
-    OV/OF, modelo empty, QTD present.
-    """
-    return (
-        not str(row.get("cliente") or "").strip()
-        and bool(str(row.get("ov") or "").strip())
-        and _looks_like_model_code(row.get("of"))
-        and not str(row.get("modelo") or "").strip()
-        and bool(str(row.get("qtd") or "").strip())
+
+def _looks_like_of(value: object) -> bool:
+    digits = _digits_only(value)
+    return len(digits) == 6
+
+
+def _looks_like_short_qty(value: object) -> bool:
+    compact = _compact_alnum(value)
+    digits = _digits_only(value)
+    return bool(digits) and len(compact) <= 4
+
+
+def _looks_like_reference_code(value: object) -> bool:
+    compact = _compact_alnum(value)
+    if len(compact) < 5:
+        return False
+    prefixes = (
+        "CA", "CB", "CBC", "CBO", "CD", "CF", "CFC", "CFH", "CG", "CGC",
+        "CL", "CLC", "CR", "CS", "CSC", "CO", "GC",
+    )
+    if compact.startswith(prefixes):
+        return True
+    return _looks_like_model_code(value)
+
+
+def _present(value: object) -> bool:
+    return bool(str(value or "").strip())
+
+
+def _bobine_dims_present(row: dict) -> int:
+    return sum(
+        1 for field in ("comp_mm", "larg_mm", "esp", "lbase", "ltopo", "lote")
+        if _present(row.get(field))
     )
 
 
-def _infer_template_from_default_pass1(pass1_raw: dict) -> Any | None:
-    header = pass1_raw.get("header") or {}
-    setor = str(header.get("setor_maquina") or "")
-    if setor.strip():
-        return None
+def _score_acabamento_like_row(row: dict) -> tuple[int, list[str]]:
+    """Score a default-template row for the 3-column Acabamento shape."""
+    score = 0
+    reasons: list[str] = []
+    cliente = row.get("cliente")
+    ov = row.get("ov")
+    of = row.get("of")
+    modelo = row.get("modelo")
+    qtd = row.get("qtd")
+
+    if _looks_like_of(of):
+        score += 2
+        reasons.append("of_6_digits")
+    if not _present(ov):
+        score += 2
+        reasons.append("ov_empty")
+    elif _looks_like_reference_code(ov):
+        score += 1
+        reasons.append("ov_reference_like")
+    else:
+        score -= 4
+        reasons.append("ov_present")
+
+    if not _present(cliente):
+        score += 2
+        reasons.append("cliente_empty")
+    elif _looks_like_reference_code(cliente):
+        score += 2
+        reasons.append("cliente_reference_like")
+    else:
+        score -= 2
+        reasons.append("cliente_text")
+
+    if not _present(modelo):
+        score += 1
+        reasons.append("modelo_empty")
+    elif _looks_like_reference_code(modelo):
+        score += 2
+        reasons.append("modelo_reference_like")
+
+    if _looks_like_short_qty(qtd):
+        score += 1
+        reasons.append("qtd_short")
+
+    dims = _bobine_dims_present(row)
+    if dims == 0:
+        score += 1
+        reasons.append("no_bobine_dims")
+    elif dims >= 2:
+        score -= 3
+        reasons.append("bobine_dims_present")
+    if _present(row.get("lote")):
+        score -= 3
+        reasons.append("lote_present")
+    return score, reasons
+
+
+def _acabamento_structure_analysis(pass1_raw: dict) -> dict[str, Any]:
     rows = [r for r in (pass1_raw.get("rows") or []) if isinstance(r, dict)]
-    if any(_looks_like_shifted_acabamento_row(row) for row in rows):
+    best_score = 0
+    acabamento_like = 0
+    bobine_like = 0
+    best_reasons: list[str] = []
+    for row in rows:
+        score, reasons = _score_acabamento_like_row(row)
+        if score > best_score:
+            best_score = score
+            best_reasons = reasons
+        if score >= 5 and any(
+            r in reasons
+            for r in ("cliente_reference_like", "modelo_reference_like", "ov_reference_like")
+        ):
+            acabamento_like += 1
+        if _present(row.get("ov")) and _bobine_dims_present(row) >= 2:
+            bobine_like += 1
+    return {
+        "score": best_score,
+        "rows": len(rows),
+        "acabamento_like_rows": acabamento_like,
+        "bobine_like_rows": bobine_like,
+        "reasons": best_reasons,
+    }
+
+
+def _infer_template_from_default_pass1(pass1_raw: dict) -> Any | None:
+    analysis = _acabamento_structure_analysis(pass1_raw)
+    if (
+        analysis["acabamento_like_rows"] > 0
+        and analysis["bobine_like_rows"] == 0
+        and analysis["score"] >= 5
+    ):
         return get_template("acabamento")
     return None
 
@@ -260,11 +368,23 @@ def run_pipeline(image_path: Path) -> dict:
     pass1_raw, m1 = _run_ocr(image_path)
     timing["pass1_ms"] = int((time.perf_counter() - t) * 1000)
     setor = (pass1_raw.get("header", {}) or {}).get("setor_maquina", "")
-    template = detect_template(setor)
+    template, detection_source = detect_template_with_reason(setor)
+    structure = _acabamento_structure_analysis(pass1_raw)
     if template.name == DEFAULT_TEMPLATE.name:
         inferred = _infer_template_from_default_pass1(pass1_raw)
         if inferred is not None:
             template = inferred
+            detection_source = "row_structure"
+
+    template_detection = {
+        "source": detection_source,
+        "raw_setor": str(setor or ""),
+        "structural_score": structure.get("score", 0),
+        "structural_rows": structure.get("rows", 0),
+        "acabamento_like_rows": structure.get("acabamento_like_rows", 0),
+        "bobine_like_rows": structure.get("bobine_like_rows", 0),
+        "structural_reasons": structure.get("reasons", []),
+    }
 
     # R132 — side-detect Pass-1.5 para kanbans 2-lados. Falha do detector
     # é silenciosa (assume frente — caso mais comum); operador pode usar
@@ -300,6 +420,7 @@ def run_pipeline(image_path: Path) -> dict:
         raw_extraction = _merge_pass2_into_pass1(pass1_raw, pass2_raw)
 
     raw_extraction["template_name"] = template.name
+    raw_extraction["template_detection"] = template_detection
 
     t = time.perf_counter()
     current, dq = _build_current_and_dq(raw_extraction, template)
@@ -309,6 +430,7 @@ def run_pipeline(image_path: Path) -> dict:
         "dq": dq,
         "current": current,
         "template_name": template.name,
+        "template_detection": template_detection,
         "timing": timing,
         "metrics": {
             "model": getattr(m1, "model", None),
@@ -335,6 +457,15 @@ def rerun_pipeline_for_template(image_path: Path, template_name: str) -> dict:
                 ocr6.PROMPT, ocr6.PROMPT_HASH = prev
 
     raw_extraction["template_name"] = template.name
+    raw_extraction["template_detection"] = {
+        "source": "forced",
+        "raw_setor": str((raw_extraction.get("header") or {}).get("setor_maquina") or ""),
+        "structural_score": 0,
+        "structural_rows": len(raw_extraction.get("rows") or []),
+        "acabamento_like_rows": 0,
+        "bobine_like_rows": 0,
+        "structural_reasons": [],
+    }
 
     current, dq = _build_current_and_dq(raw_extraction, template)
     return {
@@ -342,6 +473,7 @@ def rerun_pipeline_for_template(image_path: Path, template_name: str) -> dict:
         "dq": dq,
         "current": current,
         "template_name": template.name,
+        "template_detection": raw_extraction.get("template_detection", {}),
     }
 
 

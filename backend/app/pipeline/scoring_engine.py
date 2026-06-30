@@ -517,12 +517,25 @@ _STATUS_LABELS = {
 # R226 — o winner passa a ser a COMBINAÇÃO (agree) e nenhum campo a 100% manda
 # sozinho (exact_id deixa de decidir). Muda decisões → BUMP obrigatório para
 # as folhas antigas regenerarem com a correção.
-# R231 — código de modelo na coluna OF é encaminhado para o campo modelo
-# (realinhamento por conteúdo). Muda decisões nas linhas mal posicionadas → BUMP.
-ENGINE_VERSION = "v25_R231"
+# R232 — proposta por estratégia: mantém substitute-everything, mas cada célula
+# passa a declarar se veio do próprio campo, identidade de linha, realinhamento
+# estrutural ou melhor hipótese fraca. Muda JSON/trace e decisões → BUMP.
+ENGINE_VERSION = "v26_R232"
 
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
+
+_OF_DIGIT_TRANSLATION = str.maketrans({
+    "O": "0",
+    "Q": "0",
+    "D": "0",
+    "I": "1",
+    "L": "1",
+    "S": "5",
+    "B": "8",
+    "Z": "2",
+    "G": "6",
+})
 
 
 # Utilidades de distância ----------------------------------------------------
@@ -1455,6 +1468,205 @@ def _phase_is_full(entry: dict, phase: str) -> bool:
 _REALIGN_MODEL_SIM = 72.0
 
 
+def _of_digit_confusion_candidate(value: object, of_keys: object) -> str:
+    """Return known OF when OCR mixed letters that are visually digit-like."""
+    raw = _identifier_compact(value, pad_of=True)
+    if not raw or raw.isdigit():
+        return ""
+    mapped = raw.translate(_OF_DIGIT_TRANSLATION)
+    if not mapped.isdigit():
+        return ""
+    cand = normalize_of(mapped)
+    return cand if cand in set(of_keys or []) else ""
+
+
+def _classify_of_signal(
+    row: dict, idx: dict | None, template_name: str | None = None
+) -> dict:
+    of_val = str((row or {}).get("of") or "").strip()
+    if not of_val:
+        return {"of_class": "empty"}
+    if template_name == "acabamento":
+        return {"of_class": "template_allows_code"}
+    if not idx:
+        return {"of_class": "unknown_ref"}
+    of_keys = set(idx.get("of_keys") or [])
+    if not _value_has_letters(of_val):
+        of_class = "known_numeric_of" if normalize_of(of_val) in of_keys else "numeric_or_plain"
+        return {
+            "of_class": of_class,
+        }
+    digit_candidate = _of_digit_confusion_candidate(of_val, of_keys)
+    if digit_candidate:
+        return {"of_class": "digit_confusion_of", "of_candidate": digit_candidate}
+    if len(_model_compact(of_val)) >= 4:
+        ft_keys = idx.get("model_ft_keys") or []
+        top = _topk_by_similarity(
+            ft_keys, lambda k: _model_candidate_similarity(of_val, k), 1
+        )
+        top_key, top_sim = top[0] if top else ("", 0.0)
+        if top_sim >= _REALIGN_MODEL_SIM:
+            return {
+                "of_class": "model_in_of",
+                "model_candidate": top_key,
+                "model_sim": round(float(top_sim), 3),
+            }
+    return {"of_class": "ambiguous_of"}
+
+
+def _row_structure_analysis(
+    raw_row: dict,
+    row: dict,
+    idx: dict | None,
+    template_name: str | None = None,
+) -> dict:
+    raw_of = str((raw_row or {}).get("of") or "").strip()
+    raw_ov = str((raw_row or {}).get("ov") or "").strip()
+    raw_pri = str((raw_row or {}).get("pri") or "").strip()
+    raw_modelo = str((raw_row or {}).get("modelo") or "").strip()
+    flags: list[str] = []
+    of_signal = _classify_of_signal(raw_row, idx, template_name)
+
+    if of_signal.get("of_class") in {"digit_confusion_of", "model_in_of", "ambiguous_of"}:
+        flags.append(str(of_signal["of_class"]))
+    if raw_of and str(row.get("of") or "").strip() != raw_of:
+        flags.append("of_normalized_or_moved")
+    if raw_ov and not str(row.get("ov") or "").strip():
+        flags.append("of_from_ov")
+    if raw_pri and str(row.get("of") or "").strip() == normalize_of(raw_pri):
+        flags.append("of_from_pri")
+    if raw_of and str(row.get("modelo") or "").strip() == raw_of and raw_modelo != raw_of:
+        flags.append("model_from_of")
+
+    return {
+        "of_class": of_signal.get("of_class", ""),
+        "of_candidate": of_signal.get("of_candidate", ""),
+        "model_candidate": of_signal.get("model_candidate", ""),
+        "flags": sorted(set(flags)),
+        "structural_realign": any(
+            f in {"digit_confusion_of", "model_in_of", "of_normalized_or_moved",
+                  "of_from_ov", "of_from_pri", "model_from_of"}
+            for f in flags
+        ),
+    }
+
+
+def _winner_reason_sims(winner: dict | None) -> dict[str, float]:
+    sims: dict[str, float] = {}
+    for reason in (winner or {}).get("_score_reasons") or []:
+        field = reason.get("field")
+        if field:
+            sims[str(field)] = float(reason.get("sim") or 0.0)
+    return sims
+
+
+def _proposal_strategy_for_row(
+    winner: dict | None,
+    structure: dict,
+) -> dict:
+    if winner is None:
+        return {
+            "hypothesis_level": "unidentified",
+            "anchor_class": "no_winner",
+            "identity_anchors": [],
+            "dim_anchors": [],
+            "structural_flags": structure.get("flags") or [],
+            "of_class": structure.get("of_class") or "",
+        }
+
+    sims = _winner_reason_sims(winner)
+    identity_anchors = sorted(
+        f for f, sim in sims.items()
+        if f in _IDENTITY_FIELDS and sim >= _AGREE_THRESHOLD
+    )
+    dim_anchors = sorted(
+        f for f, sim in sims.items()
+        if f in _FIELD_SCORE_WEIGHTS and f not in _IDENTITY_FIELDS
+        and sim >= _AGREE_NUM_THRESHOLD
+    )
+    if len(identity_anchors) >= 2:
+        anchor_class = "multi_identity"
+        level = "confirmed"
+    elif structure.get("structural_realign") and (identity_anchors or dim_anchors):
+        anchor_class = "structural_realign"
+        level = "reconstructed"
+    elif dim_anchors and not identity_anchors:
+        anchor_class = "dims_only"
+        level = "weak_hypothesis"
+    elif len(identity_anchors) == 1:
+        anchor_class = f"{identity_anchors[0]}_only"
+        level = "weak_hypothesis"
+    else:
+        anchor_class = "weak_or_no_anchor"
+        level = "weak_hypothesis"
+
+    if winner.get("_rivals") and level != "confirmed":
+        level = "conflict"
+
+    return {
+        "hypothesis_level": level,
+        "anchor_class": anchor_class,
+        "identity_anchors": identity_anchors,
+        "dim_anchors": dim_anchors,
+        "structural_flags": structure.get("flags") or [],
+        "of_class": structure.get("of_class") or "",
+    }
+
+
+def _field_has_own_winner_evidence(
+    field: str, winner: dict | None, row: dict, refs: dict
+) -> bool:
+    if winner is None or field not in _PLAN_FIELDS:
+        return False
+    sim = _entry_field_similarity(field, winner, row, refs)
+    if sim is None:
+        return False
+    threshold = _AGREE_THRESHOLD if field in _IDENTITY_FIELDS else _AGREE_NUM_THRESHOLD
+    return sim >= threshold
+
+
+def _decorate_proposal_cell(
+    field: str,
+    cell: dict,
+    winner: dict | None,
+    row: dict,
+    refs: dict,
+    proposal_strategy: dict,
+) -> dict:
+    out = dict(cell)
+    source = str(out.get("source") or "")
+    ref_source = str(out.get("ref_source") or source)
+    level = str(proposal_strategy.get("hypothesis_level") or "unidentified")
+
+    if source == "sap" or ref_source == "sap":
+        rule, proposal_source, cell_level = "local_reference", "sap", "confirmed"
+    elif source in {"syntax", "lexicon", "ferramenta", "maquinas", "colaboradores"}:
+        rule, proposal_source, cell_level = "local_reference", "syntax", "confirmed"
+    elif source == "plan":
+        if _field_has_own_winner_evidence(field, winner, row, refs):
+            rule, proposal_source = "own_field", "own_field"
+        elif level == "confirmed":
+            rule, proposal_source = "row_identity", "row_identity"
+        elif level == "reconstructed":
+            rule, proposal_source = "structural_realign", "structural_realign"
+        else:
+            rule, proposal_source = "best_hypothesis", "best_hypothesis"
+        cell_level = level
+    elif out.get("proposed") and ref_source == "plan":
+        rule, proposal_source, cell_level = "own_field", "own_field", level
+    elif source == "ocr_raw" and out.get("status") == "confirmed":
+        rule, proposal_source, cell_level = "own_field", "own_field", "confirmed"
+    elif source == "obra_concluida":
+        rule, proposal_source, cell_level = "local_reference", "none", "conflict"
+    else:
+        rule, proposal_source, cell_level = "best_hypothesis", "none", level
+
+    out["alteration_rule"] = rule
+    out["proposal_source"] = proposal_source
+    out["hypothesis_level"] = cell_level
+    return out
+
+
 def _realign_misplaced_of(
     row: dict, idx: dict | None, template_name: str | None = None
 ) -> dict:
@@ -1473,6 +1685,11 @@ def _realign_misplaced_of(
 
     # Etapa 1 (R223) — OF numérica no sítio errado (OV/PRI) -> OF.
     if of_keys:
+        digit_candidate = _of_digit_confusion_candidate(row.get("of"), of_keys)
+        if digit_candidate:
+            row = dict(row)
+            row["of"] = digit_candidate
+            return row
         if normalize_of(row.get("of")) in of_keys:
             return row  # a OF já é válida → nada a fazer
         for src in ("ov", "pri"):
@@ -2320,16 +2537,22 @@ def _score_row(
     """
     cc_fields = set(cross_check_fields)
 
+    raw_row = row
+
     # R223 — realinhar a OF se o OCR a colocou na coluna errada (OV/PRI), antes
     # de gerar candidatos, para o resto da linha usar a OF correta. R231 — e um
     # código de modelo na coluna OF é encaminhado para o campo modelo.
     row = _realign_misplaced_of(row, idx, template_name)
+    structure = _row_structure_analysis(raw_row, row, idx, template_name)
 
     # Candidatos para todos os campos declarados no template como validáveis.
     # OF/OV são apenas campos normais no score global; não filtram o winner.
     candidates_by_field: dict[str, list[dict]] = {}
     for field in _ROW_FIELDS:
         if field in cc_fields:
+            if field == "of" and structure.get("of_class") == "model_in_of":
+                candidates_by_field[field] = []
+                continue
             candidates_by_field[field] = _candidates_for_field(field, row, refs, idx)
 
     score_fields = cc_fields & set(_PLAN_FIELDS)
@@ -2348,6 +2571,7 @@ def _score_row(
     obra_concluida = _all_eligible_phase_full(
         candidates_by_field, row, refs, current_phase, winner
     )
+    proposal_strategy = _proposal_strategy_for_row(winner, structure)
 
     fields_out: dict[str, dict] = {}
     snapped = confirmed = na = very_diff = 0
@@ -2385,6 +2609,9 @@ def _score_row(
             result = _score_no_ref_row_cell(
                 field, ocr_value, row_has_winner=winner is not None
             )
+        result = _decorate_proposal_cell(
+            field, result, winner, row, refs, proposal_strategy
+        )
         fields_out[field] = result
         _tally(result["status"])
 
@@ -2402,6 +2629,9 @@ def _score_row(
             extra_cell = _score_no_ref_row_cell(
                 k, extra_value.strip(), row_has_winner=winner is not None
             )
+        extra_cell = _decorate_proposal_cell(
+            k, extra_cell, winner, row, refs, proposal_strategy
+        )
         fields_out[k] = extra_cell
         _tally(extra_cell["status"])
 
@@ -2414,6 +2644,9 @@ def _score_row(
         for fn, cell in fields_out.items():
             fields_out[fn] = _make_cell(
                 cell.get("value", ""), "very_different", "obra_concluida",
+            )
+            fields_out[fn] = _decorate_proposal_cell(
+                fn, fields_out[fn], winner, row, refs, proposal_strategy
             )
             very_diff += 1
 
@@ -2432,6 +2665,9 @@ def _score_row(
                 "engine_status": cell.get("status"),
                 "source": cell.get("source"),
                 "match_kind": cell.get("match_kind"),
+                "alteration_rule": cell.get("alteration_rule"),
+                "proposal_source": cell.get("proposal_source"),
+                "hypothesis_level": cell.get("hypothesis_level"),
             })
         trace_sink.append({
             "row_index": row_idx,
@@ -2442,6 +2678,7 @@ def _score_row(
             "winner_combined": (winner or {}).get("_combined") if winner else None,
             "winner_mode": (winner or {}).get("_winner_mode") if winner else None,
             "obra_concluida": obra_concluida,
+            "proposal_strategy": proposal_strategy,
             "candidates": (wt or {}).get("candidates", []),
             "decisions": decisions,
         })
@@ -2458,6 +2695,7 @@ def _score_row(
         "winner_mode": (winner or {}).get("_winner_mode") if winner else None,
         "identity_conflict": False,
         "obra_concluida": obra_concluida,
+        "proposal_strategy": proposal_strategy,
     }
     return row_out, snapped, confirmed, na, very_diff, total
 
@@ -2999,7 +3237,10 @@ def _to_legacy_cell(v5_cell: dict, ref_value: str | None = None) -> dict:
     }
     if v5_cell.get("match_kind"):
         out["match_kind"] = v5_cell.get("match_kind")
-    for key in ("winner_mode", "score_reasons", "forced_from_status", "warning", "empty_ok"):
+    for key in (
+        "winner_mode", "score_reasons", "forced_from_status", "warning", "empty_ok",
+        "alteration_rule", "proposal_source", "hypothesis_level",
+    ):
         if key in v5_cell:
             out[key] = v5_cell[key]
     # Ref para tooltip de referência: prioriza `proposed`,
@@ -3009,8 +3250,8 @@ def _to_legacy_cell(v5_cell: dict, ref_value: str | None = None) -> dict:
     elif ref_value is not None:
         out["ref"] = ref_value
     elif (
-        v5_status in ("snapped", "very_different")
-        and v5_cell.get("source") not in (None, "ocr_raw", "obra_concluida", "syntax")
+        v5_cell.get("source") not in (None, "ocr_raw", "obra_concluida", "syntax")
+        and (v5_status in ("snapped", "very_different") or v5_cell.get("source"))
     ):
         out["ref"] = v5_cell.get("value", "")
     return out
@@ -3124,6 +3365,7 @@ def cross_check_sheet(
             "winner_combined": r.get("winner_combined"),
             "winner_score_reasons": r.get("winner_score_reasons"),
             "winner_mode": r.get("winner_mode"),
+            "proposal_strategy": r.get("proposal_strategy") or {},
             "identity_conflict": r.get("identity_conflict", False),
             # R125 — bandeira propagada para UI / auto-overwrites
             "obra_concluida": r.get("obra_concluida", False),

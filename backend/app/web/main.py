@@ -11,6 +11,7 @@ import asyncio
 import datetime as dt
 import json
 import os
+import re
 import secrets
 import shutil
 import sys
@@ -871,6 +872,9 @@ def _run_and_store_cross_check(
             "n_rows": len(result.get("rows", []) or []),
             "timing": timing,
             "ocr": ocr_metrics or {},
+            "template_detection": (
+                (sheet.get("sheet_data") or {}).get("template_detection") or {}
+            ),
             "scoring": _scoring_trace or [],
         })
     return result
@@ -1588,17 +1592,17 @@ async def mobile_qtds_batch(request: Request) -> JSONResponse:
         raise HTTPException(400, "edits must be a list")
 
     # Whitelist: qty + cesta_n (R114) + footer counters
-    allowed_suffixes = (
-        ".qtd",
-        ".cesta_n",  # R114 — Expedição
-        "footer.colunas_produzidas",
-        "footer.horas_trabalhadas",
-    )
+    row_field_re = re.compile(r"^rows\[(\d{1,3})\]\.(qtd|cesta_n)$")
+    allowed_footer = {"footer.colunas_produzidas", "footer.horas_trabalhadas"}
     applied = 0
     affected_sheets: set[int] = set()
     errors: list[dict] = []
+    valid_edits: list[tuple[int, str, str]] = []
 
     for e in edits:
+        if not isinstance(e, dict):
+            errors.append({"edit": e, "error": "bad shape"})
+            continue
         try:
             sid = int(e.get("sheet_id"))
             field_path = str(e.get("field_path") or "").strip()
@@ -1606,15 +1610,70 @@ async def mobile_qtds_batch(request: Request) -> JSONResponse:
         except (TypeError, ValueError):
             errors.append({"edit": e, "error": "bad shape"})
             continue
-        if not any(field_path == s or field_path.endswith(s) for s in allowed_suffixes):
+
+        sheet = db.get_sheet(sid)
+        if sheet is None:
+            errors.append({"edit": e, "error": f"sheet {sid} not found"})
+            continue
+        if sheet.get("status") == "validated":
+            errors.append({"edit": e, "error": f"sheet {sid} is already validated"})
+            continue
+        data = sheet.get("sheet_data") or {}
+        if not data:
+            errors.append({"edit": e, "error": f"sheet {sid} has no extraction yet"})
+            continue
+
+        row_match = row_field_re.match(field_path)
+        if row_match:
+            row_index = int(row_match.group(1))
+            row_field = row_match.group(2)
+            rows = data.get("rows") or []
+            if row_index >= len(rows):
+                errors.append({
+                    "edit": e,
+                    "error": f"row index {row_index} out of range",
+                })
+                continue
+            if row_field == "cesta_n":
+                from app.templates_registry import get_template
+                tpl = get_template(db.get_sheet_template_name(sheet))
+                if "cesta_n" not in tpl.row_fields:
+                    errors.append({
+                        "edit": e,
+                        "error": "cesta_n not allowed for this template",
+                    })
+                    continue
+        elif field_path not in allowed_footer:
             errors.append({"edit": e, "error": f"field {field_path} not allowed on mobile"})
             continue
+        valid_edits.append((sid, field_path, value))
+
+    if errors:
+        return JSONResponse({
+            "ok": False,
+            "applied": 0,
+            "errors": errors,
+            "sheets_updated": [],
+        }, status_code=400)
+
+    for sid, field_path, value in valid_edits:
         try:
             db.apply_edit(sid, field_path, value)
             applied += 1
             affected_sheets.add(sid)
         except ValueError as ex:
-            errors.append({"edit": e, "error": str(ex)})
+            errors.append({
+                "edit": {"sheet_id": sid, "field_path": field_path, "value": value},
+                "error": str(ex),
+            })
+
+    if errors:
+        return JSONResponse({
+            "ok": False,
+            "applied": applied,
+            "errors": errors,
+            "sheets_updated": list(affected_sheets),
+        }, status_code=400)
 
     # Re-cross-check each sheet that got edited
     for sid in affected_sheets:

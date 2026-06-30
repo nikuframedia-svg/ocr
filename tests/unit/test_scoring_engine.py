@@ -3914,6 +3914,70 @@ class TestR218WinnerMixAndAmbiguityGuard:
         assert comp["value"] == "6000"
         assert "auto_apply" not in comp
 
+    def test_proposal_strategy_marks_confirmed_identity(self):
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{
+                "cliente": "MTG BELUX", "ov": "2410002", "of": "262108",
+                "modelo": "OMEGA 1500 H",
+            }],
+        }
+
+        scoring, *_ = shadow_score(sheet_data, None, _REFS)
+        row = scoring["rows"][0]
+        fields = row["fields"]
+
+        assert row["proposal_strategy"]["hypothesis_level"] == "confirmed"
+        assert fields["of"]["alteration_rule"] == "own_field"
+        assert fields["modelo"]["proposal_source"] == "own_field"
+        assert fields["esp"]["alteration_rule"] == "row_identity"
+        assert fields["esp"]["hypothesis_level"] == "confirmed"
+
+    def test_single_anchor_still_substitutes_but_marks_weak_hypothesis(self):
+        refs = {
+            "available": True,
+            "of_to_entries": {
+                "262771": [{
+                    "ov": "260001",
+                    "cliente": "ESTOQUE MTG",
+                    "designacao": "CGC2E45DI",
+                    "esp": 3,
+                }],
+            },
+            "clientes_plan": frozenset({"ESTOQUE MTG"}),
+            "lotes_sap_full": {},
+        }
+        sheet_data = {
+            "template_name": "quinadora_pav4", "header": {}, "footer": {},
+            "rows": [{"modelo": "C6C2E45DI", "qtd": "90"}],
+        }
+
+        scoring, *_ = shadow_score(sheet_data, None, refs)
+        row = scoring["rows"][0]
+        fields = row["fields"]
+
+        assert row["winner_of"] == "262771"
+        assert row["proposal_strategy"]["hypothesis_level"] == "weak_hypothesis"
+        assert fields["of"]["value"] == "262771"
+        assert fields["of"]["alteration_rule"] == "best_hypothesis"
+        assert fields["of"]["hypothesis_level"] == "weak_hypothesis"
+
+    def test_digit_confusion_of_is_structural_realign_and_still_substitutes(self):
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"of": "2621O8"}],
+        }
+
+        scoring, *_ = shadow_score(sheet_data, None, _REFS)
+        row = scoring["rows"][0]
+        of_cell = row["fields"]["of"]
+
+        assert row["winner_of"] == "262108"
+        assert row["proposal_strategy"]["of_class"] == "digit_confusion_of"
+        assert row["proposal_strategy"]["hypothesis_level"] == "reconstructed"
+        assert of_cell["value"] == "262108"
+        assert of_cell["alteration_rule"] == "own_field"
+
 
 class TestContentRealign:
     """R231 — um código de modelo na coluna OF é encaminhado para o campo
