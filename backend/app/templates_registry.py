@@ -30,7 +30,7 @@ merged into "Abertura Portinholas".
 
 Public API:
     TEMPLATES: dict[str, TemplateSpec]   # 11 entries keyed by canonical name
-    detect_template(setor, *, tpl_code=None) -> TemplateSpec
+    detect_template(setor, *, tpl_code=None, cod_maquina=None) -> TemplateSpec
     DEFAULT_TEMPLATE: TemplateSpec       # bobine_formato (used as fallback)
 
 Field semantics:
@@ -568,53 +568,73 @@ def _looks_like_acabamento_setor(norm: str) -> bool:
 def _has_mtg_token(norm: str) -> bool:
     if not norm:
         return False
-    if re.search(r"\bMTG\s*[2345]\b", norm):
+    if re.search(r"\bM[TI]G\s*[2345]\b", norm):
         return True
-    return _compact_setor(norm) in {"MTG2", "MTG3", "MTG4", "MTG5"}
+    return _compact_setor(norm) in {
+        "MTG2", "MTG3", "MTG4", "MTG5",
+        "MIG2", "MIG3", "MIG4", "MIG5",
+    }
+
+
+_ACABAMENTO_COD_MAQUINAS = frozenset({
+    "M001", "M054", "M055", "M061", "M106", "M107",
+})
+
+
+def _normalize_cod_maquina(value: str | None) -> str:
+    compact = re.sub(r"[^A-Z0-9]+", "", str(value or "").upper())
+    m = re.fullmatch(r"M(\d{1,3})", compact)
+    if not m:
+        return compact
+    return "M" + m.group(1).zfill(3)
 
 
 def detect_template_with_reason(
     setor_maquina: str | None,
     *,
     tpl_code: str | None = None,
+    cod_maquina: str | None = None,
 ) -> tuple[TemplateSpec, str]:
     """Return the detected template plus the rule that selected it."""
-    if not setor_maquina:
-        return DEFAULT_TEMPLATE, "default"
-
     norm = _normalize_setor(setor_maquina)
-    if not norm:
-        return DEFAULT_TEMPLATE, "default"
+    selected: tuple[TemplateSpec, str] | None = None
+    if norm:
+        name = _ALIAS_NORM_INDEX.get(norm)
+        if name is not None:
+            selected = (TEMPLATES[name], "exact_alias")
 
-    name = _ALIAS_NORM_INDEX.get(norm)
-    if name is not None:
-        return TEMPLATES[name], "exact_alias"
+        if selected is None:
+            for alias_up, tname in sorted(
+                _ALIAS_NORM_INDEX.items(), key=lambda kv: -len(kv[0])
+            ):
+                if alias_up and alias_up in norm:
+                    selected = (TEMPLATES[tname], "fuzzy_alias")
+                    break
 
-    for alias_up, tname in sorted(
-        _ALIAS_NORM_INDEX.items(), key=lambda kv: -len(kv[0])
-    ):
-        if alias_up and alias_up in norm:
-            return TEMPLATES[tname], "fuzzy_alias"
+    if selected is None and tpl_code and tpl_code.upper() == "TPL102":
+        selected = (TEMPLATES["gasparini"], "fuzzy_alias")
 
-    if tpl_code and tpl_code.upper() == "TPL102":
-        return TEMPLATES["gasparini"], "fuzzy_alias"
+    if selected is None and norm:
+        if "QUINADORA" in norm:
+            selected = (TEMPLATES["quinadora_pav8"], "fuzzy_alias")
+        elif _looks_like_acabamento_setor(norm):
+            selected = (TEMPLATES["acabamento"], "fuzzy_alias")
+        elif _has_mtg_token(norm):
+            selected = (TEMPLATES["acabamento"], "mtg_token")
 
-    if "QUINADORA" in norm:
-        return TEMPLATES["quinadora_pav8"], "fuzzy_alias"
+    if selected is None:
+        cod = _normalize_cod_maquina(cod_maquina)
+        if cod in _ACABAMENTO_COD_MAQUINAS:
+            selected = (TEMPLATES["acabamento"], "cod_maquina")
 
-    if _looks_like_acabamento_setor(norm):
-        return TEMPLATES["acabamento"], "fuzzy_alias"
-
-    if _has_mtg_token(norm):
-        return TEMPLATES["acabamento"], "mtg_token"
-
-    return DEFAULT_TEMPLATE, "default"
+    return selected or (DEFAULT_TEMPLATE, "default")
 
 
 def detect_template(
     setor_maquina: str | None,
     *,
     tpl_code: str | None = None,
+    cod_maquina: str | None = None,
 ) -> TemplateSpec:
     """Match a setor/máquina label to a TemplateSpec.
 
@@ -624,7 +644,8 @@ def detect_template(
        (handles operator notation like "BOBINE-FORMATO M032")
     3. If `tpl_code` is "TPL102" and nothing matched, return GASPARINI
        (3 Gemini machines share the same schema)
-    4. Fallback to `DEFAULT_TEMPLATE` (bobine_formato)
+    4. Use an unambiguous acabamento `cod_maquina` before default fallback
+    5. Fallback to `DEFAULT_TEMPLATE` (bobine_formato)
 
     Backward compat: legacy sheets where setor_maquina is "BOBINE-FORMATO"
     return DEFAULT_TEMPLATE directly via step 1.
@@ -633,12 +654,14 @@ def detect_template(
         setor_maquina: raw operator-written setor string from OCR
         tpl_code: optional hint ("TPL102" or "TPL103") — used only when
             setor lookup fails
+        cod_maquina: optional machine code from the kanban header. Only
+            unambiguous Acabamento codes are used, and only before fallback.
 
     Returns:
         TemplateSpec — never None, fallback to DEFAULT_TEMPLATE
     """
     template, _reason = detect_template_with_reason(
-        setor_maquina, tpl_code=tpl_code,
+        setor_maquina, tpl_code=tpl_code, cod_maquina=cod_maquina,
     )
     return template
 

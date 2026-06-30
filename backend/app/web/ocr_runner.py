@@ -367,8 +367,12 @@ def run_pipeline(image_path: Path) -> dict:
     t = time.perf_counter()
     pass1_raw, m1 = _run_ocr(image_path)
     timing["pass1_ms"] = int((time.perf_counter() - t) * 1000)
-    setor = (pass1_raw.get("header", {}) or {}).get("setor_maquina", "")
-    template, detection_source = detect_template_with_reason(setor)
+    header = pass1_raw.get("header", {}) or {}
+    setor = header.get("setor_maquina", "")
+    cod_maquina = header.get("cod_maquina", "")
+    template, detection_source = detect_template_with_reason(
+        setor, cod_maquina=cod_maquina,
+    )
     structure = _acabamento_structure_analysis(pass1_raw)
     if template.name == DEFAULT_TEMPLATE.name:
         inferred = _infer_template_from_default_pass1(pass1_raw)
@@ -379,6 +383,7 @@ def run_pipeline(image_path: Path) -> dict:
     template_detection = {
         "source": detection_source,
         "raw_setor": str(setor or ""),
+        "raw_cod_maquina": str(cod_maquina or ""),
         "structural_score": structure.get("score", 0),
         "structural_rows": structure.get("rows", 0),
         "acabamento_like_rows": structure.get("acabamento_like_rows", 0),
@@ -460,6 +465,7 @@ def rerun_pipeline_for_template(image_path: Path, template_name: str) -> dict:
     raw_extraction["template_detection"] = {
         "source": "forced",
         "raw_setor": str((raw_extraction.get("header") or {}).get("setor_maquina") or ""),
+        "raw_cod_maquina": str((raw_extraction.get("header") or {}).get("cod_maquina") or ""),
         "structural_score": 0,
         "structural_rows": len(raw_extraction.get("rows") or []),
         "acabamento_like_rows": 0,

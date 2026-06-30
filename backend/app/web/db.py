@@ -846,12 +846,15 @@ def get_sheet_template_name(sheet: dict | int) -> str:
     if tname:
         return str(tname)
 
-    # Legacy sheets — infer from header.setor_maquina
-    setor = ((sd.get("header") or {}).get("setor_maquina") or "").strip()
-    if setor:
+    # Legacy sheets — infer from header.setor_maquina, with cod_maquina as a
+    # last-resort discriminator for unambiguous Acabamento machines.
+    header = sd.get("header") or {}
+    setor = (header.get("setor_maquina") or "").strip()
+    cod_maquina = (header.get("cod_maquina") or "").strip()
+    if setor or cod_maquina:
         # Lazy import to avoid circular dependency
         from app.templates_registry import detect_template
-        return detect_template(setor).name
+        return detect_template(setor, cod_maquina=cod_maquina).name
 
     return "bobine_formato"
 
@@ -949,7 +952,10 @@ def _sync_production_rows(c: sqlite3.Connection, sheet_id: int, sheet_data: dict
     if tname:
         tspec = get_template(tname)
     else:
-        tspec = detect_template((header.get("setor_maquina") or "").strip())
+        tspec = detect_template(
+            (header.get("setor_maquina") or "").strip(),
+            cod_maquina=(header.get("cod_maquina") or "").strip(),
+        )
 
     # R117 — M3: paragens não têm production_rows; sair já.
     if not tspec.has_production_rows:

@@ -3807,8 +3807,14 @@ def _to_3block_csv(filename: str, data: dict) -> str:
     if tname:
         template = get_template(tname)
     else:
-        setor = ((data or {}).get("header") or {}).get("setor_maquina", "")
-        template = detect_template(setor) if setor else DEFAULT_TEMPLATE
+        header = (data or {}).get("header") or {}
+        setor = header.get("setor_maquina", "")
+        cod_maquina = header.get("cod_maquina", "")
+        template = (
+            detect_template(setor, cod_maquina=cod_maquina)
+            if setor or cod_maquina
+            else DEFAULT_TEMPLATE
+        )
 
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=";", lineterminator="\r\n")

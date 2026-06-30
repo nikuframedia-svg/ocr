@@ -115,6 +115,10 @@ def test_acabamento_fuzzy_setor_detection():
     from app.templates_registry import detect_template
 
     assert detect_template("MTG4").name == "acabamento"
+    assert detect_template("ACAB MTG4").name == "acabamento"
+    assert detect_template("MIG4").name == "acabamento"
+    assert detect_template("", cod_maquina="M061").name == "acabamento"
+    assert detect_template("BOBINE-FORMATO", cod_maquina="M061").name == "bobine_formato"
     assert detect_template("ACABAMEMTO MTG4").name == "acabamento"
     assert detect_template("ACABAMENT0 MTG4").name == "acabamento"
     assert detect_template("ACAMENTO MTG4").name == "acabamento"
