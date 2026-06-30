@@ -4039,7 +4039,14 @@ class TestContentRealign:
 
 
 class TestCrossFieldFuzzyReconstruction:
-    def test_maq_fustes_reconstructs_ov_as_of_and_of_as_modelo(self):
+    def test_maq_fustes_fuzzy_ov_to_of_is_rejected_not_reconstructed(self):
+        # R234 — o OCR leu ov=254817, que NAO e uma OF real (a unica candidata
+        # 254856 esta a edit-distance 2) e so a cliente corrobora. Mover ov->of
+        # e fuzzy-arredondar para 254856 era a "troca estupida" que o R233
+        # marcava como `reconstructed` (fiavel). Agora: a reconstrucao e
+        # REJEITADA (ov nao resolve para OF real + sem 2 tokens independentes),
+        # a linha fica `weak_hypothesis` (cliente-only, vermelho/rever) — mas o
+        # valor canonico continua a substituir (substitui sempre, R217).
         refs = {
             "available": True,
             "of_to_entries": {
@@ -4074,13 +4081,11 @@ class TestCrossFieldFuzzyReconstruction:
         strategy = row["proposal_strategy"]
 
         assert row["winner_of"] == "254856"
-        assert strategy["reconstruction_source"] == "cross_field_fuzzy"
-        assert strategy["hypothesis_level"] == "reconstructed"
-        assert strategy["tokens_explained"] >= 2
-        assert "ov:254817 -> of" in strategy["token_assignments"]
-        assert "of:TR5Y -> modelo" in strategy["token_assignments"]
-        assert row["fields"]["of"]["alteration_rule"] == "cross_field_reconstruction"
-        assert row["fields"]["of"]["proposal_source"] == "structural_realign"
+        # reconstrucao fuzzy rejeitada — nao inventa identidade
+        assert strategy["reconstruction_source"] == "none"
+        assert strategy["hypothesis_level"] in ("weak_hypothesis", "conflict")
+        assert strategy["hypothesis_level"] != "reconstructed"
+        # substitui sempre: o valor canonico continua a entrar (a vermelho/rever)
         assert row["fields"]["of"]["value"] == "254856"
 
     def test_cross_field_does_not_move_when_original_field_is_clear(self):
@@ -4119,3 +4124,111 @@ class TestCrossFieldFuzzyReconstruction:
         assert row["winner_of"] == "262108"
         assert row["proposal_strategy"]["reconstruction_source"] == "none"
         assert row["fields"]["of"]["alteration_rule"] == "own_field"
+
+
+class TestIdentityLawR234:
+    """R234 — a lei global: dimensões nunca abrem identidade; uma âncora única
+    (mesmo OF exacta) nunca confirma; multi-identidade confirma e substitui.
+    Em TODOS os casos o valor canónico continua a substituir (substitui sempre).
+    """
+
+    def test_dims_only_does_not_open_identity(self):
+        # Só dimensões batem (apontam unicamente para 262107). Lei 1: não confirma.
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{
+                "comp_mm": "1200", "larg_mm": "250", "lbase": "50",
+                "ltopo": "30", "esp": "2,6",
+            }],
+        }
+        scoring, *_ = shadow_score(sheet_data, None, _REFS)
+        strat = scoring["rows"][0]["proposal_strategy"]
+        assert strat["anchor_class"] == "dims_only"
+        assert strat["hypothesis_level"] == "weak_hypothesis"
+        assert strat["hypothesis_level"] != "confirmed"
+
+    def test_of_only_exact_anchor_does_not_confirm(self):
+        # Uma OF exacta SOZINHA não confirma a linha (lei 2).
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"of": "262107"}],
+        }
+        scoring, *_ = shadow_score(sheet_data, None, _REFS)
+        row = scoring["rows"][0]
+        strat = row["proposal_strategy"]
+        assert row["winner_of"] == "262107"
+        assert strat["anchor_class"] == "of_only"
+        assert strat["hypothesis_level"] == "weak_hypothesis"
+
+    def test_ov_only_single_anchor_does_not_confirm(self):
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"ov": "2410001"}],
+        }
+        scoring, *_ = shadow_score(sheet_data, None, _REFS)
+        strat = scoring["rows"][0]["proposal_strategy"]
+        assert strat["anchor_class"] == "ov_only"
+        assert strat["hypothesis_level"] == "weak_hypothesis"
+
+    def test_cliente_only_single_anchor_does_not_confirm(self):
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"cliente": "ELECNOR"}],
+        }
+        scoring, *_ = shadow_score(sheet_data, None, _REFS)
+        strat = scoring["rows"][0]["proposal_strategy"]
+        assert strat["anchor_class"] == "cliente_only"
+        assert strat["hypothesis_level"] == "weak_hypothesis"
+
+    def test_modelo_only_single_anchor_does_not_confirm(self):
+        # Lei 3: um modelo solto não confirma a linha sozinho.
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"modelo": "OMEGA 1200 H"}],
+        }
+        scoring, *_ = shadow_score(sheet_data, None, _REFS)
+        strat = scoring["rows"][0]["proposal_strategy"]
+        # Os dois OMEGA do _REFS são quase iguais → modelo solto fica rival/ambíguo:
+        # weak OU conflict — em ambos NÃO confirma a linha (lei 3).
+        assert strat["anchor_class"] in ("modelo_only", "weak_or_no_anchor")
+        assert strat["hypothesis_level"] in ("weak_hypothesis", "conflict")
+        assert strat["hypothesis_level"] != "confirmed"
+
+    def test_multi_identity_confirms_and_substitutes(self):
+        # Duas identidades concordam → confirmed; um campo divergente é
+        # corrigido para o canónico (o caso que o motor TEM de acertar).
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"of": "262107", "cliente": "ELECNOR", "comp_mm": "9999"}],
+        }
+        scoring, *_ = shadow_score(sheet_data, None, _REFS)
+        row = scoring["rows"][0]
+        strat = row["proposal_strategy"]
+        assert row["winner_of"] == "262107"
+        assert strat["anchor_class"] == "multi_identity"
+        assert strat["hypothesis_level"] == "confirmed"
+        assert row["fields"]["comp_mm"]["value"] == "1200"  # substitui sempre
+
+    def test_reconstruction_with_exact_of_and_corroboration_is_reconstructed(self):
+        # OCR pôs o nº da OF REAL (262108) na coluna OV, com cliente E modelo a
+        # corroborar. Como 262108 é membro EXACTO de of_keys, o realinhamento
+        # (R223 seguro ou cross_field) move-o para OF e a linha é `reconstructed`
+        # (fiável) — o oposto do caso fuzzy 254817->254856 que é rejeitado.
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{
+                "of": "ZX99QW",            # lixo na coluna OF
+                "ov": "262108",            # nº de OF REAL na coluna errada
+                "cliente": "MTG BELUX",    # corrobora 262108
+                "modelo": "OMEGA 1500 H",  # corrobora 262108 (2º token independente)
+            }],
+        }
+        scoring, *_ = shadow_score(sheet_data, None, _REFS)
+        row = scoring["rows"][0]
+        strat = row["proposal_strategy"]
+        assert row["winner_of"] == "262108"
+        # Movida a OF exacta, ficam 3 identidades a concordar → FIÁVEL
+        # (confirmed se >=2 identidades, ou reconstructed). Nunca weak/conflict.
+        assert strat["hypothesis_level"] in ("confirmed", "reconstructed")
+        assert strat["hypothesis_level"] not in ("weak_hypothesis", "conflict")
+        assert row["fields"]["of"]["value"] == "262108"
