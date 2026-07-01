@@ -730,11 +730,19 @@ function captureApp() {
         });
       }
       try {
-        const res = await fetch('/mobile/qtds-batch', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({edits}),
-        });
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 15_000);
+        let res;
+        try {
+          res = await fetch('/mobile/qtds-batch', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({edits}),
+            signal: ctrl.signal,
+          });
+        } finally {
+          clearTimeout(timer);
+        }
         const body = await res.json().catch(() => ({}));
         if (!res.ok || body.ok === false || (body.errors || []).length > 0) {
           const first = (body.errors || [])[0];
@@ -742,7 +750,10 @@ function captureApp() {
           throw new Error(detail);
         }
       } catch (e) {
-        alert('Erro a gravar quantidades: ' + e.message);
+        const detail = e.name === 'AbortError'
+          ? 'tempo esgotado ao gravar. Tenta novamente; se continuar, avisa o responsável.'
+          : e.message;
+        alert('Erro a gravar quantidades: ' + detail);
         this.savingQtds = false;
         return;
       }

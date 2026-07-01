@@ -17,7 +17,13 @@ def tmp_db(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def isolate(monkeypatch):
-    monkeypatch.setattr(main, "_run_and_store_cross_check", lambda *a, **k: None)
+    queued: list[tuple[int, ...]] = []
+    monkeypatch.setattr(
+        main,
+        "_start_mobile_qtd_cross_check",
+        lambda sheet_ids: queued.append(tuple(sorted(sheet_ids))),
+    )
+    return queued
 
 
 @pytest.fixture()
@@ -25,8 +31,16 @@ def client():
     return TestClient(main.app)
 
 
-def _seed_sheet() -> int:
+def _seed_sheet(
+    *,
+    rows: list[dict] | None = None,
+    footer: dict | None = None,
+) -> int:
     sid = db.insert_sheet("mobile.jpg")
+    if rows is None:
+        rows = [{"of": "262892", "modelo": "CGC2E10D", "qtd": "4"}]
+    if footer is None:
+        footer = {"colunas_produzidas": "4"}
     sheet_data = {
         "template_name": "acabamento",
         "header": {
@@ -37,10 +51,8 @@ def _seed_sheet() -> int:
             "data": "25-05-2026",
             "turno": "M",
         },
-        "rows": [
-            {"of": "262892", "modelo": "CGC2E10D", "qtd": "4"},
-        ],
-        "footer": {"colunas_produzidas": "4"},
+        "rows": rows,
+        "footer": footer,
     }
     db.update_extraction(sid, sheet_data, {}, sheet_data)
     return sid
@@ -70,6 +82,7 @@ def test_mobile_qtd_batch_saves_qtd_without_validating(tmp_db, isolate, client):
     assert sheet["status"] == "extracted"
     assert sheet["sheet_data"]["rows"][0]["qtd"] == "7"
     assert sheet["sheet_data"]["footer"]["colunas_produzidas"] == "7"
+    assert isolate == [(sid,)]
 
 
 def test_mobile_qtd_batch_rejects_invalid_path(tmp_db, isolate, client):
@@ -95,6 +108,7 @@ def test_mobile_qtd_batch_rejects_invalid_path(tmp_db, isolate, client):
     assert body["applied"] == 0
     assert "not allowed" in body["errors"][0]["error"]
     assert db.get_sheet(sid)["sheet_data"]["rows"][0]["qtd"] == "4"
+    assert isolate == []
 
 
 def test_mobile_validate_still_forbidden(tmp_db, isolate, client):
@@ -125,3 +139,100 @@ def test_mobile_qtd_batch_blocks_validated_sheet(tmp_db, isolate, client):
     assert body["ok"] is False
     assert "already validated" in body["errors"][0]["error"]
     assert db.get_sheet(sid)["sheet_data"]["rows"][0]["qtd"] == "4"
+    assert isolate == []
+
+
+def test_mobile_qtd_batch_queues_cross_check_without_running_inline(
+    tmp_db, monkeypatch, client
+):
+    sid = _seed_sheet()
+    queued: list[tuple[int, ...]] = []
+
+    def fail_inline(*args, **kwargs):
+        raise AssertionError("cross-check ran inline")
+
+    monkeypatch.setattr(main, "_run_and_store_cross_check", fail_inline)
+    monkeypatch.setattr(
+        main,
+        "_start_mobile_qtd_cross_check",
+        lambda sheet_ids: queued.append(tuple(sorted(sheet_ids))),
+    )
+
+    response = client.post(
+        "/mobile/qtds-batch",
+        json={
+            "edits": [
+                {"sheet_id": sid, "field_path": "rows[0].qtd", "value": "7"},
+            ],
+        },
+        headers=_MOBILE,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert queued == [(sid,)]
+
+
+def test_mobile_qtd_cross_check_background_uses_mobile_profile(monkeypatch):
+    calls: list[tuple[int, dict]] = []
+    monkeypatch.setattr(
+        main,
+        "_run_and_store_cross_check",
+        lambda sid, **kwargs: calls.append((sid, kwargs)),
+    )
+
+    main._run_mobile_qtd_cross_checks((3, 5))
+
+    assert calls == [
+        (3, {"profile_trigger": "mobile_qtd"}),
+        (5, {"profile_trigger": "mobile_qtd"}),
+    ]
+
+
+def test_mobile_qtd_batch_persists_multiple_rows_and_production_rows(
+    tmp_db, isolate, client
+):
+    sid = _seed_sheet(
+        rows=[
+            {"of": "262892", "modelo": "CGC2E10D", "qtd": "4"},
+            {"of": "262893", "modelo": "CGC2E11D", "qtd": "5"},
+        ],
+        footer={"colunas_produzidas": "9"},
+    )
+
+    response = client.post(
+        "/mobile/qtds-batch",
+        json={
+            "edits": [
+                {"sheet_id": sid, "field_path": "rows[0].qtd", "value": "10"},
+                {"sheet_id": sid, "field_path": "rows[1].qtd", "value": "23"},
+                {
+                    "sheet_id": sid,
+                    "field_path": "footer.colunas_produzidas",
+                    "value": "33",
+                },
+            ],
+        },
+        headers=_MOBILE,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["applied"] == 3
+    assert body["sheets_updated"] == [sid]
+    sheet = db.get_sheet(sid)
+    assert sheet["sheet_data"]["rows"][0]["qtd"] == "10"
+    assert sheet["sheet_data"]["rows"][1]["qtd"] == "23"
+    assert sheet["sheet_data"]["footer"]["colunas_produzidas"] == "33"
+
+    with db.conn() as c:
+        rows = c.execute(
+            "SELECT row_index, qtd, sheet_total_qty FROM production_rows "
+            "WHERE sheet_id = ? ORDER BY row_index",
+            (sid,),
+        ).fetchall()
+    assert [(r["row_index"], r["qtd"], r["sheet_total_qty"]) for r in rows] == [
+        (0, 10, 33),
+        (1, 23, 33),
+    ]
+    assert isolate == [(sid,)]

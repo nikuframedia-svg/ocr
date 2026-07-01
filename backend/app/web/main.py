@@ -1575,13 +1575,33 @@ def mobile_qtds(ids: str) -> JSONResponse:
     return JSONResponse({"sheets": out})
 
 
+def _run_mobile_qtd_cross_checks(sheet_ids: tuple[int, ...]) -> None:
+    for sid in sheet_ids:
+        try:
+            _run_and_store_cross_check(sid, profile_trigger="mobile_qtd")
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+
+
+def _start_mobile_qtd_cross_check(sheet_ids: set[int]) -> None:
+    ordered_ids = tuple(sorted(sheet_ids))
+    if not ordered_ids:
+        return
+    threading.Thread(
+        target=_run_mobile_qtd_cross_checks,
+        args=(ordered_ids,),
+        name="mobile-qtd-cross-check",
+        daemon=True,
+    ).start()
+
+
 @app.post("/mobile/qtds-batch")
 async def mobile_qtds_batch(request: Request) -> JSONResponse:
     """Apply a batch of qty edits at once. Body is JSON:
         { "edits": [ {sheet_id, field_path, value}, ... ] }
 
     Restricts field_path to qty/cesta_n/colunas_produzidas only —
-    anything else is rejected. Re-cross-checks each affected sheet.
+    anything else is rejected. Re-cross-checks affected sheets in background.
 
     R123 — já NÃO valida folhas: o auto-validate mobile do R114/R122 foi
     revertido. Validar é um acto humano deliberado, feito no desktop.
@@ -1594,10 +1614,9 @@ async def mobile_qtds_batch(request: Request) -> JSONResponse:
     # Whitelist: qty + cesta_n (R114) + footer counters
     row_field_re = re.compile(r"^rows\[(\d{1,3})\]\.(qtd|cesta_n)$")
     allowed_footer = {"footer.colunas_produzidas", "footer.horas_trabalhadas"}
-    applied = 0
-    affected_sheets: set[int] = set()
     errors: list[dict] = []
     valid_edits: list[tuple[int, str, str]] = []
+    sheet_cache: dict[int, dict] = {}
 
     for e in edits:
         if not isinstance(e, dict):
@@ -1611,7 +1630,11 @@ async def mobile_qtds_batch(request: Request) -> JSONResponse:
             errors.append({"edit": e, "error": "bad shape"})
             continue
 
-        sheet = db.get_sheet(sid)
+        sheet = sheet_cache.get(sid)
+        if sheet is None:
+            sheet = db.get_sheet(sid)
+            if sheet is not None:
+                sheet_cache[sid] = sheet
         if sheet is None:
             errors.append({"edit": e, "error": f"sheet {sid} not found"})
             continue
@@ -1656,37 +1679,35 @@ async def mobile_qtds_batch(request: Request) -> JSONResponse:
             "sheets_updated": [],
         }, status_code=400)
 
+    edits_by_sheet: dict[int, list[tuple[str, str]]] = {}
     for sid, field_path, value in valid_edits:
+        edits_by_sheet.setdefault(sid, []).append((field_path, value))
+
+    applied = 0
+    affected_sheets: set[int] = set()
+    for sid, sheet_edits in edits_by_sheet.items():
         try:
-            db.apply_edit(sid, field_path, value)
-            applied += 1
+            db.apply_edits_batch(sid, sheet_edits)
+            applied += len(sheet_edits)
             affected_sheets.add(sid)
         except ValueError as ex:
-            errors.append({
-                "edit": {"sheet_id": sid, "field_path": field_path, "value": value},
-                "error": str(ex),
-            })
+            errors.append({"sheet_id": sid, "error": str(ex)})
 
     if errors:
         return JSONResponse({
             "ok": False,
             "applied": applied,
             "errors": errors,
-            "sheets_updated": list(affected_sheets),
+            "sheets_updated": sorted(affected_sheets),
         }, status_code=400)
 
-    # Re-cross-check each sheet that got edited
-    for sid in affected_sheets:
-        try:
-            _run_and_store_cross_check(sid)
-        except Exception:  # noqa: BLE001
-            traceback.print_exc()
+    _start_mobile_qtd_cross_check(affected_sheets)
 
     return JSONResponse({
         "ok": True,
         "applied": applied,
         "errors": errors,
-        "sheets_updated": list(affected_sheets),
+        "sheets_updated": sorted(affected_sheets),
     })
 
 

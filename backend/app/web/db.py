@@ -1309,6 +1309,46 @@ def apply_edit(
     return old, new_value
 
 
+def apply_edits_batch(
+    sheet_id: int,
+    edits: list[tuple[str, str]],
+    source: str = "human",
+) -> list[tuple[str, str, str]]:
+    """Apply multiple edits to one sheet in a single transaction.
+
+    Preserves the same audit semantics as ``apply_edit`` while paying the
+    JSON update + production_rows sync cost once per sheet.
+    """
+    if not edits:
+        return []
+    applied: list[tuple[str, str, str]] = []
+    with conn() as c:
+        row = c.execute(
+            "SELECT sheet_data FROM sheets WHERE id = ?", (sheet_id,)
+        ).fetchone()
+        if row is None or not row["sheet_data"]:
+            raise ValueError(f"Sheet {sheet_id} has no extraction yet")
+        data = json.loads(row["sheet_data"])
+        for field_path, new_value in edits:
+            old = _get_by_path(data, field_path) or ""
+            _set_by_path(data, field_path, new_value)
+            applied.append((field_path, old, new_value))
+        c.execute(
+            "UPDATE sheets SET sheet_data = ? WHERE id = ?",
+            (json.dumps(data, ensure_ascii=False), sheet_id),
+        )
+        c.executemany(
+            "INSERT INTO edits (sheet_id, field_path, old_value, new_value, source) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [
+                (sheet_id, field_path, old, new_value, source)
+                for field_path, old, new_value in applied
+            ],
+        )
+        _sync_production_rows(c, sheet_id, data)
+    return applied
+
+
 def add_row(sheet_id: int, *, source: str = "human") -> int:
     """R136 — append an empty row to ``sheet_data["rows"]``. Returns the new
     row index.
