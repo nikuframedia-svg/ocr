@@ -1061,7 +1061,7 @@ def _build_snapped_map_from_raw(sheet: dict) -> dict[str, bool]:
     return out
 
 
-def _build_cc_maps(sheet_id: int) -> tuple[
+def _build_cc_maps(sheet_id: int, *, allow_regen: bool = True) -> tuple[
     dict[str, str], dict[str, str], dict[str, str], dict[str, bool],
     dict[str, bool], dict[str, bool],
 ]:
@@ -1088,7 +1088,7 @@ def _build_cc_maps(sheet_id: int) -> tuple[
     # (processada antes do R118) ou o JSON é de um motor anterior ao R123:
     # regenera-o agora e relê, para nenhuma folha abrir toda cinza nem com
     # cores de um motor antigo.
-    if not cc or cc.get("engine_version") != ENGINE_VERSION:
+    if allow_regen and (not cc or cc.get("engine_version") != ENGINE_VERSION):
         try:
             rebuild_from_raw = bool(
                 (cc and cc.get("engine_version") != ENGINE_VERSION)
@@ -1172,6 +1172,31 @@ def _build_cc_maps(sheet_id: int) -> tuple[
                 if title:
                     ref_title_map[path] = title
     return status_map, ref_map, ref_title_map, suspended_map, snapped_map, obra_concluida_map
+
+
+def _apply_lightweight_edit_snaps(sheet_id: int, field_path: str, sheet: dict) -> dict:
+    """Apply cheap dependent header updates after a single-cell edit.
+
+    Full cross-check now runs in background, but these snaps update visible
+    header companions immediately (operator name/number and machine code).
+    """
+    if field_path not in ("header.operador", "header.n_operador", "header.setor_maquina"):
+        return sheet
+    try:
+        refs = get_watcher().get_refs()
+    except Exception:  # noqa: BLE001
+        return sheet
+    if not refs.get("available"):
+        return sheet
+    protected = _human_edited_paths(sheet_id)
+    n_applied = 0
+    if field_path in ("header.operador", "header.n_operador"):
+        n_applied += _apply_operador_snap(sheet_id, sheet, refs, protected)
+    if field_path == "header.setor_maquina":
+        n_applied += _apply_codmaq_fill(sheet_id, sheet, refs, protected)
+    if n_applied:
+        return db.get_sheet(sheet_id) or sheet
+    return sheet
 
 
 def _maybe_record_operador_alias(sheet_id: int) -> None:
@@ -1284,16 +1309,9 @@ async def sheet_edit(
             _maybe_record_operador_alias(sheet_id)
         except Exception as e:  # noqa: BLE001
             print(f"[alias] sheet {sheet_id}: {e}", file=sys.stderr)
-    # Re-run cross-check after edit (auto-fill / status may shift)
-    try:
-        _run_and_store_cross_check(sheet_id)
-    except Exception as cc_err:  # noqa: BLE001
-        print(f"[cross-check] sheet {sheet_id} edit: {cc_err}", file=sys.stderr)
-    # R123 — re-ler a folha DEPOIS do cross-check: _apply_auto_overwrites /
-    # _apply_operador_snap / _apply_codmaq_fill podem ter reescrito sheet_data
-    # com o valor canónico. Devolver `new` (valor submetido) fazia a célula
-    # mostrar uma coisa e a DB guardar outra → o valor "mudava sozinho" no
-    # próximo reload. Devolvemos o valor REAL persistido.
+    sheet = _apply_lightweight_edit_snaps(sheet_id, field_path, sheet)
+    # R123 — devolver o valor REAL persistido. O cross-check pesado corre em
+    # background, mas snaps leves de cabeçalho podem já ter ajustado sheet_data.
     sheet = db.get_sheet(sheet_id) or sheet
     try:
         real_value = db._get_by_path(sheet.get("sheet_data") or {}, field_path)
@@ -1304,7 +1322,7 @@ async def sheet_edit(
     cells_by_path = (sheet.get("dq_audit") or {}).get("cells", {})
     (cc_status_by_path, cc_ref_by_path, cc_ref_title_by_path,
      cc_suspended_by_path, cc_snapped_by_path,
-     cc_obra_concluida_by_path) = _build_cc_maps(sheet_id)
+     cc_obra_concluida_by_path) = _build_cc_maps(sheet_id, allow_regen=False)
 
     def _render_cell(fp: str, val: object, *, edited: bool, oob: bool) -> str:
         """Render a single _cell.html fragment. ``oob=True`` adds
@@ -1343,6 +1361,7 @@ async def sheet_edit(
         if str(header_before.get(f) or "") != str(header_after.get(f) or ""):
             parts.append(_render_cell(fp, header_after.get(f, ""), edited=True, oob=True))
 
+    _start_sheet_cross_check({sheet_id}, profile_trigger="sheet_edit")
     return HTMLResponse("".join(parts))
 
 
@@ -1492,11 +1511,8 @@ async def sheet_validate(
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         print(f"[factory deposit] sheet {sheet_id}: {e}", file=sys.stderr)
-    # Update cross-check status (sheet just got validated)
-    try:
-        _run_and_store_cross_check(sheet_id)
-    except Exception as cc_err:  # noqa: BLE001
-        print(f"[cross-check] sheet {sheet_id} validate: {cc_err}", file=sys.stderr)
+    # Update cross-check status in background (sheet just got validated).
+    _start_sheet_cross_check({sheet_id}, profile_trigger="sheet_validate")
     # Learning loop — every 50 validated sheets, mine corrections + gold
     # into learnings. Runs in a background thread; failure is silent.
     try:
@@ -1575,22 +1591,39 @@ def mobile_qtds(ids: str) -> JSONResponse:
     return JSONResponse({"sheets": out})
 
 
-def _run_mobile_qtd_cross_checks(sheet_ids: tuple[int, ...]) -> None:
+def _run_sheet_cross_checks(
+    sheet_ids: tuple[int, ...],
+    *,
+    profile_trigger: str,
+    rebuild_from_raw: bool = False,
+) -> None:
     for sid in sheet_ids:
         try:
-            _run_and_store_cross_check(sid, profile_trigger="mobile_qtd")
+            kwargs = {"profile_trigger": profile_trigger}
+            if rebuild_from_raw:
+                kwargs["rebuild_from_raw"] = True
+            _run_and_store_cross_check(sid, **kwargs)
         except Exception:  # noqa: BLE001
             traceback.print_exc()
 
 
-def _start_mobile_qtd_cross_check(sheet_ids: set[int]) -> None:
-    ordered_ids = tuple(sorted(sheet_ids))
+def _start_sheet_cross_check(
+    sheet_ids: set[int] | tuple[int, ...] | list[int],
+    *,
+    profile_trigger: str,
+    rebuild_from_raw: bool = False,
+) -> None:
+    ordered_ids = tuple(sorted({int(sid) for sid in sheet_ids}))
     if not ordered_ids:
         return
     threading.Thread(
-        target=_run_mobile_qtd_cross_checks,
+        target=_run_sheet_cross_checks,
         args=(ordered_ids,),
-        name="mobile-qtd-cross-check",
+        kwargs={
+            "profile_trigger": profile_trigger,
+            "rebuild_from_raw": rebuild_from_raw,
+        },
+        name=f"{profile_trigger}-cross-check",
         daemon=True,
     ).start()
 
@@ -1701,7 +1734,7 @@ async def mobile_qtds_batch(request: Request) -> JSONResponse:
             "sheets_updated": sorted(affected_sheets),
         }, status_code=400)
 
-    _start_mobile_qtd_cross_check(affected_sheets)
+    _start_sheet_cross_check(affected_sheets, profile_trigger="mobile_qtd")
 
     return JSONResponse({
         "ok": True,
@@ -1875,7 +1908,7 @@ def sheet_status_fragment(sheet_id: int) -> Response:
 @app.post("/admin/reload-refs")
 def admin_reload_refs() -> JSONResponse:
     """Force-reload SAP + plan_colunas Excel files (skip mtime check).
-    Optionally re-cross-check ALL sheets in DB so updated refs propagate."""
+    Re-cross-checks sheets in background so the request stays quick."""
     refs = get_watcher().force_reload()
     # R115 — refs novas invalidam o agregado /obras
     try:
@@ -1883,21 +1916,14 @@ def admin_reload_refs() -> JSONResponse:
         obras_inv()
     except Exception:  # noqa: BLE001
         pass
-    revalidated = 0
-    for s in db.list_sheets(limit=10000):
-        if s["status"] in ("error", "pending"):
-            continue
-        try:
-            _run_and_store_cross_check(s["id"], rebuild_from_raw=True)
-            revalidated += 1
-        except Exception:  # noqa: BLE001
-            traceback.print_exc()
+    revalidation_started = _start_revalidation()
     return JSONResponse({
         "ok": True,
         "refs_loaded_at": refs.get("loaded_at"),
         "n_lotes": refs.get("stats", {}).get("n_lotes", 0),
         "n_ofs": refs.get("stats", {}).get("n_ofs", 0),
-        "sheets_revalidated": revalidated,
+        "sheets_revalidated": 0,
+        "revalidation_started": revalidation_started,
     })
 
 
@@ -2629,24 +2655,29 @@ async def sheet_apply_of_entry(sheet_id: int, request: Request) -> JSONResponse:
         "ltopo": e.get("ltopo"),
         "esp": e.get("esp"),
     }
-    applied = []
+    edits_to_apply = []
     skipped = []
     for field, value in fields_to_set.items():
         if value is None or value == "":
             skipped.append(field)
             continue
         path = f"rows[{row_index}].{field}"
+        edits_to_apply.append((field, path, str(value)))
+    applied = []
+    if edits_to_apply:
         try:
-            db.apply_edit(sheet_id, path, str(value), source="system")
-            applied.append({"field": field, "value": str(value)})
+            batch = [(path, value) for _field, path, value in edits_to_apply]
+            db.apply_edits_batch(sheet_id, batch, source="system")
+            applied = [
+                {"field": field, "value": value}
+                for field, _path, value in edits_to_apply
+            ]
         except ValueError:
-            skipped.append(field)
+            skipped.extend(field for field, _path, _value in edits_to_apply)
         except Exception:  # noqa: BLE001
-            skipped.append(field)
-    try:
-        _run_and_store_cross_check(sheet_id)
-    except Exception:  # noqa: BLE001
-        pass
+            skipped.extend(field for field, _path, _value in edits_to_apply)
+    if applied:
+        _start_sheet_cross_check({sheet_id}, profile_trigger="apply_of_entry")
     # R113 — após aplicar, refresca a cache de consumption (a próxima
     # chamada a /of-lookup vai recomputar baseado neste novo estado).
     try:
@@ -2682,10 +2713,7 @@ async def sheet_add_row(sheet_id: int, request: Request) -> JSONResponse:
         new_idx = db.add_row(sheet_id)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    try:
-        _run_and_store_cross_check(sheet_id)
-    except Exception as cc_err:  # noqa: BLE001
-        print(f"[cross-check] sheet {sheet_id} add-row: {cc_err}", file=sys.stderr)
+    _start_sheet_cross_check({sheet_id}, profile_trigger="add_row")
     return JSONResponse({"ok": True, "row_index": new_idx})
 
 
@@ -2717,10 +2745,7 @@ async def sheet_remove_row(sheet_id: int, request: Request) -> JSONResponse:
         db.delete_row(sheet_id, row_index)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    try:
-        _run_and_store_cross_check(sheet_id)
-    except Exception as cc_err:  # noqa: BLE001
-        print(f"[cross-check] sheet {sheet_id} remove-row: {cc_err}", file=sys.stderr)
+    _start_sheet_cross_check({sheet_id}, profile_trigger="remove_row")
     # R113 — remover uma linha muda a qtd produzida → invalida a cache.
     try:
         from app.pipeline.of_consumption import invalidate_cache

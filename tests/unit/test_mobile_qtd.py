@@ -20,8 +20,8 @@ def isolate(monkeypatch):
     queued: list[tuple[int, ...]] = []
     monkeypatch.setattr(
         main,
-        "_start_mobile_qtd_cross_check",
-        lambda sheet_ids: queued.append(tuple(sorted(sheet_ids))),
+        "_start_sheet_cross_check",
+        lambda sheet_ids, **kwargs: queued.append(tuple(sorted(sheet_ids))),
     )
     return queued
 
@@ -154,8 +154,8 @@ def test_mobile_qtd_batch_queues_cross_check_without_running_inline(
     monkeypatch.setattr(main, "_run_and_store_cross_check", fail_inline)
     monkeypatch.setattr(
         main,
-        "_start_mobile_qtd_cross_check",
-        lambda sheet_ids: queued.append(tuple(sorted(sheet_ids))),
+        "_start_sheet_cross_check",
+        lambda sheet_ids, **kwargs: queued.append(tuple(sorted(sheet_ids))),
     )
 
     response = client.post(
@@ -181,7 +181,7 @@ def test_mobile_qtd_cross_check_background_uses_mobile_profile(monkeypatch):
         lambda sid, **kwargs: calls.append((sid, kwargs)),
     )
 
-    main._run_mobile_qtd_cross_checks((3, 5))
+    main._run_sheet_cross_checks((3, 5), profile_trigger="mobile_qtd")
 
     assert calls == [
         (3, {"profile_trigger": "mobile_qtd"}),

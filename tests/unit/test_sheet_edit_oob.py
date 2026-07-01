@@ -66,10 +66,11 @@ def isolate(monkeypatch):
     monkeypatch.setattr(main, "cross_check_sheet", lambda *a, **k: {})
     monkeypatch.setattr(main, "store_cross_check", lambda **k: None)
     monkeypatch.setattr(main, "_spawn_shadow_scoring", lambda *a, **k: None)
-    monkeypatch.setattr(main, "_build_cc_maps", lambda sid: ({}, {}, {}, {}, {}, {}))
+    monkeypatch.setattr(main, "_build_cc_maps", lambda *a, **k: ({}, {}, {}, {}, {}, {}))
     monkeypatch.setattr(main, "_apply_auto_overwrites", lambda *a, **k: 0)
     monkeypatch.setattr(main, "_apply_codmaq_fill", lambda *a, **k: 0)
     monkeypatch.setattr(main, "_maybe_record_operador_alias", lambda sid: None)
+    monkeypatch.setattr(main, "_start_sheet_cross_check", lambda *a, **k: None)
     monkeypatch.setattr(main, "_deposit_csv_to_factory", lambda sid: None)
     # Não tocar em ficheiros tracked (data/events.jsonl, kernel_state.json).
     monkeypatch.setattr(main.kernel, "emit_event", lambda *a, **k: None)
@@ -148,6 +149,31 @@ class TestDateCellStoresPt:
         assert r.status_code == 200
         assert db.get_sheet(sid)["sheet_data"]["header"]["data"] == "29-05-2026"
 
+    def test_edit_queues_cross_check_without_running_inline(
+        self, tmp_db, isolate, monkeypatch, client
+    ):
+        sid = _seed(operador="AUGUSTO MONTEIRO", n_operador="95", data="20-05-2026")
+        queued: list[tuple[tuple[int, ...], dict]] = []
+
+        def fail_inline(*args, **kwargs):
+            raise AssertionError("cross-check ran inline")
+
+        monkeypatch.setattr(main, "_run_and_store_cross_check", fail_inline)
+        monkeypatch.setattr(
+            main,
+            "_start_sheet_cross_check",
+            lambda sheet_ids, **kwargs: queued.append((tuple(sorted(sheet_ids)), kwargs)),
+        )
+
+        r = client.post(
+            f"/sheet/{sid}/edit",
+            data={"field_path": "header.data", "new_value": "2026-05-29"},
+            headers=_DESKTOP,
+        )
+
+        assert r.status_code == 200
+        assert queued == [((sid,), {"profile_trigger": "sheet_edit"})]
+
 
 class TestValidateReadsHeader:
     """Point #1 — validate lê do cabeçalho; rejeita cabeçalho inválido."""
@@ -190,3 +216,27 @@ class TestValidateReadsHeader:
         assert sheet["operador"] == "AUGUSTO MONTEIRO"  # do form (KPI)
         assert sheet["sheet_data"]["header"]["data"] == "29-05-2026"
         assert sheet["sheet_data"]["header"]["n_operador"] == "95"
+
+
+def test_admin_reload_refs_uses_background_revalidation(tmp_db, monkeypatch, client):
+    class _Watcher:
+        def force_reload(self):
+            return {
+                "loaded_at": "test",
+                "stats": {"n_lotes": 2, "n_ofs": 3},
+            }
+
+    def fail_inline(*args, **kwargs):
+        raise AssertionError("cross-check ran inline")
+
+    monkeypatch.setattr(main, "get_watcher", lambda: _Watcher())
+    monkeypatch.setattr(main, "_run_and_store_cross_check", fail_inline)
+    monkeypatch.setattr(main, "_start_revalidation", lambda: True)
+
+    r = client.post("/admin/reload-refs", headers=_DESKTOP)
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["sheets_revalidated"] == 0
+    assert body["revalidation_started"] is True

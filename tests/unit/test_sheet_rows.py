@@ -45,6 +45,7 @@ def isolate(monkeypatch):
     monkeypatch.setattr(main, "_apply_auto_overwrites", lambda *a, **k: 0)
     monkeypatch.setattr(main, "_apply_operador_snap", lambda *a, **k: 0)
     monkeypatch.setattr(main, "_apply_codmaq_fill", lambda *a, **k: 0)
+    monkeypatch.setattr(main, "_start_sheet_cross_check", lambda *a, **k: None)
     return refs
 
 
@@ -141,6 +142,99 @@ class TestEndpoints:
         assert r.json()["ok"] is True
         rows = db.get_sheet(sid)["sheet_data"]["rows"]
         assert [x["of"] for x in rows] == ["222"]
+
+    def test_add_row_queues_cross_check_without_running_inline(
+        self, tmp_db, isolate, monkeypatch, client
+    ):
+        sid = _seed([{"of": "111"}])
+        queued: list[tuple[tuple[int, ...], dict]] = []
+
+        def fail_inline(*args, **kwargs):
+            raise AssertionError("cross-check ran inline")
+
+        monkeypatch.setattr(main, "_run_and_store_cross_check", fail_inline)
+        monkeypatch.setattr(
+            main,
+            "_start_sheet_cross_check",
+            lambda sheet_ids, **kwargs: queued.append((tuple(sorted(sheet_ids)), kwargs)),
+        )
+
+        r = client.post(f"/sheet/{sid}/add-row", headers=_DESKTOP)
+
+        assert r.status_code == 200
+        assert queued == [((sid,), {"profile_trigger": "add_row"})]
+
+    def test_remove_row_queues_cross_check_without_running_inline(
+        self, tmp_db, isolate, monkeypatch, client
+    ):
+        sid = _seed([{"of": "111"}, {"of": "222"}])
+        queued: list[tuple[tuple[int, ...], dict]] = []
+
+        def fail_inline(*args, **kwargs):
+            raise AssertionError("cross-check ran inline")
+
+        monkeypatch.setattr(main, "_run_and_store_cross_check", fail_inline)
+        monkeypatch.setattr(
+            main,
+            "_start_sheet_cross_check",
+            lambda sheet_ids, **kwargs: queued.append((tuple(sorted(sheet_ids)), kwargs)),
+        )
+
+        r = client.post(f"/sheet/{sid}/remove-row", json={"row_index": 0}, headers=_DESKTOP)
+
+        assert r.status_code == 200
+        assert queued == [((sid,), {"profile_trigger": "remove_row"})]
+
+    def test_apply_of_entry_batches_and_queues_cross_check_without_running_inline(
+        self, tmp_db, monkeypatch, client
+    ):
+        sid = _seed([{"of": "", "cliente": "", "modelo": ""}])
+        queued: list[tuple[tuple[int, ...], dict]] = []
+        refs = {
+            "of_to_entries": {
+                "262892": [
+                    {
+                        "cliente": "MTG",
+                        "ov": "450001",
+                        "designacao": "CGC2E10D",
+                        "comp": 5000,
+                        "lbase": 120,
+                        "ltopo": 100,
+                        "esp": 3,
+                    }
+                ]
+            }
+        }
+
+        class _Watcher:
+            def get_refs(self):
+                return refs
+
+        def fail_inline(*args, **kwargs):
+            raise AssertionError("cross-check ran inline")
+
+        monkeypatch.setattr(main, "get_watcher", lambda: _Watcher())
+        monkeypatch.setattr(main, "_run_and_store_cross_check", fail_inline)
+        monkeypatch.setattr(
+            main,
+            "_start_sheet_cross_check",
+            lambda sheet_ids, **kwargs: queued.append((tuple(sorted(sheet_ids)), kwargs)),
+        )
+
+        r = client.post(
+            f"/sheet/{sid}/apply-of-entry",
+            json={"row_index": 0, "of": "262892", "entry_idx": 0},
+            headers=_DESKTOP,
+        )
+
+        assert r.status_code == 200
+        assert r.json()["n_applied"] == 8
+        row = db.get_sheet(sid)["sheet_data"]["rows"][0]
+        assert row["of"] == "262892"
+        assert row["cliente"] == "MTG"
+        assert row["modelo"] == "CGC2E10D"
+        assert row["comp_mm"] == "5000"
+        assert queued == [((sid,), {"profile_trigger": "apply_of_entry"})]
 
     def test_remove_row_out_of_range_400(self, tmp_db, isolate, client):
         sid = _seed([{"of": "111"}])
