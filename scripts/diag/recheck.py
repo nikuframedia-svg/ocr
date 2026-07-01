@@ -68,19 +68,6 @@ def main():
         print("  Linha " + str(i + 1) + "  [" + str(rout.get("winner_mode")) + "]")
         print("    OCR leu:        " + ocr)
         print("    CROSS escolheu: OF " + str(win) + "  ->  " + of_info(win))
-        strategy = rout.get("proposal_strategy") or {}
-        if strategy:
-            assignments = ", ".join(strategy.get("token_assignments") or [])
-            parts = [
-                "nivel=" + str(strategy.get("hypothesis_level") or "-"),
-                "classe=" + str(strategy.get("anchor_class") or "-"),
-                "recon=" + str(strategy.get("reconstruction_source") or "-"),
-            ]
-            if strategy.get("score_margin") not in (None, "", 0, 0.0):
-                parts.append("margem=" + str(strategy.get("score_margin")))
-            if assignments:
-                parts.append("tokens=" + assignments)
-            print("    Estrategia:     " + " | ".join(parts))
     return 0
 
 

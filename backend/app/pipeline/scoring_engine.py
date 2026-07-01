@@ -517,25 +517,12 @@ _STATUS_LABELS = {
 # R226 — o winner passa a ser a COMBINAÇÃO (agree) e nenhum campo a 100% manda
 # sozinho (exact_id deixa de decidir). Muda decisões → BUMP obrigatório para
 # as folhas antigas regenerarem com a correção.
-# R233 — investigação cross-field fuzzy: antes do winner, compara a hipótese
-# original com hipóteses em que tokens OCR suspeitos mudam de campo (ex. OV→OF,
-# OF→modelo), aceitando só quando a coerência global da linha melhora.
-ENGINE_VERSION = "v26_R233"
+# R231 — código de modelo na coluna OF é encaminhado para o campo modelo
+# (realinhamento por conteúdo). Muda decisões nas linhas mal posicionadas → BUMP.
+ENGINE_VERSION = "v25_R231"
 
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
-
-_OF_DIGIT_TRANSLATION = str.maketrans({
-    "O": "0",
-    "Q": "0",
-    "D": "0",
-    "I": "1",
-    "L": "1",
-    "S": "5",
-    "B": "8",
-    "Z": "2",
-    "G": "6",
-})
 
 
 # Utilidades de distância ----------------------------------------------------
@@ -862,13 +849,12 @@ def _entry_global_score(
     score_fields: set[str] | frozenset[str] | None = None,
     cache: dict | None = None,
     collect_reasons: bool = True,
-) -> tuple[float, int, list[dict], float, int, int, int, int]:
+) -> tuple[float, int, list[dict], float, int, int, int]:
     total = 0.0
     raw_total = 0.0
     exact = 0
     agree = 0
     agree_id = 0  # R223 — campos de IDENTIDADE a concordar (of/ov/cliente/modelo)
-    dim_agree = 0  # R234 — campos de DIMENSÃO a concordar (corroboram, não abrem)
     exact_id = 0  # R223 — of/ov batem EXATO (identificador único = decisivo)
     reasons: list[dict] = []
     fields = score_fields if score_fields is not None else _PLAN_FIELDS
@@ -887,8 +873,6 @@ def _entry_global_score(
             agree += 1
             if field in _IDENTITY_FIELDS:
                 agree_id += 1
-            else:
-                dim_agree += 1
         weight = _FIELD_SCORE_WEIGHTS.get(field, 0.30)
         contribution = clamped * weight
         if sim <= 0.10:
@@ -909,7 +893,7 @@ def _entry_global_score(
                 "weight": weight,
                 "points": round(float(contribution), 3),
             })
-    return total, exact, reasons, raw_total, agree, exact_id, agree_id, dim_agree
+    return total, exact, reasons, raw_total, agree, exact_id, agree_id
 
 
 def _row_has_any_value(row: dict) -> bool:
@@ -1314,7 +1298,7 @@ def _best_scored_entry(
         if "_of" not in e:
             e = dict(e)
             e["_of"] = k[0]
-        global_score, exact_score, reasons, raw_score, agree, exact_id, agree_id, dim_agree = (
+        global_score, exact_score, reasons, raw_score, agree, exact_id, agree_id = (
             _entry_global_score(e, row, refs, score_fields, cache=_sim_cache,
                                 collect_reasons=_want_reasons)
         )
@@ -1322,17 +1306,15 @@ def _best_scored_entry(
         # R138 — remaining consciente do setor (mesma medida do wizard).
         rem = _remaining(e, phase=current_phase)
         rem_sort = 9e9 if rem == float("inf") else rem
-        # R234 — LEI identity-first. Ordena por: concordância de IDENTIDADE
-        # (agree_id) PRIMEIRO → nº total de campos (agree, dims corroboram) →
-        # mais dimensões a corroborar (dim_agree, desempate) → soma graduada
-        # (raw) → identidade EXATA só como desempate FINAL → setor com espaço →
-        # remaining. Garante que dimensões NUNCA abrem identidade: um candidato
-        # só-dims (agree_id=0) nunca supera um com identidade (>=1). (R226 punha
-        # `agree` à frente — dims contavam como identidade; ver R234.)
+        # R226 — ordena por: nº de campos a concordar (COMBINAÇÃO holística)
+        # primeiro → maior soma graduada (raw) → identidade EXATA só como
+        # DESEMPATE final (já não decide sozinha) → setor com espaço → menor
+        # remaining. (R223 punha o exact_id à frente e uma OF exata mandava
+        # sozinha; ver R226 em _entry_global_score.)
         eligible.append((
-            -agree_id, -agree, -dim_agree, -raw_score, -exact_id, phase_full, rem_sort,
+            -agree, -raw_score, -exact_id, phase_full, rem_sort,
             order, e, reasons, raw_score, global_score, exact_score, agree,
-            exact_id, agree_id, dim_agree,
+            exact_id, agree_id,
         ))
 
     if not eligible:
@@ -1348,15 +1330,13 @@ def _best_scored_entry(
         trace["pool_size"] = len(eligible)
         trace["candidates"] = [
             {
-                "of": (cand[8] or {}).get("_of"),
-                "agree": int(cand[13]),
-                "agree_id": int(cand[15]),
-                "dim_agree": int(cand[16]),
-                "exact": int(cand[12]),
-                "exact_id": int(cand[14]),
-                "raw": round(float(cand[10]), 3),
-                "weighted": round(float(cand[11]), 3),
-                "combined": round(float(int(cand[13]) + float(cand[10])), 3),
+                "of": (cand[6] or {}).get("_of"),
+                "agree": int(cand[11]),
+                "exact": int(cand[10]),
+                "exact_id": int(cand[12]),
+                "raw": round(float(cand[8]), 3),
+                "weighted": round(float(cand[9]), 3),
+                "combined": round(float(int(cand[11]) + float(cand[8])), 3),
                 "field_sims": [
                     {
                         "field": r.get("field"),
@@ -1364,35 +1344,30 @@ def _best_scored_entry(
                         "weight": r.get("weight"),
                         "points": round(float(r.get("points") or 0.0), 3),
                     }
-                    for r in (cand[9] or [])
+                    for r in (cand[7] or [])
                 ],
             }
             for cand in eligible[:_TRACE_TOP_K]
         ]
     best = eligible[0]
-    best_agree_id = -best[0]
-    best_agree = -best[1]
-    best_dim_agree = -best[2]
-    best_raw = -best[3]
-    best_exact_id = -best[4]
-    best_rem_sort = best[6]
+    best_agree = -best[0]
+    best_raw = -best[1]
+    best_exact_id = -best[2]
+    best_rem_sort = best[4]
     if best_agree < min_agree:
         return None
-    winner = dict(best[8])
-    winner["_score"] = round(float(best[10]), 3)
+    winner = dict(best[6])
+    winner["_score"] = round(float(best[8]), 3)
     winner["_agree"] = int(best_agree)
-    winner["_agree_id"] = int(best_agree_id)   # R234 — concordância de identidade
-    winner["_dim_agree"] = int(best_dim_agree)  # R234 — concordância de dimensão
-    winner["_weighted_score"] = round(float(best[11]), 3)
-    winner["_exact_score"] = int(best[12])
-    winner["_exact_id"] = int(best_exact_id)   # R234 — of/ov exato (não promove sozinho)
+    winner["_weighted_score"] = round(float(best[9]), 3)
+    winner["_exact_score"] = int(best[10])
     winner["_combined"] = round(float(best_agree + best_raw), 3)
     # R225 — se os reasons não foram colhidos (caso de produção), recalcula só
     # os do vencedor (idêntico ao que seria colhido; usa o cache quente).
-    winner_reasons = best[9]
+    winner_reasons = best[7]
     if not _want_reasons:
         winner_reasons = _entry_global_score(
-            best[8], row, refs, score_fields, cache=_sim_cache, collect_reasons=True,
+            best[6], row, refs, score_fields, cache=_sim_cache, collect_reasons=True,
         )[2]
     winner["_score_reasons"] = sorted(
         winner_reasons,
@@ -1408,17 +1383,13 @@ def _best_scored_entry(
     # marca tudo vermelho por falsa ambiguidade.
     rivals: list[dict] = []
     for cand in eligible[1:]:
-        cand_agree_id = -cand[0]
-        cand_agree = -cand[1]
-        cand_raw = -cand[3]
-        cand_exact_id = -cand[4]
-        # R234 — só é rival quem tem a MESMA classe de identidade (agree_id):
-        # um candidato 1-identidade não é rival de um 2-identidade → conflict fiável.
-        if (cand_agree_id != best_agree_id or cand_exact_id != best_exact_id
-                or cand_agree != best_agree
+        cand_agree = -cand[0]
+        cand_raw = -cand[1]
+        cand_exact_id = -cand[2]
+        if (cand_exact_id != best_exact_id or cand_agree != best_agree
                 or (best_raw - cand_raw) > _WINNER_MARGIN):
-            break  # eligible ordenado: identidade/agree caiu, raw longe, ou exato≠fuzzy
-        rivals.append(cand[8])
+            break  # eligible ordenado: agree caiu, raw longe, ou exato≠fuzzy
+        rivals.append(cand[6])
     if rivals:
         winner["_rivals"] = rivals
     return winner
@@ -1482,304 +1453,6 @@ def _phase_is_full(entry: dict, phase: str) -> bool:
 # 72 inclui a família CD03P503->CD03P10B (~75) e exclui leituras garbled
 # (CBRBE6D ~67, '(49566D)' ~38), que ficam como estão para revisão humana.
 _REALIGN_MODEL_SIM = 72.0
-_CROSS_FIELD_MIN_GAIN = 0.25
-_CROSS_FIELD_CLEAR_GAIN = 0.75
-_CROSS_FIELD_CONFLICT_MARGIN = 0.25
-
-
-def _of_digit_confusion_candidate(value: object, of_keys: object) -> str:
-    """Return known OF when OCR mixed letters that are visually digit-like."""
-    raw = _identifier_compact(value, pad_of=True)
-    if not raw or raw.isdigit():
-        return ""
-    mapped = raw.translate(_OF_DIGIT_TRANSLATION)
-    if not mapped.isdigit():
-        return ""
-    cand = normalize_of(mapped)
-    return cand if cand in set(of_keys or []) else ""
-
-
-def _classify_of_signal(
-    row: dict, idx: dict | None, template_name: str | None = None
-) -> dict:
-    of_val = str((row or {}).get("of") or "").strip()
-    if not of_val:
-        return {"of_class": "empty"}
-    if template_name == "acabamento":
-        return {"of_class": "template_allows_code"}
-    if not idx:
-        return {"of_class": "unknown_ref"}
-    of_keys = set(idx.get("of_keys") or [])
-    if not _value_has_letters(of_val):
-        of_class = "known_numeric_of" if normalize_of(of_val) in of_keys else "numeric_or_plain"
-        return {
-            "of_class": of_class,
-        }
-    digit_candidate = _of_digit_confusion_candidate(of_val, of_keys)
-    if digit_candidate:
-        return {"of_class": "digit_confusion_of", "of_candidate": digit_candidate}
-    if len(_model_compact(of_val)) >= 4:
-        ft_keys = idx.get("model_ft_keys") or []
-        top = _topk_by_similarity(
-            ft_keys, lambda k: _model_candidate_similarity(of_val, k), 1
-        )
-        top_key, top_sim = top[0] if top else ("", 0.0)
-        if top_sim >= _REALIGN_MODEL_SIM:
-            return {
-                "of_class": "model_in_of",
-                "model_candidate": top_key,
-                "model_sim": round(float(top_sim), 3),
-            }
-    return {"of_class": "ambiguous_of"}
-
-
-def _row_structure_analysis(
-    raw_row: dict,
-    row: dict,
-    idx: dict | None,
-    template_name: str | None = None,
-) -> dict:
-    raw_of = str((raw_row or {}).get("of") or "").strip()
-    raw_ov = str((raw_row or {}).get("ov") or "").strip()
-    raw_pri = str((raw_row or {}).get("pri") or "").strip()
-    raw_modelo = str((raw_row or {}).get("modelo") or "").strip()
-    flags: list[str] = []
-    of_signal = _classify_of_signal(raw_row, idx, template_name)
-
-    if of_signal.get("of_class") in {"digit_confusion_of", "model_in_of", "ambiguous_of"}:
-        flags.append(str(of_signal["of_class"]))
-    if raw_of and str(row.get("of") or "").strip() != raw_of:
-        flags.append("of_normalized_or_moved")
-    if raw_ov and not str(row.get("ov") or "").strip():
-        flags.append("of_from_ov")
-    if raw_pri and str(row.get("of") or "").strip() == normalize_of(raw_pri):
-        flags.append("of_from_pri")
-    if raw_of and str(row.get("modelo") or "").strip() == raw_of and raw_modelo != raw_of:
-        flags.append("model_from_of")
-
-    return {
-        "of_class": of_signal.get("of_class", ""),
-        "of_candidate": of_signal.get("of_candidate", ""),
-        "model_candidate": of_signal.get("model_candidate", ""),
-        "flags": sorted(set(flags)),
-        "structural_realign": any(
-            f in {"digit_confusion_of", "model_in_of", "of_normalized_or_moved",
-                  "of_from_ov", "of_from_pri", "model_from_of"}
-            for f in flags
-        ),
-    }
-
-
-def _winner_reason_sims(winner: dict | None) -> dict[str, float]:
-    sims: dict[str, float] = {}
-    for reason in (winner or {}).get("_score_reasons") or []:
-        field = reason.get("field")
-        if field:
-            sims[str(field)] = float(reason.get("sim") or 0.0)
-    return sims
-
-
-# R234 — vocabulário interno -> chaves de saída (consumidas por scripts/UI).
-_LEVEL_TO_HYPOTHESIS = {
-    "confirmed": "confirmed",
-    "reconstructed": "reconstructed",
-    "weak": "weak_hypothesis",
-    "conflict": "conflict",
-    "unidentified": "unidentified",
-}
-
-
-def _identity_agree_from_reasons(
-    winner: dict | None, exclude: frozenset | set = frozenset()
-) -> int:
-    """Conta campos de IDENTIDADE a concordar (sim>=_AGREE_THRESHOLD) a partir
-    dos `_score_reasons`. Usado como fallback e para excluir tokens movidos
-    (reconstrução)."""
-    count = 0
-    for reason in (winner or {}).get("_score_reasons") or []:
-        field = reason.get("field")
-        if field not in _IDENTITY_FIELDS or field in exclude:
-            continue
-        if float(reason.get("sim") or 0.0) >= _AGREE_THRESHOLD:
-            count += 1
-    return count
-
-
-def row_identity_strength(winner: dict | None) -> dict:
-    """R234 — A ÚNICA fonte de verdade da confiança de uma linha.
-
-    Todos os veredictos (`_winner_mode`, `hypothesis_level`, `anchor_class`,
-    cor) derivam daqui. Lê só campos PERSISTIDOS no winner (sem recomputar
-    similaridade). Lei: identidade>=2 confirma; âncora única (mesmo OF exacta)
-    NUNCA confirma sozinha; dimensões NUNCA elevam o nível.
-    """
-    if not winner:
-        return {
-            "level": "unidentified", "identity_agree": 0, "dim_agree": 0,
-            "exact_id": 0, "agree": 0, "has_rivals": False,
-            "winner_mode": "weak_guess",
-        }
-    identity_agree = winner.get("_agree_id")
-    if identity_agree is None:
-        identity_agree = _identity_agree_from_reasons(winner)
-    identity_agree = int(identity_agree or 0)
-    dim_agree = int(winner.get("_dim_agree") or 0)
-    exact_id = int(winner.get("_exact_id") or 0)
-    exact_any = int(winner.get("_exact_score") or 0)
-    agree = int(winner.get("_agree") or 0)
-    has_rivals = bool(winner.get("_rivals"))
-
-    if has_rivals and identity_agree < 2:
-        level = "conflict"
-    elif identity_agree >= 2:
-        level = "confirmed"
-    else:
-        level = "weak"  # âncora única / só-dims / sem âncora — lei 1/2/3
-
-    # `winner_mode` é uma projeção COSMÉTICA compatível com hoje (badge da UI e
-    # testes de string). Deixou de ser o gate — o gate é `level`.
-    winner_mode = "strong" if (level == "confirmed" or exact_any >= 1) else "weak_guess"
-    return {
-        "level": level, "identity_agree": identity_agree, "dim_agree": dim_agree,
-        "exact_id": exact_id, "agree": agree, "has_rivals": has_rivals,
-        "winner_mode": winner_mode,
-    }
-
-
-def _proposal_strategy_for_row(
-    winner: dict | None,
-    structure: dict,
-    reconstruction: dict | None = None,
-) -> dict:
-    reconstruction = reconstruction or {}
-    reconstruction_source = str(reconstruction.get("reconstruction_source") or "none")
-    reconstruction_payload = {
-        "reconstruction_source": reconstruction_source,
-        "original_score": reconstruction.get("original_score", 0.0),
-        "reconstructed_score": reconstruction.get("reconstructed_score", 0.0),
-        "score_margin": reconstruction.get("score_margin", 0.0),
-        "tokens_explained": reconstruction.get("tokens_explained", 0),
-        "token_assignments": reconstruction.get("token_assignments") or [],
-        "hypothesis_name": reconstruction.get("hypothesis_name") or "",
-    }
-    if winner is None:
-        return {
-            "hypothesis_level": "unidentified",
-            "anchor_class": "no_winner",
-            "identity_anchors": [],
-            "dim_anchors": [],
-            "structural_flags": structure.get("flags") or [],
-            "of_class": structure.get("of_class") or "",
-            **reconstruction_payload,
-        }
-
-    sims = _winner_reason_sims(winner)
-    # Listas só para NOMEAR a classe / display; o NÍVEL vem da fonte única.
-    identity_anchors = sorted(
-        f for f, sim in sims.items()
-        if f in _IDENTITY_FIELDS and sim >= _AGREE_THRESHOLD
-    )
-    dim_anchors = sorted(
-        f for f, sim in sims.items()
-        if f in _FIELD_SCORE_WEIGHTS and f not in _IDENTITY_FIELDS
-        and sim >= _AGREE_NUM_THRESHOLD
-    )
-    # R234 — nível e classe derivam de row_identity_strength (fonte única).
-    strength = row_identity_strength(winner)
-    if reconstruction_source == "cross_field_fuzzy":
-        # Reconstrução fuzzy: nível é decidido (e capado) na Fase 2.
-        anchor_class = "cross_field_fuzzy"
-        level = str(reconstruction.get("hypothesis_level") or "weak_hypothesis")
-    elif strength["level"] == "confirmed":
-        anchor_class = "multi_identity"
-        level = "confirmed"
-    elif (structure.get("structural_realign") and strength["level"] != "conflict"
-            and (identity_anchors or dim_anchors)):
-        # Realinhamento SEGURO (membro exacto: digit_confusion_of) pode reconstruir.
-        anchor_class = "structural_realign"
-        level = "reconstructed"
-    elif strength["level"] == "conflict":
-        anchor_class = "weak_or_no_anchor"
-        level = "conflict"
-    elif dim_anchors and not identity_anchors:
-        anchor_class = "dims_only"
-        level = "weak_hypothesis"
-    elif len(identity_anchors) == 1:
-        anchor_class = f"{identity_anchors[0]}_only"
-        level = "weak_hypothesis"
-    else:
-        anchor_class = "weak_or_no_anchor"
-        level = "weak_hypothesis"
-
-    return {
-        "hypothesis_level": level,
-        "anchor_class": anchor_class,
-        "identity_anchors": identity_anchors,
-        "dim_anchors": dim_anchors,
-        "structural_flags": structure.get("flags") or [],
-        "of_class": structure.get("of_class") or "",
-        **reconstruction_payload,
-    }
-
-
-def _field_has_own_winner_evidence(
-    field: str, winner: dict | None, row: dict, refs: dict
-) -> bool:
-    if winner is None or field not in _PLAN_FIELDS:
-        return False
-    sim = _entry_field_similarity(field, winner, row, refs)
-    if sim is None:
-        return False
-    threshold = _AGREE_THRESHOLD if field in _IDENTITY_FIELDS else _AGREE_NUM_THRESHOLD
-    return sim >= threshold
-
-
-def _decorate_proposal_cell(
-    field: str,
-    cell: dict,
-    winner: dict | None,
-    row: dict,
-    refs: dict,
-    proposal_strategy: dict,
-) -> dict:
-    out = dict(cell)
-    source = str(out.get("source") or "")
-    ref_source = str(out.get("ref_source") or source)
-    level = str(proposal_strategy.get("hypothesis_level") or "unidentified")
-    reconstruction_source = str(proposal_strategy.get("reconstruction_source") or "none")
-
-    if source == "sap" or ref_source == "sap":
-        rule, proposal_source, cell_level = "local_reference", "sap", "confirmed"
-    elif source in {"syntax", "lexicon", "ferramenta", "maquinas", "colaboradores"}:
-        rule, proposal_source, cell_level = "local_reference", "syntax", "confirmed"
-    elif source == "plan":
-        if reconstruction_source == "cross_field_fuzzy":
-            rule = "cross_field_reconstruction"
-            proposal_source = (
-                "structural_realign" if level == "reconstructed" else "best_hypothesis"
-            )
-        elif _field_has_own_winner_evidence(field, winner, row, refs):
-            rule, proposal_source = "own_field", "own_field"
-        elif level == "confirmed":
-            rule, proposal_source = "row_identity", "row_identity"
-        elif level == "reconstructed":
-            rule, proposal_source = "structural_realign", "structural_realign"
-        else:
-            rule, proposal_source = "best_hypothesis", "best_hypothesis"
-        cell_level = level
-    elif out.get("proposed") and ref_source == "plan":
-        rule, proposal_source, cell_level = "own_field", "own_field", level
-    elif source == "ocr_raw" and out.get("status") == "confirmed":
-        rule, proposal_source, cell_level = "own_field", "own_field", "confirmed"
-    elif source == "obra_concluida":
-        rule, proposal_source, cell_level = "local_reference", "none", "conflict"
-    else:
-        rule, proposal_source, cell_level = "best_hypothesis", "none", level
-
-    out["alteration_rule"] = rule
-    out["proposal_source"] = proposal_source
-    out["hypothesis_level"] = cell_level
-    return out
 
 
 def _realign_misplaced_of(
@@ -1800,11 +1473,6 @@ def _realign_misplaced_of(
 
     # Etapa 1 (R223) — OF numérica no sítio errado (OV/PRI) -> OF.
     if of_keys:
-        digit_candidate = _of_digit_confusion_candidate(row.get("of"), of_keys)
-        if digit_candidate:
-            row = dict(row)
-            row["of"] = digit_candidate
-            return row
         if normalize_of(row.get("of")) in of_keys:
             return row  # a OF já é válida → nada a fazer
         for src in ("ov", "pri"):
@@ -1835,380 +1503,6 @@ def _realign_misplaced_of(
     row = dict(row)
     row["modelo"] = of_val  # encaminha para o índice de modelos; mantém o `of`
     return row
-
-
-def _build_candidates_by_field(
-    row: dict,
-    raw_row: dict,
-    refs: dict,
-    idx: dict,
-    cc_fields: set[str],
-    structure: dict,
-) -> dict[str, list[dict]]:
-    candidates_by_field: dict[str, list[dict]] = {}
-    raw_of = str((raw_row or {}).get("of") or "").strip()
-    row_of = str((row or {}).get("of") or "").strip()
-    for field in _ROW_FIELDS:
-        if field not in cc_fields:
-            continue
-        if (
-            field == "of"
-            and structure.get("of_class") == "model_in_of"
-            and row_of == raw_of
-        ):
-            candidates_by_field[field] = []
-            continue
-        candidates_by_field[field] = _candidates_for_field(field, row, refs, idx)
-    return candidates_by_field
-
-
-def _candidate_best_sim(
-    field: str, value: object, refs: dict, idx: dict
-) -> float:
-    probe_row = {field: value}
-    candidates = _candidates_for_field(field, probe_row, refs, idx)
-    if not candidates:
-        return 0.0
-    sims = [float(c.get("sim") or 0.0) for c in candidates if c.get("plan_entries")]
-    return max(sims, default=0.0)
-
-
-def _own_field_is_clear(field: str, value: object, refs: dict, idx: dict) -> bool:
-    if _is_missing_ocr(value):
-        return False
-    threshold = {
-        "of": 95.0,
-        "ov": 95.0,
-        "modelo": 90.0,
-        "cliente": 90.0,
-    }.get(field, 95.0)
-    return _candidate_best_sim(field, value, refs, idx) >= threshold
-
-
-def _looks_like_numeric_identifier(value: object) -> bool:
-    compact = _identifier_compact(value)
-    return bool(compact.isdigit() and 5 <= len(compact) <= 7)
-
-
-def _looks_like_model_token(value: object) -> bool:
-    compact = _model_compact(value)
-    return bool(len(compact) >= 4 and any(ch.isalpha() for ch in compact))
-
-
-def _edit_distance_le_1_member(s: str, of_keys: object) -> bool:
-    """R234 — True se existe uma OF REAL no plano a edit-distance <= 1 de `s`.
-
-    Mover um número para a coluna OF só é credível se resolver para uma OF
-    real (exacta, ou 1 dígito ao lado por misread). Filtra por comprimento
-    para não varrer o pool todo. Ver o padrão seguro _realign_misplaced_of (R223).
-    """
-    if not s:
-        return False
-    keys = of_keys if isinstance(of_keys, (set, frozenset)) else set(of_keys or [])
-    n = len(s)
-    return any(abs(len(k) - n) <= 1 and _lev_distance(s, k) <= 1 for k in keys)
-
-
-def _winner_identity_tokens(winner: dict | None) -> int:
-    # R234 — lê a fonte única (corrige o bug de recomputar de _score_reasons
-    # truncado a top-6: agora usa o _agree_id persistido).
-    return int(row_identity_strength(winner)["identity_agree"]) if winner else 0
-
-
-def _identity_tokens_excluding(winner: dict | None, exclude: frozenset | set) -> int:
-    """R234 — tokens de identidade a concordar EXCLUINDO campos movidos por uma
-    reconstrução (para a coerência ter de vir de evidência independente)."""
-    if not winner:
-        return 0
-    return _identity_agree_from_reasons(winner, exclude=frozenset(exclude or ()))
-
-
-def _winner_combined(winner: dict | None) -> float:
-    if not winner:
-        return -999.0
-    try:
-        return float(winner.get("_combined") or 0.0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _winner_candidate_key(winner: dict | None) -> tuple | None:
-    if not winner:
-        return None
-    return _entry_key(winner)
-
-
-def _reconstruction_hypotheses(
-    raw_row: dict,
-    base_row: dict,
-    refs: dict,
-    idx: dict,
-    template_name: str | None,
-) -> list[dict]:
-    raw_of = str((raw_row or {}).get("of") or "").strip()
-    raw_ov = str((raw_row or {}).get("ov") or "").strip()
-    raw_modelo = str((raw_row or {}).get("modelo") or "").strip()
-    modelo_empty = _is_missing_ocr(raw_modelo) or len(_model_compact(raw_modelo)) < 4
-
-    hypotheses: list[dict] = []
-    seen: set[tuple] = set()
-
-    def _add(name: str, row: dict, assignments: list[str], fuzzy_of: bool) -> None:
-        key = tuple(sorted((k, str(v or "")) for k, v in row.items()))
-        if key in seen:
-            return
-        seen.add(key)
-        hypotheses.append({
-            "name": name,
-            "row": row,
-            "assignments": assignments,
-            "fuzzy_of": fuzzy_of,
-        })
-
-    # R234 — mover OV->OF só se o número resolver para uma OF REAL do plano
-    # (membro exacto, ou edit-distance<=1 por misread). Sem isto, o fuzzy do
-    # winner arredondava 254817 para uma OF vizinha 254812 (troca estupida).
-    of_keys = set(idx.get("of_keys") or [])
-    ov_norm = normalize_of(raw_ov)
-    ov_is_exact_of = bool(ov_norm) and ov_norm in of_keys
-    ov_is_edit1_of = (not ov_is_exact_of) and _edit_distance_le_1_member(ov_norm, of_keys)
-
-    can_ov_to_of = (
-        _looks_like_numeric_identifier(raw_ov)
-        and not _own_field_is_clear("ov", raw_ov, refs, idx)
-        and (ov_is_exact_of or ov_is_edit1_of)
-    )
-    can_of_to_model = (
-        template_name != "acabamento"
-        and modelo_empty
-        and _looks_like_model_token(raw_of)
-        and not _own_field_is_clear("of", raw_of, refs, idx)
-    )
-
-    if can_ov_to_of:
-        row = dict(base_row)
-        row["of"] = normalize_of(raw_ov)
-        row["ov"] = ""
-        _add("ov_to_of", row, [f"ov:{raw_ov} -> of"], ov_is_edit1_of)
-
-    if can_of_to_model:
-        row = dict(base_row)
-        row["modelo"] = raw_of
-        if str(row.get("of") or "").strip() == raw_of:
-            row["of"] = ""
-        _add("of_to_modelo", row, [f"of:{raw_of} -> modelo"], False)
-
-    if can_ov_to_of and can_of_to_model:
-        row = dict(base_row)
-        row["of"] = normalize_of(raw_ov)
-        row["ov"] = ""
-        row["modelo"] = raw_of
-        _add(
-            "ov_to_of+of_to_modelo",
-            row,
-            [f"ov:{raw_ov} -> of", f"of:{raw_of} -> modelo"],
-            ov_is_edit1_of,
-        )
-
-    return hypotheses
-
-
-def _assignment_target_fields(assignments: object) -> frozenset[str]:
-    """R234 — campos de DESTINO de uma reconstrução (ex.: 'ov:X -> of' -> {'of'})."""
-    out: set[str] = set()
-    for a in assignments or []:
-        tail = str(a).split("->", 1)[-1].strip()
-        if tail in _IDENTITY_FIELDS:
-            out.add(tail)
-    return frozenset(out)
-
-
-def _evaluate_row_hypothesis(
-    name: str,
-    row: dict,
-    assignments: list[str],
-    raw_row: dict,
-    refs: dict,
-    idx: dict,
-    cc_fields: set[str],
-    current_phase: str | None,
-    score_fields: set[str] | frozenset[str],
-    template_name: str | None,
-    force_top1: bool,
-    *,
-    fuzzy_of: bool = False,
-    trace: dict | None = None,
-) -> dict:
-    structure = _row_structure_analysis(raw_row, row, idx, template_name)
-    candidates = _build_candidates_by_field(row, raw_row, refs, idx, cc_fields, structure)
-    winner = _find_winner_entry(
-        candidates,
-        row,
-        refs,
-        idx,
-        current_phase,
-        score_fields,
-        force_top1=force_top1,
-        trace=trace,
-    )
-    # R234 — tokens de identidade independentes (excluindo os campos movidos por
-    # esta hipótese): a coerência tem de vir de evidência que NÃO foi relocada.
-    moved = _assignment_target_fields(assignments)
-    return {
-        "name": name,
-        "row": row,
-        "assignments": assignments,
-        "fuzzy_of": fuzzy_of,
-        "structure": structure,
-        "candidates_by_field": candidates,
-        "winner": winner,
-        "score": _winner_combined(winner),
-        "tokens_explained": _winner_identity_tokens(winner),
-        "independent_tokens": _identity_tokens_excluding(winner, moved),
-        "trace": trace,
-    }
-
-
-def _choose_row_reconstruction(
-    raw_row: dict,
-    base_row: dict,
-    refs: dict,
-    idx: dict,
-    cc_fields: set[str],
-    current_phase: str | None,
-    score_fields: set[str] | frozenset[str],
-    template_name: str | None,
-    force_top1: bool,
-    *,
-    trace_enabled: bool = False,
-) -> dict:
-    baseline_trace = {} if trace_enabled else None
-    baseline = _evaluate_row_hypothesis(
-        "original",
-        base_row,
-        [],
-        raw_row,
-        refs,
-        idx,
-        cc_fields,
-        current_phase,
-        score_fields,
-        template_name,
-        force_top1,
-        trace=baseline_trace,
-    )
-    hypotheses = [baseline]
-
-    base_structure = baseline["structure"]
-    raw_of = str((raw_row or {}).get("of") or "").strip()
-    raw_ov = str((raw_row or {}).get("ov") or "").strip()
-    suspicious = (
-        base_structure.get("structural_realign")
-        or (
-            _looks_like_model_token(raw_of)
-            and _looks_like_numeric_identifier(raw_ov)
-        )
-        or (
-            baseline["winner"] is not None
-            and _winner_identity_tokens(baseline["winner"]) < 2
-        )
-    )
-    if suspicious:
-        for hyp in _reconstruction_hypotheses(raw_row, base_row, refs, idx, template_name):
-            hypotheses.append(
-                _evaluate_row_hypothesis(
-                    hyp["name"],
-                    hyp["row"],
-                    hyp["assignments"],
-                    raw_row,
-                    refs,
-                    idx,
-                    cc_fields,
-                    current_phase,
-                    score_fields,
-                    template_name,
-                    force_top1,
-                    fuzzy_of=hyp.get("fuzzy_of", False),
-                    trace={} if trace_enabled else None,
-                )
-            )
-
-    # R234 — coerência por evidência INDEPENDENTE à frente da contagem bruta:
-    # uma hipótese que explica >=2 tokens não-movidos ganha às circulares.
-    hypotheses.sort(
-        key=lambda h: (
-            float(h.get("score") or -999.0),
-            int(h.get("independent_tokens") or 0),
-            int(h.get("tokens_explained") or 0),
-            1 if h.get("assignments") else 0,
-        ),
-        reverse=True,
-    )
-    best = hypotheses[0]
-    original_score = float(baseline.get("score") or -999.0)
-    best_score = float(best.get("score") or -999.0)
-    best_key = _winner_candidate_key(best.get("winner"))
-    rival_hypotheses = [
-        h for h in hypotheses[1:]
-        if _winner_candidate_key(h.get("winner")) != best_key
-    ]
-    second_score = (
-        float(rival_hypotheses[0].get("score") or -999.0)
-        if rival_hypotheses else -999.0
-    )
-    gain = best_score - original_score
-    second_margin = best_score - second_score
-    # R234 — coerência da linha inteira: a reconstrução só é aceite se explicar
-    # >=2 tokens de identidade INDEPENDENTES (excluindo os campos movidos). Dois
-    # movimentos a justificarem-se um ao outro (of->modelo + ov->of) são
-    # circulares e falham este gate.
-    independent_tokens = int(best.get("independent_tokens") or 0)
-    exact_move = not best.get("fuzzy_of")
-    accepted = (
-        bool(best.get("assignments"))
-        and gain >= _CROSS_FIELD_MIN_GAIN
-        and independent_tokens >= 2
-    )
-
-    selected = best if accepted else baseline
-    selected_score = float(selected.get("score") or -999.0)
-    reconstructed_score = best_score if best.get("assignments") else selected_score
-
-    if accepted:
-        if (selected.get("winner") or {}).get("_rivals") or second_margin <= _CROSS_FIELD_CONFLICT_MARGIN:
-            level = "conflict"
-        elif exact_move and gain >= _CROSS_FIELD_CLEAR_GAIN:
-            # R234 — só movimentos por OF REAL (membro exacto) ganham "reconstructed".
-            level = "reconstructed"
-        else:
-            level = "weak_hypothesis"  # movimento fuzzy → nunca "reconstructed"
-        source = "cross_field_fuzzy"
-    elif selected["structure"].get("structural_realign"):
-        level = ""
-        source = "structural_realign"
-    else:
-        level = ""
-        source = "none"
-
-    selected["reconstruction"] = {
-        "accepted": accepted,
-        "reconstruction_source": source,
-        "hypothesis_name": selected["name"],
-        "hypothesis_level": level,
-        "original_score": round(max(original_score, 0.0), 3),
-        "reconstructed_score": round(max(reconstructed_score, 0.0), 3),
-        "score_margin": round(gain if accepted else 0.0, 3),
-        "second_margin": round(second_margin if accepted else 0.0, 3),
-        "tokens_explained": int(selected.get("tokens_explained") or 0),
-        "independent_tokens": (
-            independent_tokens if accepted
-            else int(selected.get("independent_tokens") or 0)
-        ),
-        "fuzzy_of": bool(best.get("fuzzy_of")) if accepted else False,
-        "token_assignments": selected.get("assignments") or [],
-        "hypotheses": len(hypotheses),
-    }
-    return selected
 
 
 def _find_winner_entry(
@@ -2244,12 +1538,12 @@ def _find_winner_entry(
                 trace["fallback_full_scan"] = True
 
     if winner is not None:
-        # R234 — confiança vem da FONTE ÚNICA (row_identity_strength). >=2
-        # identidades a concordar → confirmed; âncora única (mesmo OF exacta) ou
-        # só-dims → weak (vermelho/rever). `_winner_mode` é a projeção cosmética.
-        strength = row_identity_strength(winner)
-        winner["_strength"] = strength
-        winner["_winner_mode"] = strength["winner_mode"]
+        # R223 — confiança: >=2 campos a concordar OU pelo menos um campo
+        # exato (identidade real) → winner forte; 1 só campo fuzzy = palpite
+        # fraco → as células ficam vermelhas/rever (não verde-confiante).
+        agree = int(winner.get("_agree") or 0)
+        exact = int(winner.get("_exact_score") or 0)
+        winner["_winner_mode"] = "strong" if (agree >= 2 or exact >= 1) else "weak_guess"
     if trace is not None:
         trace["candidates_by_field"] = {
             f: len(candidates_by_field.get(f, []) or [])
@@ -2717,7 +2011,7 @@ def _winner_field_fallback_proposal(
         value = _entry_field_canonical(field, entry, template_name)
         if not value:
             continue
-        affinity, exact, _reasons, _raw, _agree, _exact_id, _agree_id, _dim_agree = (
+        affinity, exact, _reasons, _raw, _agree, _exact_id, _agree_id = (
             _entry_global_score(entry, row, refs, other_fields, cache=_sim_cache)
         )
         scored.append((float(affinity), int(exact), value))
@@ -3026,36 +2320,33 @@ def _score_row(
     """
     cc_fields = set(cross_check_fields)
 
-    raw_row = row
-
     # R223 — realinhar a OF se o OCR a colocou na coluna errada (OV/PRI), antes
     # de gerar candidatos, para o resto da linha usar a OF correta. R231 — e um
     # código de modelo na coluna OF é encaminhado para o campo modelo.
-    base_row = _realign_misplaced_of(row, idx, template_name)
+    row = _realign_misplaced_of(row, idx, template_name)
+
+    # Candidatos para todos os campos declarados no template como validáveis.
+    # OF/OV são apenas campos normais no score global; não filtram o winner.
+    candidates_by_field: dict[str, list[dict]] = {}
+    for field in _ROW_FIELDS:
+        if field in cc_fields:
+            candidates_by_field[field] = _candidates_for_field(field, row, refs, idx)
+
     score_fields = cc_fields & set(_PLAN_FIELDS)
-    selected_hypothesis = _choose_row_reconstruction(
-        raw_row,
-        base_row,
+    wt: dict | None = {} if trace_sink is not None else None
+    winner = _find_winner_entry(
+        candidates_by_field,
+        row,
         refs,
         idx,
-        cc_fields,
         current_phase,
         score_fields,
-        template_name,
-        force_top1,
-        trace_enabled=trace_sink is not None,
+        force_top1=force_top1,
+        trace=wt,
     )
-    row = selected_hypothesis["row"]
-    structure = selected_hypothesis["structure"]
-    candidates_by_field = selected_hypothesis["candidates_by_field"]
-    winner = selected_hypothesis["winner"]
-    wt: dict | None = selected_hypothesis.get("trace")
 
     obra_concluida = _all_eligible_phase_full(
         candidates_by_field, row, refs, current_phase, winner
-    )
-    proposal_strategy = _proposal_strategy_for_row(
-        winner, structure, selected_hypothesis.get("reconstruction")
     )
 
     fields_out: dict[str, dict] = {}
@@ -3094,9 +2385,6 @@ def _score_row(
             result = _score_no_ref_row_cell(
                 field, ocr_value, row_has_winner=winner is not None
             )
-        result = _decorate_proposal_cell(
-            field, result, winner, row, refs, proposal_strategy
-        )
         fields_out[field] = result
         _tally(result["status"])
 
@@ -3114,9 +2402,6 @@ def _score_row(
             extra_cell = _score_no_ref_row_cell(
                 k, extra_value.strip(), row_has_winner=winner is not None
             )
-        extra_cell = _decorate_proposal_cell(
-            k, extra_cell, winner, row, refs, proposal_strategy
-        )
         fields_out[k] = extra_cell
         _tally(extra_cell["status"])
 
@@ -3129,9 +2414,6 @@ def _score_row(
         for fn, cell in fields_out.items():
             fields_out[fn] = _make_cell(
                 cell.get("value", ""), "very_different", "obra_concluida",
-            )
-            fields_out[fn] = _decorate_proposal_cell(
-                fn, fields_out[fn], winner, row, refs, proposal_strategy
             )
             very_diff += 1
 
@@ -3150,9 +2432,6 @@ def _score_row(
                 "engine_status": cell.get("status"),
                 "source": cell.get("source"),
                 "match_kind": cell.get("match_kind"),
-                "alteration_rule": cell.get("alteration_rule"),
-                "proposal_source": cell.get("proposal_source"),
-                "hypothesis_level": cell.get("hypothesis_level"),
             })
         trace_sink.append({
             "row_index": row_idx,
@@ -3163,7 +2442,6 @@ def _score_row(
             "winner_combined": (winner or {}).get("_combined") if winner else None,
             "winner_mode": (winner or {}).get("_winner_mode") if winner else None,
             "obra_concluida": obra_concluida,
-            "proposal_strategy": proposal_strategy,
             "candidates": (wt or {}).get("candidates", []),
             "decisions": decisions,
         })
@@ -3180,7 +2458,6 @@ def _score_row(
         "winner_mode": (winner or {}).get("_winner_mode") if winner else None,
         "identity_conflict": False,
         "obra_concluida": obra_concluida,
-        "proposal_strategy": proposal_strategy,
     }
     return row_out, snapped, confirmed, na, very_diff, total
 
@@ -3722,10 +2999,7 @@ def _to_legacy_cell(v5_cell: dict, ref_value: str | None = None) -> dict:
     }
     if v5_cell.get("match_kind"):
         out["match_kind"] = v5_cell.get("match_kind")
-    for key in (
-        "winner_mode", "score_reasons", "forced_from_status", "warning", "empty_ok",
-        "alteration_rule", "proposal_source", "hypothesis_level",
-    ):
+    for key in ("winner_mode", "score_reasons", "forced_from_status", "warning", "empty_ok"):
         if key in v5_cell:
             out[key] = v5_cell[key]
     # Ref para tooltip de referência: prioriza `proposed`,
@@ -3735,8 +3009,8 @@ def _to_legacy_cell(v5_cell: dict, ref_value: str | None = None) -> dict:
     elif ref_value is not None:
         out["ref"] = ref_value
     elif (
-        v5_cell.get("source") not in (None, "ocr_raw", "obra_concluida", "syntax")
-        and (v5_status in ("snapped", "very_different") or v5_cell.get("source"))
+        v5_status in ("snapped", "very_different")
+        and v5_cell.get("source") not in (None, "ocr_raw", "obra_concluida", "syntax")
     ):
         out["ref"] = v5_cell.get("value", "")
     return out
@@ -3850,7 +3124,6 @@ def cross_check_sheet(
             "winner_combined": r.get("winner_combined"),
             "winner_score_reasons": r.get("winner_score_reasons"),
             "winner_mode": r.get("winner_mode"),
-            "proposal_strategy": r.get("proposal_strategy") or {},
             "identity_conflict": r.get("identity_conflict", False),
             # R125 — bandeira propagada para UI / auto-overwrites
             "obra_concluida": r.get("obra_concluida", False),
