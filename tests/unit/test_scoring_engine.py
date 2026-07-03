@@ -2046,10 +2046,10 @@ class TestGlobalWinnerScoring:
         fields = row["fields"]
 
         assert row["winner_of"] == "262771"
-        # R223 — só o `modelo` (fuzzy C6C2E45DI≈CGC2E45DI) concorda: 1 campo →
-        # palpite fraco (weak_guess), não "forced". Continua a preencher a linha
-        # a partir da entry vencedora, mas as células ficam MATCH_BEST_GUESS.
-        assert row["winner_mode"] == "weak_guess"
+        # R236 — em FS, um modelo a 1 carácter de uma designação quase-única é
+        # evidência FORTE (~8 bits; m_modelo=0.52, u≈1/1000): sem rival com OF
+        # diferente, o modo é "strong" (o R223 contava campos: 1 campo = weak).
+        assert row["winner_mode"] == "strong"
         assert fields["cliente"]["value"] == "ESTOQUE MTG"
         assert fields["of"]["value"] == "262771"
         assert fields["ov"]["value"] == "260001"
@@ -2211,7 +2211,11 @@ class TestGlobalWinnerScoring:
         assert row["winner_of"] == "262108"
         assert row["identity_conflict"] is False
         assert fields["of"]["value"] == "262108"
-        assert fields["of"]["status"] == "snapped"
+        # R236 — a OF escrita (262107) EXISTE no plano e o winner contradi-la:
+        # substitui (R219) mas fica vermelha/rever. É a classe de erro provada
+        # no backtest (folha 2557: OF válida 263185 reescrita para 263183
+        # errada) — contradizer uma OF válida nunca mais passa verde-silencioso.
+        assert fields["of"]["status"] == "very_different"
         assert fields["ov"]["status"] == "confirmed"
         assert fields["cliente"]["status"] == "confirmed"
         assert fields["modelo"]["status"] == "confirmed"
@@ -2333,7 +2337,9 @@ class TestGlobalWinnerScoring:
         assert fields["cliente"]["status"] == "snapped"
         assert fields["ov"]["status"] == "confirmed"
         assert fields["of"]["value"] == "257093"
-        assert fields["of"]["status"] == "snapped"
+        # R236 — a OF escrita (257083) existe no plano e aponta para OUTRA
+        # encomenda: substitui pelo winner (R219) mas fica vermelha/rever.
+        assert fields["of"]["status"] == "very_different"
         assert fields["modelo"]["status"] == "snapped"
 
     def test_nonexistent_ocr_of_is_replaced_by_coherent_global_winner(self):

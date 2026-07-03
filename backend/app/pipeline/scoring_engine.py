@@ -20,8 +20,10 @@ Fluxo atual:
 """
 from __future__ import annotations
 
+import math
 import time
 import unicodedata
+from bisect import bisect_left, bisect_right
 from datetime import datetime, timezone
 from functools import lru_cache
 import re
@@ -327,6 +329,56 @@ _FIELD_SCORE_WEIGHTS = {
     "esp": 0.40,
     "dbase": 0.40,
     "dtopo": 0.40,
+}
+# NOTA R236: `_FIELD_SCORE_WEIGHTS` NÃO decide o winner (nunca decidiu — o
+# `order` único da chave de ordenação resolvia o empate antes do weighted;
+# provado pelo A/B equal_weights = 0.0pp). Fica para telemetria
+# (`score_reasons`) e para a afinidade do fallback D4
+# (`_winner_field_fallback_proposal`). O RANKING é o score FS em bits abaixo.
+
+# R236 — ranking Fellegi-Sunter: score em BITS = Σ log2(m/u).
+#   m = P(campo concorda | linha certa) — MEDIDO no app.db da fábrica
+#       (1.147 folhas validadas, 3.2-3.4k linhas por campo; ver plano R236).
+#   u = P(campo concorda | linha errada) ≈ freq(valor)/N no plano carregado —
+#       calculado por VALOR em `_get_indices` (a blanket order OV vale pouco;
+#       uma designação rara vale muito). Nada é hardcoded por cliente/modelo.
+_FS_M = {"of": 0.693, "ov": 0.460, "cliente": 0.562, "modelo": 0.524}
+# log2((1-m)/(1-u)) — discordar de identidade custa POUCO (misreads/shifts
+# são ~30-50% dos campos escritos); é a assimetria medida, não intuída.
+_FS_W_DISAGREE = {"of": -1.7, "ov": -0.9, "cliente": -1.2, "modelo": -1.1}
+_FS_W_MIN, _FS_W_CAP = 1.0, 14.0
+# Prior de RARIDADE: u = freq/max(N, isto) — para identidade E para o
+# denominador do peso conjunto das dims. Com um plano pequeno (refs parciais
+# no arranque, fixtures de teste) não há base para declarar um valor "comum"
+# — sem o prior, u≈0.5, uma OF exata valeria ~1 bit e as margens colapsavam,
+# deixando os vetos absolutos dominarem. No plano real (N≈21k) é inerte; a
+# calibração que conta é a do backtest contra dados reais.
+_FS_U_MIN_CORPUS = 1000
+# Dims: m medido 0.87-0.96 → discordar é veto forte (log2((1-m)/(1-u)) ∈
+# [-3.9,-2.6]); centro conservador, com cap para linhas multi-dim.
+_FS_DIM_DISAGREE = -2.5
+_FS_DIM_DISAGREE_CAP = -5.0
+_FS_DIM_JOINT_CAP = 13.0
+# Contradizer uma OF escrita QUE EXISTE no plano: m(of|válida)=0.890 medido
+# → log2(1-0.890) = -3.3. É isto que impede dims comuns de atropelarem uma
+# OF bem lida (backtest R236: GOOD 110/110 vs 102/110 do R231).
+_FS_VETO_VALID_OF = -3.3
+# Margem (bits) entre o winner e o melhor rival com OF DIFERENTE que separa
+# "decisivo" de "marginal". Backtest: falhas p50≈0.3-1.5 bits; acertos
+# p50≈5.5-17. Sub-linhas da mesma OF não contam como rivais.
+_FS_MARGIN_DECISIVE = 4.0
+# Rivais da guarda de ambiguidade R219 (por campo): entries a <= isto do topo.
+_FS_RIVAL_MARGIN_BITS = 1.0
+# Dims que pontuam o winner via plano (larg_mm NÃO tem coluna no plano —
+# valida-se só por SAP-lote; incluí-la daria offset constante, nunca sinal).
+_FS_DIM_FIELDS = ("comp_mm", "lbase", "ltopo", "esp", "dbase", "dtopo")
+# P(colisão) por dim MEDIDA no plano real (20.839 linhas) — piso do u
+# conjunto: u_D = max(n_conjunto/N, Π destes). Sem o piso, um plano pequeno
+# (fixtures/refs parciais) daria ~10 bits a UMA dim; na realidade uma dim
+# vale ~2.5-3.1 bits. Estatística de corpus, como _FS_M — não é regra à mão.
+_FS_DIM_U_FLOOR = {
+    "comp_mm": 0.116, "lbase": 0.114, "ltopo": 0.154,
+    "esp": 0.171, "dbase": 0.164, "dtopo": 0.182,
 }
 
 # Thresholds de "muito diferente" — abaixo destes níveis, vermelho.
@@ -896,6 +948,152 @@ def _entry_global_score(
     return total, exact, reasons, raw_total, agree, exact_id, agree_id
 
 
+def _fs_value_weight(field: str, entry: dict, idx: dict) -> float:
+    """R236 — peso FS (bits) do VALOR deste campo na entry: log2(m_f/u_f(v)),
+    com u_f(v) = freq(valor)/N no plano carregado. Um valor raro pesa muito;
+    um valor massificado (blanket order, medida de família) pesa pouco."""
+    n = max(int(idx.get("fs_n") or 0), _FS_U_MIN_CORPUS)
+    freq = (idx.get("fs_freq") or {}).get(field) or {}
+    if field == "of":
+        key = str(entry.get("_of") or entry.get("of") or "").strip()
+    elif field == "ov":
+        key = _identifier_compact(entry.get("ov"))
+    elif field == "cliente":
+        key = _cliente_compact(entry.get("cliente"))
+    else:  # modelo
+        key = _model_compact(entry.get("designacao"))
+    u = max(freq.get(key, 1), 1) / n
+    m = _FS_M[field]
+    if u >= m:
+        return _FS_W_MIN
+    return max(_FS_W_MIN, min(_FS_W_CAP, math.log2(m / u)))
+
+
+def _fs_row_context(row: dict, idx: dict, score_fields=None) -> dict:
+    """R236 — contexto por-linha do scoring FS (calculado 1x por linha):
+    valores de dims presentes, conjuntos de entry-ids dentro da tolerância
+    (janelas ±tol via bisect), validade da OF escrita, e memo do peso
+    conjunto por subconjunto de dims concordantes."""
+    allowed = set(score_fields) if score_fields is not None else None
+    dims: dict[str, float] = {}
+    sets: dict[str, frozenset[int]] = {}
+    dim_sorted = idx.get("fs_dim_sorted") or {}
+    for field in _FS_DIM_FIELDS:
+        if allowed is not None and field not in allowed:
+            continue
+        raw = str(row.get(field) or "").strip()
+        if not raw:
+            continue
+        vals = _num_variants(field, raw)
+        if not vals:
+            continue
+        sorted_vals, ids = dim_sorted.get(field) or ([], [])
+        if not sorted_vals:
+            continue
+        tol = _VERY_DIFF_NUM_ABS[field]
+        members: set[int] = set()
+        for v in vals:
+            lo = bisect_left(sorted_vals, v - tol)
+            hi = bisect_right(sorted_vals, v + tol)
+            members.update(ids[lo:hi])
+        dims[field] = vals[0]
+        sets[field] = frozenset(members)
+    of_written = str(row.get("of") or "").strip()
+    of_valid = bool(
+        of_written
+        and normalize_of(_identifier_compact(of_written, pad_of=True))
+        in (idx.get("of_to_entries") or {})
+    )
+    return {
+        "dims": dims,
+        "sets": sets,
+        "of_valid": of_valid,
+        "joint_memo": {},
+        # Denominador do peso conjunto com o prior de corpus (ver
+        # _FS_U_MIN_CORPUS): inerte no plano real, evita margens colapsadas
+        # em planos minúsculos.
+        "n": max(int(idx.get("fs_n") or 0), _FS_U_MIN_CORPUS),
+    }
+
+
+def _entry_bits_score(
+    entry: dict,
+    row: dict,
+    refs: dict,
+    idx: dict,
+    ctx: dict,
+    score_fields=None,
+    cache: dict | None = None,
+) -> float:
+    """R236 — score Fellegi-Sunter em BITS de uma entry contra a linha.
+
+    Identidade: g(sim)·w_valor com g graduado (OF a 1 dígito ≈ 3 bits — o
+    backtest v1→v2 provou que cortar em 0.9 perde os misreads que o fuzzy
+    do R231 recuperava). Dims: peso da COMBINAÇÃO (-log2(n_conjunto/N)) —
+    as dims do plano andam em famílias, pesos por-campo somados mentem — e
+    discordar é veto (m_dim 0.87-0.96). Contradizer uma OF escrita e VÁLIDA
+    custa -3.3 bits (m(of|válida)=0.890 medido)."""
+    allowed = set(score_fields) if score_fields is not None else None
+    bits = 0.0
+    for field in ("of", "ov", "cliente", "modelo"):
+        if allowed is not None and field not in allowed:
+            continue
+        sim = _entry_field_similarity(field, entry, row, refs, cache=cache)
+        if sim is None:
+            continue
+        w = _fs_value_weight(field, entry, idx)
+        if field in ("of", "ov"):
+            if sim >= 1.0:
+                bits += w
+            elif sim >= 0.9:
+                bits += 0.5 * w
+            elif sim >= 0.8:
+                # 1 dígito de distância — evidência real, não decisiva.
+                bits += 0.3 * w
+            elif sim <= 0.3:
+                bits += _FS_W_DISAGREE[field]
+            if field == "of" and ctx["of_valid"] and sim < 0.9:
+                bits += _FS_VETO_VALID_OF
+        else:
+            if sim >= 1.0:
+                bits += w
+            elif sim >= _AGREE_THRESHOLD:
+                bits += sim * w
+            elif sim <= 0.3:
+                bits += _FS_W_DISAGREE[field]
+
+    dim_sets: dict[str, frozenset[int]] = ctx["sets"]
+    if dim_sets:
+        eid = (idx.get("fs_id_by_key") or {}).get(_entry_key(entry))
+        agreeing = tuple(
+            f for f in _FS_DIM_FIELDS
+            if f in dim_sets and eid is not None and eid in dim_sets[f]
+        )
+        if agreeing:
+            memo = ctx["joint_memo"]
+            n_joint = memo.get(agreeing)
+            if n_joint is None:
+                inter: frozenset[int] | set[int] = dim_sets[agreeing[0]]
+                for f in agreeing[1:]:
+                    inter = inter & dim_sets[f]
+                n_joint = max(len(inter), 1)
+                memo[agreeing] = n_joint
+            # u conjunto com piso realista: nunca mais raro do que o produto
+            # das P(colisão) medidas por dim (ver _FS_DIM_U_FLOOR).
+            u_floor = 1.0
+            for f in agreeing:
+                u_floor *= _FS_DIM_U_FLOOR[f]
+            u_joint = max(n_joint / ctx["n"], u_floor)
+            bits += max(0.0, min(_FS_DIM_JOINT_CAP, -math.log2(u_joint)))
+        n_disagree = sum(
+            1 for f in dim_sets
+            if eid is None or eid not in dim_sets[f]
+        )
+        if n_disagree:
+            bits += max(_FS_DIM_DISAGREE_CAP, n_disagree * _FS_DIM_DISAGREE)
+    return bits
+
+
 def _row_has_any_value(row: dict) -> bool:
     return any(
         str(v or "").strip()
@@ -961,6 +1159,18 @@ def _get_indices(refs: dict) -> dict:
         "dbase": {}, "dtopo": {},
     }
 
+    # R236 — precompute Fellegi-Sunter (lado u): frequência por VALOR para os
+    # campos de identidade, id físico por entry e arrays ordenados por dim
+    # (para contagem conjunta via bisect). Tudo derivado do plano carregado.
+    fs_freq: dict[str, dict[str, int]] = {
+        "of": {}, "ov": {}, "cliente": {}, "modelo": {},
+    }
+    fs_id_by_key: dict[tuple, int] = {}
+    fs_dim_values: dict[str, list[tuple[float, int]]] = {
+        f: [] for f in _FS_DIM_FIELDS
+    }
+    fs_n = 0
+
     for of_key, entries in of_to_entries.items():
         for e in entries:
             stamped = dict(e)
@@ -983,6 +1193,32 @@ def _get_indices(refs: dict) -> dict:
                 if v is not None:
                     dim_indices[attr].setdefault(v, []).append(stamped)
 
+            # --- R236: FS ---
+            eid = fs_n
+            fs_n += 1
+            fs_id_by_key.setdefault(_entry_key(stamped), eid)
+            fs_freq["of"][of_key] = fs_freq["of"].get(of_key, 0) + 1
+            ov_c = _identifier_compact(ov_val)
+            if ov_c:
+                fs_freq["ov"][ov_c] = fs_freq["ov"].get(ov_c, 0) + 1
+            cli_c = _cliente_compact(cli_val)
+            if cli_c:
+                fs_freq["cliente"][cli_c] = fs_freq["cliente"].get(cli_c, 0) + 1
+            des_c = _model_compact(des)
+            if des_c:
+                fs_freq["modelo"][des_c] = fs_freq["modelo"].get(des_c, 0) + 1
+            for field in _FS_DIM_FIELDS:
+                v = _num(e.get(_PLAN_ATTR_BY_FIELD[field]))
+                if v is not None:
+                    fs_dim_values[field].append((v, eid))
+
+    for field in _FS_DIM_FIELDS:
+        fs_dim_values[field].sort()
+    fs_dim_sorted = {
+        f: ([v for v, _ in pairs], [i for _, i in pairs])
+        for f, pairs in fs_dim_values.items()
+    }
+
     indices = {
         "loaded_at": loaded_at,
         "of_to_entries": of_to_entries,
@@ -996,6 +1232,11 @@ def _get_indices(refs: dict) -> dict:
         "ov_keys": list(ov_to_entries.keys()),
         "des_keys": list(des_to_entries.keys()),
         "model_ft_keys": list(model_ft_to_entries.keys()),
+        # R236 — FS
+        "fs_n": fs_n,
+        "fs_freq": fs_freq,
+        "fs_id_by_key": fs_id_by_key,
+        "fs_dim_sorted": fs_dim_sorted,
     }
     if loaded_at:
         _INDEX_CACHE[key] = indices
@@ -1272,16 +1513,20 @@ def _best_scored_entry(
     score_fields: set[str] | frozenset[str] | None = None,
     min_agree: int = 1,
     trace: dict | None = None,
+    idx: dict | None = None,
 ) -> dict | None:
-    """Escolhe a melhor entry do plan por VOTAÇÃO HOLÍSTICA (R223).
+    """Escolhe a melhor entry do plan por EVIDÊNCIA EM BITS (R236 —
+    Fellegi-Sunter com parâmetros medidos; ver `_entry_bits_score`).
 
-    Critério principal: ``agree`` = nº de campos que concordam (sim >=
-    _AGREE_THRESHOLD), TODOS com peso igual — ganha quem concorda em mais
-    campos, robusto a qualquer campo estar mal lido. A soma graduada das
-    similaridades (``raw``) desempata. Nenhum campo (nem um modelo exato)
-    manda sozinho. Devolve None se nada concorda em >= ``min_agree`` campos.
-    Rivais quase-empatados (mesmo agree, raw a <= _WINNER_MARGIN) ficam em
-    ``winner['_rivals']`` para a guarda de ambiguidade.
+    Critério principal: ``bits`` = Σ log2(m/u) sobre identidade (peso por
+    valor, g graduado) + combinação de dims (-log2(n_conjunto/N)) − vetos
+    (dims discordantes; OF escrita e válida contradita). ``agree``/``raw``
+    (a votação holística R223/R226) ficam como desempate e telemetria.
+    Devolve None se nada concorda em >= ``min_agree`` campos (linha sem
+    NENHUMA evidência fica NA — inalterado). Rivais com OF diferente a
+    <= _FS_RIVAL_MARGIN_BITS do topo ficam em ``winner['_rivals']`` para a
+    guarda de ambiguidade R219; a margem para o melhor rival de OF diferente
+    fica em ``winner['_margin_bits']`` e alimenta o modo decisivo/marginal.
     """
     from app.pipeline.of_consumption import remaining as _remaining
 
@@ -1293,6 +1538,8 @@ def _best_scored_entry(
     # precisos: o traço (opt-in) usa-os para todos; sem traço, recalculamos só
     # os do vencedor no fim. Poupa ~1,7M dicts/folha no caso de produção.
     _want_reasons = trace is not None
+    idx = idx or _get_indices(refs)
+    fs_ctx = _fs_row_context(row, idx, score_fields)
     eligible: list[tuple] = []
     for order, (k, e) in enumerate(entries_by_key.items()):
         if "_of" not in e:
@@ -1302,19 +1549,20 @@ def _best_scored_entry(
             _entry_global_score(e, row, refs, score_fields, cache=_sim_cache,
                                 collect_reasons=_want_reasons)
         )
+        bits = _entry_bits_score(
+            e, row, refs, idx, fs_ctx, score_fields, cache=_sim_cache,
+        )
         phase_full = 1 if (current_phase and _phase_is_full(e, current_phase)) else 0
         # R138 — remaining consciente do setor (mesma medida do wizard).
         rem = _remaining(e, phase=current_phase)
         rem_sort = 9e9 if rem == float("inf") else rem
-        # R226 — ordena por: nº de campos a concordar (COMBINAÇÃO holística)
-        # primeiro → maior soma graduada (raw) → identidade EXATA só como
-        # DESEMPATE final (já não decide sozinha) → setor com espaço → menor
-        # remaining. (R223 punha o exact_id à frente e uma OF exata mandava
-        # sozinha; ver R226 em _entry_global_score.)
+        # R236 — ordena por BITS primeiro (evidência medida); a votação
+        # holística R226 (agree → raw → exact_id) fica como desempate, e o
+        # setor-com-espaço/remaining como critérios finais.
         eligible.append((
-            -agree, -raw_score, -exact_id, phase_full, rem_sort,
+            -bits, -agree, -raw_score, -exact_id, phase_full, rem_sort,
             order, e, reasons, raw_score, global_score, exact_score, agree,
-            exact_id, agree_id,
+            exact_id, agree_id, bits,
         ))
 
     if not eligible:
@@ -1330,13 +1578,14 @@ def _best_scored_entry(
         trace["pool_size"] = len(eligible)
         trace["candidates"] = [
             {
-                "of": (cand[6] or {}).get("_of"),
-                "agree": int(cand[11]),
-                "exact": int(cand[10]),
-                "exact_id": int(cand[12]),
-                "raw": round(float(cand[8]), 3),
-                "weighted": round(float(cand[9]), 3),
-                "combined": round(float(int(cand[11]) + float(cand[8])), 3),
+                "of": (cand[7] or {}).get("_of"),
+                "bits": round(float(cand[15]), 2),
+                "agree": int(cand[12]),
+                "exact": int(cand[11]),
+                "exact_id": int(cand[13]),
+                "raw": round(float(cand[9]), 3),
+                "weighted": round(float(cand[10]), 3),
+                "combined": round(float(int(cand[12]) + float(cand[9])), 3),
                 "field_sims": [
                     {
                         "field": r.get("field"),
@@ -1344,30 +1593,31 @@ def _best_scored_entry(
                         "weight": r.get("weight"),
                         "points": round(float(r.get("points") or 0.0), 3),
                     }
-                    for r in (cand[7] or [])
+                    for r in (cand[8] or [])
                 ],
             }
             for cand in eligible[:_TRACE_TOP_K]
         ]
     best = eligible[0]
-    best_agree = -best[0]
-    best_raw = -best[1]
-    best_exact_id = -best[2]
-    best_rem_sort = best[4]
+    best_bits = float(best[15])
+    best_agree = -best[1]
+    best_raw = -best[2]
+    best_rem_sort = best[5]
     if best_agree < min_agree:
         return None
-    winner = dict(best[6])
-    winner["_score"] = round(float(best[8]), 3)
+    winner = dict(best[7])
+    winner["_score"] = round(float(best[9]), 3)
+    winner["_bits"] = round(best_bits, 2)
     winner["_agree"] = int(best_agree)
-    winner["_weighted_score"] = round(float(best[9]), 3)
-    winner["_exact_score"] = int(best[10])
+    winner["_weighted_score"] = round(float(best[10]), 3)
+    winner["_exact_score"] = int(best[11])
     winner["_combined"] = round(float(best_agree + best_raw), 3)
     # R225 — se os reasons não foram colhidos (caso de produção), recalcula só
     # os do vencedor (idêntico ao que seria colhido; usa o cache quente).
-    winner_reasons = best[7]
+    winner_reasons = best[8]
     if not _want_reasons:
         winner_reasons = _entry_global_score(
-            best[6], row, refs, score_fields, cache=_sim_cache, collect_reasons=True,
+            best[7], row, refs, score_fields, cache=_sim_cache, collect_reasons=True,
         )[2]
     winner["_score_reasons"] = sorted(
         winner_reasons,
@@ -1376,20 +1626,24 @@ def _best_scored_entry(
     )[:6]
     if best_rem_sort < 9e9:
         winner["_remaining"] = best_rem_sort
-    # R223 — rivais (para a guarda de ambiguidade): entries genuinamente
-    # empatadas — mesma classe de identidade exata, mesmo nº de campos a
-    # concordar, e soma graduada dentro de _WINNER_MARGIN. Assim uma OF escrita
-    # exata (ex.: 262107) não ganha "rivais" de OFs diferentes (fuzzy) e não
-    # marca tudo vermelho por falsa ambiguidade.
+    # R236 — margem em bits para o melhor rival com OF DIFERENTE (sub-linhas
+    # da mesma OF são a mesma encomenda — não são rivais de identidade) +
+    # rivais da guarda de ambiguidade R219 (entries a <= _FS_RIVAL_MARGIN_BITS
+    # do topo, qualquer OF, para a cor por campo).
+    winner_of_key = str(winner.get("_of") or winner.get("of") or "").strip()
+    margin_bits: float | None = None
     rivals: list[dict] = []
     for cand in eligible[1:]:
-        cand_agree = -cand[0]
-        cand_raw = -cand[1]
-        cand_exact_id = -cand[2]
-        if (cand_exact_id != best_exact_id or cand_agree != best_agree
-                or (best_raw - cand_raw) > _WINNER_MARGIN):
-            break  # eligible ordenado: agree caiu, raw longe, ou exato≠fuzzy
-        rivals.append(cand[6])
+        gap = best_bits - float(cand[15])
+        cand_of = str((cand[7] or {}).get("_of") or (cand[7] or {}).get("of") or "").strip()
+        if margin_bits is None and cand_of and cand_of != winner_of_key:
+            margin_bits = gap
+        if gap <= _FS_RIVAL_MARGIN_BITS:
+            if len(rivals) < 10:
+                rivals.append(cand[7])
+        elif margin_bits is not None:
+            break  # ordenado por bits: já não há rivais nem margem por achar
+    winner["_margin_bits"] = round(margin_bits, 2) if margin_bits is not None else 99.0
     if rivals:
         winner["_rivals"] = rivals
     return winner
@@ -1520,7 +1774,8 @@ def _find_winner_entry(
     der vencedor. A confiança (modo) vem do nº de campos que concordam."""
     pool = _candidate_entries_by_key(candidates_by_field, score_fields)
     winner = (
-        _best_scored_entry(pool, row, refs, current_phase, score_fields, trace=trace)
+        _best_scored_entry(pool, row, refs, current_phase, score_fields,
+                           trace=trace, idx=idx)
         if pool else None
     )
 
@@ -1532,24 +1787,48 @@ def _find_winner_entry(
         entries_by_key = _all_plan_entries(idx or {}) or pool
         if entries_by_key:
             winner = _best_scored_entry(
-                entries_by_key, row, refs, current_phase, score_fields, trace=trace
+                entries_by_key, row, refs, current_phase, score_fields,
+                trace=trace, idx=idx,
             )
             if trace is not None:
                 trace["fallback_full_scan"] = True
 
     if winner is not None:
-        # R223 — confiança: >=2 campos a concordar OU pelo menos um campo
-        # exato (identidade real) → winner forte; 1 só campo fuzzy = palpite
-        # fraco → as células ficam vermelhas/rever (não verde-confiante).
-        agree = int(winner.get("_agree") or 0)
-        exact = int(winner.get("_exact_score") or 0)
-        winner["_winner_mode"] = "strong" if (agree >= 2 or exact >= 1) else "weak_guess"
+        # R236 — confiança pela MARGEM em bits para o melhor rival com OF
+        # diferente (backtest: falhas p50≈0.3-1.5 bits, acertos p50≈5.5-17).
+        # decisivo → "strong" (substitui, verde/amarelo); marginal →
+        # "weak_guess" (substitui na mesma — R219 — mas vermelho/rever).
+        margin = float(winner.get("_margin_bits") or 0.0)
+        winner["_winner_mode"] = (
+            "strong" if margin >= _FS_MARGIN_DECISIVE else "weak_guess"
+        )
     if trace is not None:
         trace["candidates_by_field"] = {
             f: len(candidates_by_field.get(f, []) or [])
             for f in ("of", "ov", "cliente", "modelo")
         }
     return winner
+
+
+def select_winner(
+    row: dict,
+    refs: dict,
+    template_name: str | None = None,
+    current_phase: str | None = None,
+) -> dict | None:
+    """R236 — caminho público de seleção de winner para UMA linha (o mesmo
+    que `_score_row` usa: realinhar → candidatos → winner). Serve o harness
+    `scripts/diag/backtest_winner.py` e diagnósticos, garantindo que medem
+    exatamente o caminho de produção."""
+    idx = _get_indices(refs)
+    row2 = _realign_misplaced_of(dict(row), idx, template_name)
+    candidates_by_field = {
+        f: _candidates_for_field(f, row2, refs, idx) for f in _ROW_FIELDS
+    }
+    return _find_winner_entry(
+        candidates_by_field, row2, refs, idx, current_phase, None,
+        force_top1=True,
+    )
 
 
 def _all_eligible_phase_full(
@@ -1660,6 +1939,16 @@ def _mark_winner_cell(cell: dict, winner: dict | None) -> dict:
         # diverge do canónico) mantém-se vermelho/rever; nunca verde-confiante
         # numa peça incerta. O valor canónico continua a ser aplicado, mas a
         # cor é honesta.
+        # R236 — winner MARGINAL (margem em bits < _FS_MARGIN_DECISIVE):
+        # substituições/autofills DERIVADAS DO WINNER ficam vermelhas para
+        # revisão. O valor continua a ser aplicado (R219 — substitui sempre);
+        # só a cor muda. Células validadas por referência própria (SAP-lote,
+        # lexicon, sintaxe) não dependem do winner e mantêm a cor.
+        if (
+            out.get("status") == "snapped"
+            and (out.get("ref_source") or out.get("source")) == "plan"
+        ):
+            out["status"] = "very_different"
     return out
 
 
@@ -1812,6 +2101,34 @@ def _identifier_values_match(field: str, ocr_value: object, proposed: object) ->
                 for i, ch in enumerate(longer)
             ):
                 return True
+    return False
+
+
+def _identifier_points_to_other_reference(
+    field: str, ocr_value: object, proposed: object, idx: dict | None
+) -> bool:
+    """R236 — o identificador ESCRITO existe no plano mas aponta para OUTRA
+    referência que não a proposta do winner (ex.: OV da encomenda B numa linha
+    cuja OF é da encomenda A). Conflito de identidade real: o valor do winner
+    substitui na mesma (R219), mas a célula fica vermelha/rever. Substitui a
+    guarda de rivais nestes casos — com o ranking em bits o rival perdedor já
+    não é "quase-empate", mas o conflito continua a merecer olhos humanos."""
+    if not idx or not ocr_value or not proposed:
+        return False
+    if _identifier_values_match(field, ocr_value, proposed):
+        return False
+    if field == "of":
+        key = normalize_of(_identifier_compact(str(ocr_value), pad_of=True))
+        return bool(key and key in (idx.get("of_to_entries") or {}))
+    if field == "ov":
+        pool = idx.get("ov_to_entries") or {}
+        raw = str(ocr_value or "").strip()
+        if raw in pool:
+            return True
+        key = _identifier_compact(raw)
+        return bool(key) and any(
+            _identifier_compact(k) == key for k in pool
+        )
     return False
 
 
@@ -2245,6 +2562,17 @@ def _apply_winner_to_field(
 
     if field in ("of", "ov") and ocr_value:
         if winner is not None:
+            # R236 — identificador escrito que EXISTE no plano e diverge do
+            # winner: substitui (R219) mas fica vermelho para revisão.
+            if _identifier_points_to_other_reference(field, ocr_value, proposed, idx):
+                proposed_fmt = _format_value(field, proposed)
+                return _mark_winner_cell(
+                    _make_cell(
+                        proposed_fmt, "very_different", "plan",
+                        proposed=proposed_fmt, ref_source="plan", score=score,
+                    ),
+                    winner,
+                )
             return _mark_winner_cell(
                 _finish_cell(field, ocr_value, proposed, "plan", score),
                 winner,
@@ -2454,6 +2782,10 @@ def _score_row(
         "winner_score": (winner or {}).get("_score") if winner else None,
         "winner_weighted_score": (winner or {}).get("_weighted_score") if winner else None,
         "winner_combined": (winner or {}).get("_combined") if winner else None,
+        # R236 — evidência FS (bits) e margem para o melhor rival de OF
+        # diferente; é isto que decide winner_mode (decisivo/marginal).
+        "winner_bits": (winner or {}).get("_bits") if winner else None,
+        "winner_margin_bits": (winner or {}).get("_margin_bits") if winner else None,
         "winner_score_reasons": (winner or {}).get("_score_reasons") if winner else None,
         "winner_mode": (winner or {}).get("_winner_mode") if winner else None,
         "identity_conflict": False,
@@ -3162,4 +3494,4 @@ def cross_check_sheet(
 
 
 __all__ = ["shadow_score", "cross_check_sheet", "CROSS_CHECK_STATUSES",
-           "score_entry", "normalize_of", "ENGINE_VERSION"]
+           "score_entry", "select_winner", "normalize_of", "ENGINE_VERSION"]
