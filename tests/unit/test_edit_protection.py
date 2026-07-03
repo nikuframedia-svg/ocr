@@ -173,6 +173,41 @@ class TestMaybeApplySnapProtected:
         sheet = db.get_sheet(sid)
         assert sheet["sheet_data"]["rows"][0]["modelo"] == "CANONICO"
 
+    def test_marginal_write_gate_flag(self, tmp_db):
+        """R236 — CROSS_WRITE_GATE_MARGINAL: OFF (default) mantém o R219
+        (substitui sempre); ON bloqueia a gravação de very_different vindo de
+        winner marginal (weak_guess) — a proposta fica visível, o OCR intacto.
+        Caso provado: folha 2367 (encomenda fora do plano do dia)."""
+        from app.config import get_settings
+
+        sid = db.insert_sheet("test.jpg")
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"esp": "3"}],
+        }
+        db.update_extraction(sid, sheet_data, {}, sheet_data)
+        cell = {
+            "engine_status": "very_different", "value": "4",
+            "source": "plan", "winner_mode": "weak_guess",
+        }
+        # Default OFF → aplica (política R219 intacta).
+        assert main._maybe_apply_snap(sid, "rows[0].esp", cell, frozenset()) is True
+        # ON → não grava.
+        settings = get_settings()
+        original = settings.cross_write_gate_marginal
+        try:
+            object.__setattr__(settings, "cross_write_gate_marginal", True)
+            assert main._maybe_apply_snap(
+                sid, "rows[0].esp", cell, frozenset()
+            ) is False
+            # Winner FORTE não é afetado pelo gate.
+            strong = dict(cell, winner_mode="strong")
+            assert main._maybe_apply_snap(
+                sid, "rows[0].esp", strong, frozenset()
+            ) is True
+        finally:
+            object.__setattr__(settings, "cross_write_gate_marginal", original)
+
     @pytest.mark.parametrize("source", [None, "ocr_raw", "syntax", "obra_concluida"])
     def test_very_different_without_concrete_ref_does_not_auto_apply(
         self, tmp_db, source

@@ -571,7 +571,18 @@ _STATUS_LABELS = {
 # as folhas antigas regenerarem com a correção.
 # R231 — código de modelo na coluna OF é encaminhado para o campo modelo
 # (realinhamento por conteúdo). Muda decisões nas linhas mal posicionadas → BUMP.
-ENGINE_VERSION = "v25_R231"
+# R236 — winner por EVIDÊNCIA EM BITS (Fellegi-Sunter com parâmetros MEDIDOS:
+# m no app.db da fábrica, u por valor no plano carregado) em vez do voto igual
+# R223/R226; dims pesam pela COMBINAÇÃO (famílias correlacionadas deixam de
+# outvotar identidade); contradizer OF escrita-e-válida custa -3.3 bits;
+# margem em bits → decisivo/marginal (marginal substitui — R219 — mas fica
+# vermelho); realinhamento de colunas por BUSCA DE HIPÓTESES (o mesmo scoring
+# decide; -1.5 bits/campo movido); identificador escrito que existe no plano
+# e diverge do winner fica very_different; ferramenta/CONI preserva decimais
+# (13,7 já não vira 137); floor numérico nas propostas locais sem winner.
+# Backtest (verdade humana): GOOD 110/110 (R231 destruía 8 OFs corretas),
+# TOTAL 89.2% vs 86.1%. Muda decisões em massa → BUMP obrigatório.
+ENGINE_VERSION = "v26_R236"
 
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
@@ -1759,6 +1770,140 @@ def _realign_misplaced_of(
     return row
 
 
+# R236 — realinhamento por BUSCA DE HIPÓTESES: as regras casuísticas
+# (R223 Etapa 1, R231 Etapa 2, OF embebida, cliente na coluna modelo) passam a
+# GERADORES de variantes da linha; o MESMO scoring FS decide qual variante tem
+# mais evidência no plano. Prior: cada campo movido paga isto em bits (não se
+# inventam realinhamentos) e a variante tal-qual (H0) ganha empates.
+# Medido no app.db: ~1 linha em 12-20 tem shift de colunas (OF na coluna OV
+# 5.2%, modelo na coluna OF 4.6%, assinatura completa 3.1%).
+_ALIGN_MOVE_PENALTY_BITS = 1.5
+_EMBEDDED_OF_RE = re.compile(r"(?<!\d)(\d{5,6})(?!\d)")
+
+
+def _alignment_hypotheses(
+    row: dict, idx: dict | None, template_name: str | None = None
+) -> list[tuple[str, dict, int]]:
+    """Variantes plausíveis de re-atribuição de colunas: (label, linha, nº de
+    campos movidos). Só gera variantes ref-validadas (o valor movido tem de
+    fazer sentido no campo destino); a maioria das linhas fica só com H0."""
+    hyps: list[tuple[str, dict, int]] = [("H0", row, 0)]
+    if not idx:
+        return hyps
+    of_to_entries = idx.get("of_to_entries") or {}
+
+    # As regras R223/R231 encadeadas, como UMA hipótese (mantêm-se testadas
+    # e afinadas; deixam apenas de ser aplicadas às cegas).
+    realigned = _realign_misplaced_of(row, idx, template_name)
+    if realigned != row:
+        moved = sum(
+            1 for k in ("of", "ov", "pri", "modelo")
+            if str(realigned.get(k) or "") != str(row.get(k) or "")
+        )
+        hyps.append(("realign_of", realigned, max(moved, 1)))
+        # Shift COMPLETO (assinatura em 3.1% das linhas): a OF real veio da
+        # OV e a coluna OF trazia o CÓDIGO DE MODELO — a Etapa 1 do R231
+        # sobrescreve a OF e perde esse texto. Variante extra que o preserva
+        # no campo modelo; a evidência decide se compensa o movimento extra.
+        orig_of = str(row.get("of") or "").strip()
+        if (
+            str(realigned.get("of") or "") != orig_of
+            and orig_of
+            and template_name != "acabamento"
+            and _value_has_letters(orig_of)
+            and len(_model_compact(orig_of)) >= 4
+        ):
+            modelo_after = str(realigned.get("modelo") or "").strip()
+            if _is_missing_ocr(modelo_after) or len(_model_compact(modelo_after)) < 4:
+                keep_model = dict(realigned)
+                keep_model["modelo"] = orig_of
+                hyps.append(("realign_of_keep_model", keep_model, max(moved, 1) + 1))
+
+    # OF embebida em texto livre na coluna OF ("OF 262882 dobrar" → 262882);
+    # o resto do texto pode ser o modelo se o campo modelo estiver vazio/lixo.
+    of_text = str(row.get("of") or "").strip()
+    of_norm = normalize_of(_identifier_compact(of_text, pad_of=True))
+    if of_text and of_norm not in of_to_entries:
+        for m in _EMBEDDED_OF_RE.finditer(of_text):
+            token = normalize_of(m.group(1))
+            if token not in of_to_entries:
+                continue
+            variant = dict(row)
+            variant["of"] = token
+            moved = 1
+            leftover = re.sub(
+                rf"(?<!\d){re.escape(m.group(1))}(?!\d)", " ", of_text, count=1
+            ).strip()
+            modelo_val = str(row.get("modelo") or "").strip()
+            if (
+                leftover
+                and template_name != "acabamento"
+                and (_is_missing_ocr(modelo_val) or len(_model_compact(modelo_val)) < 4)
+                and _value_has_letters(leftover)
+            ):
+                variant["modelo"] = leftover
+                moved = 2
+            hyps.append(("embedded_of", variant, moved))
+            break
+
+    # Cliente na coluna modelo (generaliza o _realign_misplaced_cliente do
+    # R234 sem regra de resolução única: a evidência decide).
+    if template_name != "acabamento":
+        cliente_val = str(row.get("cliente") or "").strip()
+        modelo_val = str(row.get("modelo") or "").strip()
+        if not cliente_val and modelo_val and _value_has_letters(modelo_val):
+            variant = dict(row)
+            variant["cliente"] = modelo_val
+            variant["modelo"] = ""
+            hyps.append(("modelo_to_cliente", variant, 1))
+
+    return hyps
+
+
+def _choose_row_alignment(
+    row: dict,
+    refs: dict,
+    idx: dict | None,
+    cc_fields: set[str],
+    current_phase: str | None = None,
+    score_fields: set[str] | frozenset[str] | None = None,
+    template_name: str | None = None,
+    trace: dict | None = None,
+) -> tuple[str, dict, dict[str, list[dict]]]:
+    """R236 — escolhe o alinhamento de colunas com MAIS evidência: pontua o
+    winner (bits) de cada hipótese sobre o seu pool de candidatos e fica com
+    a melhor após o prior de -1.5 bits/campo movido. Devolve (label, linha
+    escolhida, candidatos dessa linha) para o resto do fluxo usar tal-qual."""
+    hyps = _alignment_hypotheses(row, idx, template_name)
+    best: tuple[tuple[float, int], str, dict, dict[str, list[dict]]] | None = None
+    for label, variant, moved in hyps:
+        candidates_by_field = {
+            f: _candidates_for_field(f, variant, refs, idx)
+            for f in _ROW_FIELDS
+            if f in cc_fields
+        }
+        if len(hyps) == 1:
+            # Caso comum (~90% das linhas): sem variantes → sem scoring extra.
+            return label, variant, candidates_by_field
+        pool = _candidate_entries_by_key(candidates_by_field, score_fields)
+        winner = (
+            _best_scored_entry(pool, variant, refs, current_phase,
+                               score_fields, idx=idx)
+            if pool else None
+        )
+        bits = float((winner or {}).get("_bits") or -99.0)
+        adjusted = bits - moved * _ALIGN_MOVE_PENALTY_BITS
+        key = (adjusted, -moved)  # empate → menos campos movidos (H0 primeiro)
+        if best is None or key > best[0]:
+            best = (key, label, variant, candidates_by_field)
+    assert best is not None
+    _key, label, variant, candidates_by_field = best
+    if trace is not None:
+        trace["alignment"] = label
+        trace["alignment_hypotheses"] = len(hyps)
+    return label, variant, candidates_by_field
+
+
 def _find_winner_entry(
     candidates_by_field: dict[str, list[dict]],
     row: dict,
@@ -1817,14 +1962,14 @@ def select_winner(
     current_phase: str | None = None,
 ) -> dict | None:
     """R236 — caminho público de seleção de winner para UMA linha (o mesmo
-    que `_score_row` usa: realinhar → candidatos → winner). Serve o harness
-    `scripts/diag/backtest_winner.py` e diagnósticos, garantindo que medem
-    exatamente o caminho de produção."""
+    que `_score_row` usa: alinhamento por hipóteses → candidatos → winner).
+    Serve o harness `scripts/diag/backtest_winner.py` e diagnósticos,
+    garantindo que medem exatamente o caminho de produção."""
     idx = _get_indices(refs)
-    row2 = _realign_misplaced_of(dict(row), idx, template_name)
-    candidates_by_field = {
-        f: _candidates_for_field(f, row2, refs, idx) for f in _ROW_FIELDS
-    }
+    _label, row2, candidates_by_field = _choose_row_alignment(
+        dict(row), refs, idx, set(_ROW_FIELDS), current_phase, None,
+        template_name,
+    )
     return _find_winner_entry(
         candidates_by_field, row2, refs, idx, current_phase, None,
         force_top1=True,
@@ -2175,6 +2320,12 @@ def _local_candidate_proposal(
         return proposed if _cliente_values_match(ocr_value, proposed, refs) else None
     if field == "modelo":
         return proposed if _model_matches_designacao(ocr_value, proposed) else None
+    # R236 — floor por tolerância NUMÉRICA: sem winner global, um candidato
+    # de dimensão fora da tolerância do motor não é evidência de nada — não
+    # substitui (a célula fica em revisão com o OCR à vista). A auditoria de
+    # 2-3 Jul provou que os erros gravados são de magnitude, não de texto.
+    if field in _VERY_DIFF_NUM_ABS and best_sim <= 0.0:
+        return None
     return proposed
 
 
@@ -2647,21 +2798,19 @@ def _score_row(
     auto-substituição. (R222 reverte o R163, que tornara isto só metadata.)
     """
     cc_fields = set(cross_check_fields)
-
-    # R223 — realinhar a OF se o OCR a colocou na coluna errada (OV/PRI), antes
-    # de gerar candidatos, para o resto da linha usar a OF correta. R231 — e um
-    # código de modelo na coluna OF é encaminhado para o campo modelo.
-    row = _realign_misplaced_of(row, idx, template_name)
-
-    # Candidatos para todos os campos declarados no template como validáveis.
-    # OF/OV são apenas campos normais no score global; não filtram o winner.
-    candidates_by_field: dict[str, list[dict]] = {}
-    for field in _ROW_FIELDS:
-        if field in cc_fields:
-            candidates_by_field[field] = _candidates_for_field(field, row, refs, idx)
-
     score_fields = cc_fields & set(_PLAN_FIELDS)
     wt: dict | None = {} if trace_sink is not None else None
+
+    # R236 — realinhamento por hipóteses: o OCR pode ter lido nas colunas
+    # erradas (OF na OV, modelo na OF, cliente no modelo, OF embebida em
+    # texto). Cada variante plausível é pontuada pelo MESMO scoring FS e ganha
+    # a de maior evidência (prior de -1.5 bits por campo movido; a linha
+    # tal-qual ganha empates). Devolve também os candidatos da variante
+    # escolhida — o resto do fluxo continua idêntico.
+    _align_label, row, candidates_by_field = _choose_row_alignment(
+        row, refs, idx, cc_fields, current_phase, score_fields,
+        template_name, trace=wt,
+    )
     winner = _find_winner_entry(
         candidates_by_field,
         row,

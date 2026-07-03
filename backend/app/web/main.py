@@ -35,6 +35,7 @@ sys.path.insert(0, str(_REPO))
 sys.path.insert(0, str(_REPO / "backend"))
 
 from app import kernel  # noqa: E402  — R110.E event log (R117: hoisted for hot-path emits)
+from app.config import get_settings  # noqa: E402  — R236: gate de gravação marginal
 from app.web import attractors, db, export, kpis, llm_assistant, ocr_queue, ocr_runner  # noqa: E402
 from app.cross_check import (  # noqa: E402
     cross_check_sheet,
@@ -519,6 +520,18 @@ def _maybe_apply_snap(
     if cell.get("source") == "obra_concluida":
         return False
     engine_status = cell.get("engine_status")
+    # R236 — gate de gravação para winners MARGINAIS (flag, default OFF):
+    # very_different de linha com winner fraco (margem em bits abaixo do
+    # decisivo) mostra a proposta a vermelho mas NÃO grava por cima do OCR.
+    # Caso provado: folha 2367 (encomenda ausente do plano do dia → winner
+    # marginal por OV → esp correto do operador gravado por cima). Ligar com
+    # CROSS_WRITE_GATE_MARGINAL=1 depois do OK do Luís.
+    if (
+        engine_status == "very_different"
+        and cell.get("winner_mode") == "weak_guess"
+        and get_settings().cross_write_gate_marginal
+    ):
+        return False
     source = cell.get("source")
     ref_source = cell.get("ref_source") or source
     concrete_sources = {"plan", "sap", "ferramenta", "maquinas", "colaboradores", "lexicon"}

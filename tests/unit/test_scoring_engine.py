@@ -3995,3 +3995,63 @@ class TestContentRealign:
         row = result["rows"][0]
         assert row["winner_of"] == "262107"
         assert row["fields"]["cliente"]["value"] == "ELECNOR"
+
+
+class TestAlignmentHypotheses:
+    """R236 — realinhamento por busca de hipóteses: as regras R223/R231/R232
+    viram geradores de variantes e o scoring FS decide qual tem evidência.
+    A assinatura completa do shift (modelo na OF + OF na OV) existe em 3.1%
+    das linhas reais; a OF vem da OV em 5.2%; modelo na OF em 4.6%."""
+
+    def test_full_shift_recovers_of_and_model(self):
+        # Shift completo: OF real na coluna OV, código de modelo na coluna OF.
+        # O R231 sozinho recuperava a OF mas PERDIA o modelo; a hipótese
+        # realign_of_keep_model preserva-o quando a evidência paga.
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{
+                "of": "OMEGA1200H", "ov": "262107", "modelo": "",
+                "cliente": "ELECNOR",
+            }],
+        }
+        result = cross_check_sheet(sheet_data, None, _REFS)
+        row = result["rows"][0]
+        assert row["winner_of"] == "262107"
+        assert row["fields"]["of"]["value"] == "262107"
+        assert "OMEGA" in row["fields"]["modelo"]["value"]
+
+    def test_embedded_of_in_free_text(self):
+        # OF embebida em texto livre na coluna OF → extraída e validada.
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"of": "OF 262107 dobrar", "cliente": "ELECNOR"}],
+        }
+        result = cross_check_sheet(sheet_data, None, _REFS)
+        row = result["rows"][0]
+        assert row["winner_of"] == "262107"
+        assert row["fields"]["of"]["value"] == "262107"
+
+    def test_cliente_in_modelo_column_moves_when_evidence_pays(self):
+        # Cliente na coluna modelo (cliente vazio): a hipótese move-o quando
+        # o nome bate um cliente do plano e a linha ganha evidência com isso.
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{
+                "of": "262107", "cliente": "", "modelo": "ELECNOR",
+            }],
+        }
+        result = cross_check_sheet(sheet_data, None, _REFS)
+        row = result["rows"][0]
+        assert row["winner_of"] == "262107"
+        assert row["fields"]["cliente"]["value"] == "ELECNOR"
+
+    def test_no_realign_without_evidence(self):
+        # Texto garbled sem correspondência: nenhuma hipótese paga o prior —
+        # a linha fica tal-qual (H0) e vai para revisão, não se inventa.
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"of": "(49566D)", "modelo": "", "cliente": ""}],
+        }
+        result = cross_check_sheet(sheet_data, None, _REFS)
+        row = result["rows"][0]
+        assert row["winner_of"] is None

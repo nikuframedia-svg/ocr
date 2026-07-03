@@ -112,6 +112,20 @@ class Settings(BaseSettings):
         ),
     )
 
+    cross_write_gate_marginal: bool = Field(
+        default=False,
+        description=(
+            "R236 — gate de gravação para winners MARGINAIS: quando ON, "
+            "células very_different de linhas com winner_mode='weak_guess' "
+            "NÃO são auto-gravadas no sheet_data (ficam vermelhas com a "
+            "proposta visível; o OCR do operador mantém-se até revisão). "
+            "Default OFF = política R219 'substitui sempre' intacta. Caso "
+            "provado: folha 2367 — encomenda ausente do plano do dia, winner "
+            "marginal por OV, esp correto do operador gravado por cima. "
+            "Ligar requer OK do Luís (CROSS_WRITE_GATE_MARGINAL=1)."
+        ),
+    )
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
