@@ -582,7 +582,16 @@ _STATUS_LABELS = {
 # (13,7 já não vira 137); floor numérico nas propostas locais sem winner.
 # Backtest (verdade humana): GOOD 110/110 (R231 destruía 8 OFs corretas),
 # TOTAL 89.2% vs 86.1%. Muda decisões em massa → BUMP obrigatório.
-ENGINE_VERSION = "v26_R236"
+# R240 — realinhamento por FORMA: OF válida em QUALQUER coluna de identidade
+# (cheia/embebida) com custo medido por assinatura; modelo/lote exigem
+# corroboração. SHIFT 80.9%→92.2% (cliente→OF 8/8; modelo→OF 1/1).
+# R241 — canais de ruído FITTED (lexicons/cross_params.json, com proveniência):
+# (C1) matriz de confusão de caracteres (NW sobre 1.556 pares reais; 1↔4,
+# 7↔3, M↔H, 8↔9 medidos) refina o tier estrutural PARA CIMA e decide o waiver
+# do veto; (C2) canal humano: veto relaxado p/ rivais da mesma família
+# (p_same_family=0.096 medido) + decision_reason p/ a UI distinguir misread
+# de erro de transcrição. ENG 72.9%→75.7%, TOTAL 90.2%. BUMP obrigatório.
+ENGINE_VERSION = "v27_R241"
 
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
@@ -1010,15 +1019,31 @@ def _fs_row_context(row: dict, idx: dict, score_fields=None) -> dict:
         dims[field] = vals[0]
         sets[field] = frozenset(members)
     of_written = str(row.get("of") or "").strip()
+    of_written_key = normalize_of(_identifier_compact(of_written, pad_of=True))
     of_valid = bool(
-        of_written
-        and normalize_of(_identifier_compact(of_written, pad_of=True))
-        in (idx.get("of_to_entries") or {})
+        of_written and of_written_key in (idx.get("of_to_entries") or {})
     )
+    # R241/C2 — famílias (cliente + 1º token da designação) das entries da OF
+    # ESCRITA: se uma entry rival pertence à mesma família, o erro humano
+    # (linha errada do cartão) é mais plausível e o veto relaxa (medido:
+    # 9.6% das válidas-erradas são mesma-família → relaxamento pequeno).
+    of_written_fams: frozenset[str] = frozenset()
+    if of_valid:
+        fams: set[str] = set()
+        for e in (idx.get("of_to_entries") or {}).get(of_written_key, []) or []:
+            cli = _cliente_compact(e.get("cliente"))
+            if cli:
+                fams.add("C:" + cli)
+            ft = _model_compact(_model_first_token(e.get("designacao")))
+            if ft:
+                fams.add("F:" + ft)
+        of_written_fams = frozenset(fams)
     return {
         "dims": dims,
         "sets": sets,
         "of_valid": of_valid,
+        "of_written": of_written,
+        "of_written_fams": of_written_fams,
         "joint_memo": {},
         # Denominador do peso conjunto com o prior de corpus (ver
         # _FS_U_MIN_CORPUS): inerte no plano real, evita margens colapsadas
@@ -1054,17 +1079,42 @@ def _entry_bits_score(
             continue
         w = _fs_value_weight(field, entry, idx)
         if field in ("of", "ov"):
+            gch = 0.0
             if sim >= 1.0:
                 bits += w
             elif sim >= 0.9:
                 bits += 0.5 * w
-            elif sim >= 0.8:
-                # 1 dígito de distância — evidência real, não decisiva.
-                bits += 0.3 * w
-            elif sim <= 0.3:
-                bits += _FS_W_DISAGREE[field]
+            else:
+                # R241 — canal de visão FITTED: refina o tier estrutural PARA
+                # CIMA, nunca para baixo — o piso 0.3 (sim>=0.8) foi validado
+                # pelo backtest R236/R240; a matriz acrescenta discriminação
+                # onde tem contagens (1↔4 comum → até 0.45), sem degradar
+                # onde não tem. O gch CRU (sem piso) decide o waiver do veto:
+                # só um misread genuinamente plausível dispensa o veto.
+                token = str(row.get(field) or "")
+                value = entry.get("_of") or entry.get("of") if field == "of" else entry.get("ov")
+                gch = _channel_g(value, token, pad_of=(field == "of"))
+                g_floor = 0.3 if sim >= 0.8 else 0.0
+                g_eff = max(gch, g_floor)
+                if g_eff > 0.0:
+                    bits += g_eff * w
+                elif sim <= 0.3:
+                    bits += _FS_W_DISAGREE[field]
             if field == "of" and ctx["of_valid"] and sim < 0.9:
-                bits += _FS_VETO_VALID_OF
+                # Veto por contradizer OF escrita-e-válida — com dois
+                # amortecedores medidos (R241): (a) waiver se a entry é um
+                # misread PLAUSÍVEL da escrita (o canal explica a diferença);
+                # (b) relaxamento mesma-família (erro humano de cartão,
+                # 9.6% medido → -2.98 em vez de -3.3).
+                if gch < _CHANNEL_VETO_WAIVER_G:
+                    veto = _FS_VETO_VALID_OF
+                    fams = ctx.get("of_written_fams") or frozenset()
+                    if fams:
+                        cli = _cliente_compact(entry.get("cliente"))
+                        ft = _model_compact(_model_first_token(entry.get("designacao")))
+                        if ("C:" + cli in fams and cli) or ("F:" + ft in fams and ft):
+                            veto = _fs_veto_relaxed_bits()
+                    bits += veto
         else:
             if sim >= 1.0:
                 bits += w
@@ -1806,6 +1856,81 @@ _SHIFT_EMBEDDED_SURCHARGE_BITS = 0.5
 # contagem e um lote numérico "moveria" só por parecer uma OF.
 _SHIFT_REQUIRE_CORROBORATION = frozenset({"modelo", "lote"})
 
+# R241 — CANAL DE VISÃO fitted: matriz de confusão de caracteres estimada por
+# alinhamento NW sobre 1.556 pares (raw, verdade) do app.db da fábrica
+# (scripts/diag/fit_char_confusion.py → lexicons/cross_params.json, tracked,
+# com proveniência). Top confusões MEDIDAS: 1↔4, 7↔3, M↔H, 8↔9, 2↔7 — os
+# dados batem a intuição (1↔4 nem constava dos priors de glifos). Substitui o
+# tier fixo g=0.3 (sim>=0.8): um misread PLAUSÍVEL do canal vale mais; um
+# improvável vale ~nada — hoje ambos eram "sim 0.83".
+_CROSS_PARAMS_PATH = None  # resolvido em _load_cross_params()
+_CHANNEL_G_CAP = 0.45      # nunca acima do tier estrutural 0.5 (sim>=0.9)
+_CHANNEL_G_L0 = 11.0       # custo (bits) a que a evidência do canal morre
+_CHANNEL_VETO_WAIVER_G = 0.30  # misread plausível da OF escrita → sem veto
+
+
+@lru_cache(maxsize=1)
+def _load_cross_params() -> dict:
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[3] / "lexicons" / "cross_params.json"
+    try:
+        import json as _json
+
+        return _json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        # Fallback sem ficheiro (testes/refs mínimas): custo moderado uniforme
+        # — degrada para ~o tier antigo (1 sub qualquer ≈ g 0.36).
+        return {}
+
+
+def _fs_veto_relaxed_bits() -> float:
+    """R241/C2 — veto relaxado quando a entry rival é da MESMA família que a
+    OF escrita (erro humano de transcrição plausível). Valor fitted:
+    -3.3·(1-p_same_family) com p medido = 0.096 → -2.98. Fallback -3.0."""
+    hc = (_load_cross_params().get("human_channel") or {})
+    return float(hc.get("veto_relaxed_bits") or -3.0)
+
+
+def _char_channel_costs() -> tuple[dict[str, float], float, float]:
+    ch = (_load_cross_params().get("char_channel") or {})
+    return (
+        ch.get("sub_costs_bits") or {},
+        float(ch.get("cost_default_bits") or 7.0),
+        float(ch.get("cost_indel_bits") or 7.0),
+    )
+
+
+@lru_cache(maxsize=100_000)
+def _channel_align_cost_bits(truth: str, written: str) -> float:
+    """Custo (bits) do alinhamento ótimo escrito|verdadeiro sob a matriz
+    fitted — DP de Needleman-Wunsch com custos por substituição."""
+    subs, default, indel = _char_channel_costs()
+    n, m = len(truth), len(written)
+    if not n or not m:
+        return 99.0
+    prev = [j * indel for j in range(m + 1)]
+    for i in range(1, n + 1):
+        cur = [i * indel]
+        for j in range(1, m + 1):
+            a, b = truth[i - 1], written[j - 1]
+            sub_cost = 0.0 if a == b else subs.get(f"{a}>{b}", default)
+            cur.append(min(prev[j] + indel, cur[j - 1] + indel,
+                           prev[j - 1] + sub_cost))
+        prev = cur
+    return prev[-1]
+
+
+def _channel_g(truth: object, written: object, *, pad_of: bool = False) -> float:
+    """g ∈ [0, _CHANNEL_G_CAP] — evidência de que `written` é um misread de
+    `truth` segundo o canal de visão fitted. 0 quando o custo excede L0."""
+    t = _identifier_compact(truth, pad_of=pad_of)
+    w = _identifier_compact(written, pad_of=pad_of)
+    if not t or not w:
+        return 0.0
+    cost = _channel_align_cost_bits(t, w)
+    return max(0.0, min(_CHANNEL_G_CAP, 1.0 - cost / _CHANNEL_G_L0))
+
 
 def _alignment_hypotheses(
     row: dict, idx: dict | None, template_name: str | None = None
@@ -2024,6 +2149,22 @@ def _find_winner_entry(
         winner["_winner_mode"] = (
             "strong" if margin >= _FS_MARGIN_DECISIVE else "weak_guess"
         )
+        # R241/C2 — o winner contradiz uma OF escrita e VÁLIDA: marcar a
+        # natureza provável do erro (visão vs transcrição humana) para a UI.
+        of_written = str((row or {}).get("of") or "").strip()
+        wk = normalize_of(_identifier_compact(of_written, pad_of=True)) if of_written else ""
+        of_map = (idx or {}).get("of_to_entries") or {}
+        w_of = str(winner.get("_of") or winner.get("of") or "").strip()
+        if wk and wk in of_map and w_of and w_of != wk:
+            winner["_contradicts_written_of"] = wk
+            cli_w = _cliente_compact(winner.get("cliente"))
+            ft_w = _model_compact(_model_first_token(winner.get("designacao")))
+            same_family = any(
+                (cli_w and _cliente_compact(e.get("cliente")) == cli_w)
+                or (ft_w and _model_compact(_model_first_token(e.get("designacao"))) == ft_w)
+                for e in of_map.get(wk) or []
+            )
+            winner["_written_of_same_family"] = bool(same_family)
     if trace is not None:
         trace["candidates_by_field"] = {
             f: len(candidates_by_field.get(f, []) or [])
@@ -2792,12 +2933,21 @@ def _apply_winner_to_field(
         if winner is not None:
             # R236 — identificador escrito que EXISTE no plano e diverge do
             # winner: substitui (R219) mas fica vermelho para revisão.
+            # R241/C2 — a UI distingue a natureza provável do erro: mesma
+            # família → provável erro HUMANO de transcrição (cartão errado);
+            # senão conflito de identidade genérico (provável misread).
             if _identifier_points_to_other_reference(field, ocr_value, proposed, idx):
                 proposed_fmt = _format_value(field, proposed)
+                reason = (
+                    "possible_wrong_transcription"
+                    if winner.get("_written_of_same_family")
+                    else "identifier_conflict"
+                )
                 return _mark_winner_cell(
                     _make_cell(
                         proposed_fmt, "very_different", "plan",
                         proposed=proposed_fmt, ref_source="plan", score=score,
+                        decision_reason=reason,
                     ),
                     winner,
                 )
