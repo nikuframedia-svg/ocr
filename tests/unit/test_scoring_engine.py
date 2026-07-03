@@ -1569,6 +1569,23 @@ class TestShadowScore:
         assert cell["status"] == "snapped"
         assert cell["source"] == "lexicon"
 
+    def test_ferramenta_coni_decimal_preserves_separator(self):
+        """R236 — "13,7" NUNCA pode virar "137" (erro de 10× auto-gravado em
+        produção: folhas 2366/2367/2368/2517). O decimal é canónico com
+        vírgula; "13.7" normaliza para "13,7" (snap cosmético)."""
+        for raw, expected, status in [
+            ("13,7", "13,7", "confirmed"),
+            ("13.7", "13,7", "snapped"),
+        ]:
+            sheet_data = {
+                "template_name": "bobine_formato", "header": {}, "footer": {},
+                "rows": [{"of": "262107", "qtd": "5", "coni": raw}],
+            }
+            scoring, *_ = shadow_score(sheet_data, None, _REFS)
+            cell = scoring["rows"][0]["fields"]["coni"]
+            assert cell["value"] == expected, (raw, cell)
+            assert cell["status"] == status, (raw, cell)
+
     @pytest.mark.parametrize("bad", ["T", "ABC"])
     def test_ferramenta_coni_invalid_value_with_winner_is_forced_rule_match(self, bad):
         sheet_data = {

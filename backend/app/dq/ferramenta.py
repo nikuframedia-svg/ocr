@@ -11,6 +11,12 @@ from typing import Any
 
 ALLOWED_FERRAMENTA_TEXT = frozenset({"CONI", "TORRES", "OCT", "CIL", "CIO", "CIB"})
 _NUMERIC_RE = re.compile(r"^\d+$")
+# R236 — ferramenta decimal (ex.: "13,7"). O `_clean_token` remove pontuação,
+# pelo que "13,7" virava "137" (erro de 10× auto-gravado em produção — folhas
+# 2366/2367/2368/2517, corrigido à mão pelos operadores). Reconhecer o decimal
+# ANTES de limpar e canonicalizar com vírgula (convenção PT do motor, igual ao
+# `esp` em `_format_value`).
+_DECIMAL_RE = re.compile(r"^(\d{1,3})\s*[.,]\s*(\d{1,2})$")
 
 
 def _clean_token(value: Any) -> str:
@@ -29,6 +35,11 @@ def normalize_ferramenta(value: Any) -> str | None:
     such as ``OCT.``/``oct`` and ``CONI.``/``Coni`` are canonicalised. Numeric
     values are preserved as their textual number.
     """
+    raw = str(value if value is not None else "").strip()
+    decimal = _DECIMAL_RE.fullmatch(raw)
+    if decimal:
+        # R236 — preservar o separador decimal ("13,7" nunca pode virar "137").
+        return f"{decimal.group(1)},{decimal.group(2)}"
     token = _clean_token(value)
     if not token:
         return ""
