@@ -48,14 +48,21 @@ class RereadResult:
 
 
 def _normalize_answer(text: str, options: tuple[str, str]) -> str | None:
-    """Só aceita uma resposta que case EXATAMENTE com uma das opções
-    (compacto alfanumérico) — qualquer outra coisa é 'não sei'."""
-    compact = re.sub(r"[^A-Z0-9]+", "", str(text or "").upper())
-    matches = [
-        o for o in options
-        if re.sub(r"[^A-Z0-9]+", "", o.upper()) == compact
-    ]
-    return matches[0] if len(matches) == 1 else None
+    """Extrai qual das duas opções o VLM escolheu, tolerando texto à volta
+    ("é o 262109." → 262109). Uma opção casa se o seu compacto alfanumérico
+    aparece na resposta compacta; havendo empate (ex.: 100 ⊂ 1000) decide a
+    igualdade exata. Sem match único → 'não sei' (nunca inventa)."""
+    resp = re.sub(r"[^A-Z0-9]+", "", str(text or "").upper())
+    if not resp:
+        return None
+    opt_c = {o: re.sub(r"[^A-Z0-9]+", "", o.upper()) for o in options}
+    substr = [o for o, c in opt_c.items() if c and c in resp]
+    if len(substr) == 1:
+        return substr[0]
+    if len(substr) > 1:  # opções encaixadas — a igualdade exata decide
+        exact = [o for o in substr if opt_c[o] == resp]
+        return exact[0] if len(exact) == 1 else None
+    return None
 
 
 def discriminative_reread(
