@@ -132,6 +132,55 @@ def invalidate_cache() -> None:
         _cache_at = 0.0
 
 
+# R242/D1 — prior de PRODUÇÃO: OFs com atividade validada recente são a
+# priori mais prováveis (medido: P(ativa 14d | OF verdadeira)=71.2% vs 2.2%
+# para uma OF aleatória do plano — razão 32×; quant_context_priors.py).
+_activity_cache: tuple[float, str, frozenset[str]] | None = None
+_ACTIVITY_TTL_S = 300.0
+
+
+def recent_active_ofs(
+    as_of: str | None = None, window_days: int = 14
+) -> frozenset[str]:
+    """OFs (6 dígitos, zero-padded) com produção VALIDADA em
+    [as_of−window, as_of), ESTRITAMENTE antes do dia — a produção do próprio
+    dia nunca alimenta o prior (anti-circularidade: a escolha de hoje do
+    motor não se pode reforçar a si própria hoje). ``as_of`` ISO YYYY-MM-DD;
+    default = hoje. Falha → frozenset() (prior desliga-se sozinho)."""
+    global _activity_cache
+    import datetime as _dt
+
+    day = as_of or _dt.date.today().isoformat()
+    with _lock:
+        now = time.time()
+        if (_activity_cache is not None
+                and _activity_cache[1] == day
+                and now - _activity_cache[0] <= _ACTIVITY_TTL_S):
+            return _activity_cache[2]
+    lo = (_dt.date.fromisoformat(day)
+          - _dt.timedelta(days=window_days)).isoformat()
+    out: set[str] = set()
+    try:
+        with db.conn() as c:
+            rows = c.execute(
+                """SELECT DISTINCT pr.of FROM production_rows pr
+                   WHERE pr.sheet_status = 'validated'
+                     AND pr.of IS NOT NULL
+                     AND pr.sheet_iso_date >= ? AND pr.sheet_iso_date < ?""",
+                (lo, day),
+            ).fetchall()
+        for r in rows:
+            s = "".join(ch for ch in str(r["of"]) if ch.isdigit())
+            if s:
+                out.add(s.zfill(6) if len(s) <= 6 else s)
+    except Exception:  # noqa: BLE001
+        return frozenset()
+    result = frozenset(out)
+    with _lock:
+        _activity_cache = (time.time(), day, result)
+    return result
+
+
 def remaining(
     entry: dict, consumption: dict | None = None, phase: str | None = None
 ) -> float:

@@ -989,7 +989,8 @@ def _fs_value_weight(field: str, entry: dict, idx: dict) -> float:
     return max(_FS_W_MIN, min(_FS_W_CAP, math.log2(m / u)))
 
 
-def _fs_row_context(row: dict, idx: dict, score_fields=None) -> dict:
+def _fs_row_context(row: dict, idx: dict, score_fields=None,
+                    extra_bias: dict | None = None) -> dict:
     """R236 — contexto por-linha do scoring FS (calculado 1x por linha):
     valores de dims presentes, conjuntos de entry-ids dentro da tolerância
     (janelas ±tol via bisect), validade da OF escrita, e memo do peso
@@ -1045,6 +1046,11 @@ def _fs_row_context(row: dict, idx: dict, score_fields=None) -> dict:
         "of_written": of_written,
         "of_written_fams": of_written_fams,
         "joint_memo": {},
+        # R242 — bias de CONTEXTO (bits) por entry: prior de produção (D1:
+        # {"of": {of_key: +bits}, "of_default": bits_inativa}) e coerência de
+        # folha (D2: {"coh_of": {of_key: +bits}, "coh_cliente": {compact:
+        # +bits}}). None/{} = sem efeito (testes, arranque sem DB).
+        "extra_bias": extra_bias or None,
         # Denominador do peso conjunto com o prior de corpus (ver
         # _FS_U_MIN_CORPUS): inerte no plano real, evita margens colapsadas
         # em planos minúsculos.
@@ -1152,6 +1158,24 @@ def _entry_bits_score(
         )
         if n_disagree:
             bits += max(_FS_DIM_DISAGREE_CAP, n_disagree * _FS_DIM_DISAGREE)
+
+    # R242 — bias de contexto: prior de produção (D1) + coerência de folha
+    # (D2). Sinais MEDIDOS (quant5/6), com caps — quebram empates a favor do
+    # contexto, nunca vencem evidência real (w_of exato ≈ 9.4 ≫ caps ±2).
+    eb = ctx.get("extra_bias")
+    if eb:
+        entry_of = str(entry.get("_of") or entry.get("of") or "").strip()
+        prod = eb.get("of")
+        if prod is not None and entry_of:
+            bits += prod.get(entry_of, float(eb.get("of_default") or 0.0))
+        coh_of = eb.get("coh_of")
+        if coh_of and entry_of:
+            bits += coh_of.get(entry_of, 0.0)
+        coh_cli = eb.get("coh_cliente")
+        if coh_cli:
+            cli_c = _cliente_compact(entry.get("cliente"))
+            if cli_c:
+                bits += coh_cli.get(cli_c, 0.0)
     return bits
 
 
@@ -1575,6 +1599,7 @@ def _best_scored_entry(
     min_agree: int = 1,
     trace: dict | None = None,
     idx: dict | None = None,
+    extra_bias: dict | None = None,
 ) -> dict | None:
     """Escolhe a melhor entry do plan por EVIDÊNCIA EM BITS (R236 —
     Fellegi-Sunter com parâmetros medidos; ver `_entry_bits_score`).
@@ -1600,7 +1625,7 @@ def _best_scored_entry(
     # os do vencedor no fim. Poupa ~1,7M dicts/folha no caso de produção.
     _want_reasons = trace is not None
     idx = idx or _get_indices(refs)
-    fs_ctx = _fs_row_context(row, idx, score_fields)
+    fs_ctx = _fs_row_context(row, idx, score_fields, extra_bias=extra_bias)
     eligible: list[tuple] = []
     for order, (k, e) in enumerate(entries_by_key.items()):
         if "_of" not in e:
@@ -2063,6 +2088,7 @@ def _choose_row_alignment(
     score_fields: set[str] | frozenset[str] | None = None,
     template_name: str | None = None,
     trace: dict | None = None,
+    extra_bias: dict | None = None,
 ) -> tuple[str, dict, dict[str, list[dict]]]:
     """R236/R240 — escolhe o alinhamento de colunas com MAIS evidência:
     pontua o winner (bits) de cada hipótese sobre o seu pool de candidatos e
@@ -2082,7 +2108,7 @@ def _choose_row_alignment(
         pool = _candidate_entries_by_key(candidates_by_field, score_fields)
         winner = (
             _best_scored_entry(pool, variant, refs, current_phase,
-                               score_fields, idx=idx)
+                               score_fields, idx=idx, extra_bias=extra_bias)
             if pool else None
         )
         # R240 — fontes de risco (modelo/lote → OF) exigem corroboração: o
@@ -2115,6 +2141,7 @@ def _find_winner_entry(
     score_fields: set[str] | frozenset[str] | None = None,
     force_top1: bool = True,
     trace: dict | None = None,
+    extra_bias: dict | None = None,
 ) -> dict | None:
     """R223 — votação holística sobre um pool LARGO de candidatos (todos os
     top-K de cada campo). Full-scan do plano só como fallback se o pool não
@@ -2122,7 +2149,7 @@ def _find_winner_entry(
     pool = _candidate_entries_by_key(candidates_by_field, score_fields)
     winner = (
         _best_scored_entry(pool, row, refs, current_phase, score_fields,
-                           trace=trace, idx=idx)
+                           trace=trace, idx=idx, extra_bias=extra_bias)
         if pool else None
     )
 
@@ -2135,7 +2162,7 @@ def _find_winner_entry(
         if entries_by_key:
             winner = _best_scored_entry(
                 entries_by_key, row, refs, current_phase, score_fields,
-                trace=trace, idx=idx,
+                trace=trace, idx=idx, extra_bias=extra_bias,
             )
             if trace is not None:
                 trace["fallback_full_scan"] = True
@@ -2178,6 +2205,7 @@ def select_winner(
     refs: dict,
     template_name: str | None = None,
     current_phase: str | None = None,
+    extra_bias: dict | None = None,
 ) -> dict | None:
     """R236 — caminho público de seleção de winner para UMA linha (o mesmo
     que `_score_row` usa: alinhamento por hipóteses → candidatos → winner).
@@ -2186,11 +2214,11 @@ def select_winner(
     idx = _get_indices(refs)
     _label, row2, candidates_by_field = _choose_row_alignment(
         dict(row), refs, idx, set(_ROW_FIELDS), current_phase, None,
-        template_name,
+        template_name, extra_bias=extra_bias,
     )
     return _find_winner_entry(
         candidates_by_field, row2, refs, idx, current_phase, None,
-        force_top1=True,
+        force_top1=True, extra_bias=extra_bias,
     )
 
 
@@ -3007,6 +3035,7 @@ def _score_row(
     template_name: str | None = None,
     force_top1: bool = True,
     trace_sink: list | None = None,
+    extra_bias: dict | None = None,
 ) -> tuple[dict, int, int, int, int, int]:
     """R123 / R125 — itera os `row_fields` do template (não os 10 fixos
     do bobine).
@@ -3036,7 +3065,7 @@ def _score_row(
     # escolhida — o resto do fluxo continua idêntico.
     _align_label, row, candidates_by_field = _choose_row_alignment(
         row, refs, idx, cc_fields, current_phase, score_fields,
-        template_name, trace=wt,
+        template_name, trace=wt, extra_bias=extra_bias,
     )
     winner = _find_winner_entry(
         candidates_by_field,
@@ -3047,6 +3076,7 @@ def _score_row(
         score_fields,
         force_top1=force_top1,
         trace=wt,
+        extra_bias=extra_bias,
     )
 
     obra_concluida = _all_eligible_phase_full(
@@ -3614,20 +3644,86 @@ def shadow_score(
     # usada para desempatar o winner e detectar obra concluída.
     current_phase = _current_phase(sheet_data, refs)
 
+    # R242/D1 — prior de PRODUÇÃO: OFs com atividade validada recente (janela
+    # 14d, estritamente antes de hoje) recebem o bias medido (+2.0/-1.77 bits;
+    # P(ativa|verdadeira)=71.2% vs 2.2% aleatória — quant6). Sem DB/produção →
+    # None (testes e arranque ficam byte-idênticos).
+    prod_bias: dict | None = None
+    try:
+        from app.pipeline.of_consumption import recent_active_ofs
+
+        active = recent_active_ofs()
+        if active:
+            q6 = (_load_cross_params().get("quant6_production_prior") or {})
+            ab = float(q6.get("production_prior_bits") or 2.0)
+            ib = float(q6.get("production_prior_inactive_bits") or -1.77)
+            prod_bias = {"of": {k: ab for k in active}, "of_default": ib}
+    except Exception:  # noqa: BLE001 — prior é opcional por construção
+        prod_bias = None
+
     out_rows = []
-    snapped = confirmed = na = very_diff = 0
+    row_tallies: list[tuple[int, int, int, int]] = []
     for i, row in enumerate(rows):
         row_out, s, c, n, vd, _t = _score_row(
             i, row, refs, idx, row_fields, cross_check_fields,
             current_phase, canonical_template_name,
             force_top1=getattr(template, "has_production_rows", True),
             trace_sink=trace_sink,
+            extra_bias=prod_bias,
         )
         out_rows.append(row_out)
-        snapped += s
-        confirmed += c
-        na += n
-        very_diff += vd
+        row_tallies.append((s, c, n, vd))
+
+    # R242/D2 — COERÊNCIA DE FOLHA (passe 2): linhas com winner marginal são
+    # re-pontuadas com o bias dos vizinhos ADJACENTES confiantes (lift medido
+    # quant5: mesma OF adjacente 21× → +4.42 bits, mesmo cliente 7.9× → +2.98;
+    # ambos cap +2.0 — o contexto quebra empates, nunca vence evidência real).
+    q5 = (_load_cross_params().get("quant5_sheet_coherence") or {})
+    coh_of_bits = min(2.0, float(q5.get("coherence_of_bits") or 0.0))
+    coh_cli_bits = min(2.0, float(q5.get("coherence_cliente_bits") or 0.0))
+    if coh_of_bits > 0 and len(out_rows) > 1:
+        def _confident(ro: dict) -> bool:
+            return bool(
+                ro.get("winner_of")
+                and float(ro.get("winner_margin_bits") or 0.0) >= _FS_MARGIN_DECISIVE
+            )
+
+        for i, ro in enumerate(out_rows):
+            if _confident(ro) or not _row_has_any_value(rows[i]):
+                continue
+            coh_of: dict[str, float] = {}
+            coh_cli: dict[str, float] = {}
+            for j in (i - 1, i + 1):
+                if 0 <= j < len(out_rows) and _confident(out_rows[j]):
+                    n_of = str(out_rows[j].get("winner_of") or "")
+                    if n_of:
+                        coh_of[n_of] = coh_of_bits
+                    n_cli = _cliente_compact(
+                        ((out_rows[j].get("fields") or {}).get("cliente") or {}).get("value")
+                    )
+                    if n_cli and coh_cli_bits > 0:
+                        coh_cli[n_cli] = coh_cli_bits
+            if not coh_of and not coh_cli:
+                continue
+            bias2 = dict(prod_bias or {})
+            if coh_of:
+                bias2["coh_of"] = coh_of
+            if coh_cli:
+                bias2["coh_cliente"] = coh_cli
+            row_out, s, c, n, vd, _t = _score_row(
+                i, rows[i], refs, idx, row_fields, cross_check_fields,
+                current_phase, canonical_template_name,
+                force_top1=getattr(template, "has_production_rows", True),
+                trace_sink=trace_sink,
+                extra_bias=bias2,
+            )
+            out_rows[i] = row_out
+            row_tallies[i] = (s, c, n, vd)
+
+    snapped = sum(t[0] for t in row_tallies)
+    confirmed = sum(t[1] for t in row_tallies)
+    na = sum(t[2] for t in row_tallies)
+    very_diff = sum(t[3] for t in row_tallies)
 
     # R123 (B9) — header/footer validados (operador vs ListaColaboradores,
     # máquina, etc.) em vez de forçados a NA; os estados contam como

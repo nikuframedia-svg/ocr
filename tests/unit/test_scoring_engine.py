@@ -4115,3 +4115,66 @@ class TestAlignmentHypotheses:
         }
         result = cross_check_sheet(sheet_data, None, _REFS)
         assert result["rows"][0]["winner_of"] != "262107"
+
+
+class TestContextPriors:
+    """R242 — o contexto como evidência: prior de produção (D1, quant6:
+    P(ativa 14d|verdadeira)=71.2% vs 2.2% aleatória) e coerência de folha
+    (D2, quant5: mesma OF adjacente lift 21×). Ambos com cap ±2 bits —
+    quebram empates, nunca vencem evidência real."""
+
+    def _tied_refs(self):
+        # Duas encomendas quase-gémeas: mesmo cliente, designações e dims
+        # iguais — sem contexto, o winner é um empate por ordem.
+        return {
+            "of_to_entries": {
+                "300001": [{"ov": "2900001", "cliente": "GEMEA SA",
+                            "designacao": "TWIN 100", "comp": 1000,
+                            "lbase": 50, "ltopo": 30, "esp": 2.0}],
+                "300002": [{"ov": "2900002", "cliente": "GEMEA SA",
+                            "designacao": "TWIN 100", "comp": 1000,
+                            "lbase": 50, "ltopo": 30, "esp": 2.0}],
+            },
+        }
+
+    def test_production_prior_breaks_tie_toward_active_of(self):
+        from app.pipeline.scoring_engine import select_winner
+
+        row = {"cliente": "GEMEA SA", "modelo": "TWIN 100",
+               "comp_mm": "1000", "lbase": "50", "ltopo": "30", "esp": "2,0"}
+        refs = self._tied_refs()
+        # Sem prior: empate resolvido por ordem (300001).
+        w0 = select_winner(row, refs, "bobine_formato")
+        assert w0 and w0.get("_of") == "300001"
+        # Com prior de produção: a OF ativa (300002) ganha o empate.
+        bias = {"of": {"300002": 2.0}, "of_default": -1.77}
+        w1 = select_winner(row, refs, "bobine_formato", extra_bias=bias)
+        assert w1 and w1.get("_of") == "300002"
+
+    def test_production_prior_never_beats_real_evidence(self):
+        from app.pipeline.scoring_engine import select_winner
+
+        # OF exata escrita para 300001; prior ativo em 300002 (±2 bits)
+        # NÃO pode vencer a evidência real (~9.4 bits da OF exata).
+        row = {"of": "300001", "cliente": "GEMEA SA", "modelo": "TWIN 100"}
+        bias = {"of": {"300002": 2.0}, "of_default": -1.77}
+        w = select_winner(row, self._tied_refs(), "bobine_formato",
+                          extra_bias=bias)
+        assert w and w.get("_of") == "300001"
+
+    def test_sheet_coherence_pulls_weak_row_to_neighbor_of(self):
+        # Linha 0 confiante (OF exata + cliente + modelo); linha 1 só com as
+        # dims partilhadas pelas gémeas (empate) → o passe 2 puxa para a OF
+        # do vizinho confiante.
+        refs = self._tied_refs()
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [
+                {"of": "300002", "cliente": "GEMEA SA", "modelo": "TWIN 100",
+                 "comp_mm": "1000", "lbase": "50", "ltopo": "30", "esp": "2,0"},
+                {"comp_mm": "1000", "lbase": "50", "ltopo": "30", "esp": "2,0"},
+            ],
+        }
+        scoring, *_ = shadow_score(sheet_data, None, refs)
+        assert scoring["rows"][0]["winner_of"] == "300002"
+        assert scoring["rows"][1]["winner_of"] == "300002"

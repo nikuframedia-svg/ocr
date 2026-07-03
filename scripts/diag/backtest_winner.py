@@ -72,12 +72,17 @@ def _neutralize_of_consumption() -> None:
     ofc.remaining = lambda entry, phase=None: float("inf")
 
 
-def _winner_of(engine, row: dict, refs: dict, idx: dict, tpl: str | None):
+def _winner_of(engine, row: dict, refs: dict, idx: dict, tpl: str | None,
+               extra_bias: dict | None = None):
     """Winner de UMA linha pelo caminho do próprio motor. Devolve
     (of_normalizada, margem_bits|None)."""
     select = getattr(engine, "select_winner", None)
     if callable(select):  # R236+ — caminho encapsulado do candidato
-        winner = select(row, refs, template_name=tpl)
+        try:
+            winner = select(row, refs, template_name=tpl,
+                            extra_bias=extra_bias)
+        except TypeError:  # motor sem R242 (sem extra_bias)
+            winner = select(row, refs, template_name=tpl)
         of = engine.normalize_of(
             (winner or {}).get("_of") or (winner or {}).get("of") or "")
         margin = (winner or {}).get("_margin_bits")
@@ -186,6 +191,49 @@ def main() -> None:
                          args.good_cap, args.eng_cap)
     print({k: len(v) for k, v in sets.items()})
 
+    # R242/D1 — prior de produção com a DATA HISTÓRICA de cada folha (a
+    # atividade vem do próprio --db; janela 14d estritamente antes do dia).
+    conb = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
+    sheet_dates: dict[int, str] = {
+        int(r[0]): str(r[1] or "")[:10]
+        for r in conb.execute("SELECT id, captured_at FROM sheets")
+    }
+    prod_events: list[tuple[str, str]] = [
+        (cand.normalize_of(r[0]), str(r[1] or "")[:10])
+        for r in conb.execute(
+            "SELECT of, sheet_iso_date FROM production_rows "
+            "WHERE sheet_status='validated' AND of IS NOT NULL"
+        )
+    ]
+    q6 = {}
+    try:
+        q6 = (json.loads((_REPO / "lexicons" / "cross_params.json")
+                         .read_text(encoding="utf-8"))
+              .get("quant6_production_prior") or {})
+    except (OSError, ValueError):
+        pass
+    _ab = float(q6.get("production_prior_bits") or 2.0)
+    _ib = float(q6.get("production_prior_inactive_bits") or -1.77)
+    _bias_cache: dict[str, dict | None] = {}
+
+    def _prod_bias_for(day: str) -> dict | None:
+        if not day or len(day) < 10:
+            return None
+        if day not in _bias_cache:
+            import datetime as _dt
+            try:
+                d = _dt.date.fromisoformat(day)
+            except ValueError:
+                _bias_cache[day] = None
+                return None
+            lo = (d - _dt.timedelta(days=14)).isoformat()
+            active = {o for o, dd in prod_events if o and lo <= dd < day}
+            _bias_cache[day] = (
+                {"of": {k: _ab for k in active}, "of_default": _ib}
+                if active else None
+            )
+        return _bias_cache[day]
+
     summary: dict = {
         "baseline_ref": args.baseline_ref,
         "baseline_version": base.ENGINE_VERSION,
@@ -208,7 +256,10 @@ def main() -> None:
                 sid, i, tpl, row, t_of = rec[:5]  # SHIFT traz a coluna-fonte em rec[5]
                 try:
                     b_of, _ = _winner_of(base, row, refs, idx_b, tpl)
-                    c_of, mg = _winner_of(cand, row, refs, idx_c, tpl)
+                    c_of, mg = _winner_of(
+                        cand, row, refs, idx_c, tpl,
+                        extra_bias=_prod_bias_for(sheet_dates.get(sid, "")),
+                    )
                 except Exception as exc:  # noqa: BLE001 — não parar o batch
                     errs += 1
                     print(f"  ERRO s{sid} r{i}: {exc}", file=sys.stderr)

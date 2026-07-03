@@ -195,5 +195,35 @@
     "p_ativa_random": 0.022,
     "production_prior_bits": 2.0,
     "production_prior_inactive_bits": -1.77
+  },
+  "quant7_ood_by_age": {
+    "plan_day": "2026-07-03",
+    "buckets": {
+      "0-3": {
+        "n": 476,
+        "ood": 50,
+        "p_ood": 0.107
+      },
+      "4-7": {
+        "n": 323,
+        "ood": 83,
+        "p_ood": 0.258
+      },
+      "8-14": {
+        "n": 290,
+        "ood": 67,
+        "p_ood": 0.233
+      },
+      "15-30": {
+        "n": 1426,
+        "ood": 285,
+        "p_ood": 0.2
+      },
+      ">30": {
+        "n": 874,
+        "ood": 293,
+        "p_ood": 0.336
+      }
+    }
   }
 }
