@@ -225,5 +225,16 @@
         "p_ood": 0.336
       }
     }
+  },
+  "calibration": {
+    "temperature_bits": 2.5,
+    "s_ood_bits": 10.0,
+    "brier": 0.108,
+    "n_samples": 412,
+    "chosen_by": "calibração na REGIÃO DE DECISÃO (buckets >=0.6 com gap <=6pp; 0.9-1.0: conf .98 vs acc .96, n=248) — preferida ao Brier-mínimo (T=2.0/s_ood=12, brier .1073) que espalha a massa OOD para 0.6-0.7 (gap .38). Ponto cego conhecido: banda 0.5-0.6 = OOD não separável por um s_ood escalar (conf .55, acc .11); nunca grava com o gate ON (thresholds >=0.90) — melhoria futura: s_ood date-aware / feature OOD própria (quant7).",
+    "runs": [
+      "reports/backtest_winner_r243",
+      "reports/backtest_winner_r243b"
+    ]
   }
 }

@@ -68,6 +68,16 @@ _REFS = {
 }
 
 
+
+def _sans_r243(items):
+    """Compara itens da fila to_analisar ignorando os campos novos do R243
+    (decision_confidence, review_priority) — os testes estruturais antigos
+    validam o resto do item; os campos novos têm testes próprios."""
+    drop = ("decision_confidence", "review_priority")
+    if isinstance(items, dict):
+        return {k: v for k, v in items.items() if k not in drop}
+    return [{k: v for k, v in it.items() if k not in drop} for it in items]
+
 class TestUtilities:
     def test_lev_distance_basic(self):
         assert _lev_distance("abc", "abc") == 0
@@ -343,7 +353,7 @@ class TestShadowScore:
             "ref": "2,6",
             "ref_source": "sap",
             "reason": "Motor propõe valor muito diferente do OCR",
-        } in result["to_analisar"]
+        } in _sans_r243(result["to_analisar"])
 
     def test_esp_prefers_stocksap_over_plan_when_lote_present(self):
         refs = {
@@ -451,7 +461,7 @@ class TestShadowScore:
         # Snapped não vai para a fila to_analisar (essa é só para NO_MATCH).
         assert not any(
             item["field_path"] == f"rows[0].{field}"
-            for item in result["to_analisar"]
+            for item in _sans_r243(result["to_analisar"])
         )
 
     def test_larg_mm_stocksap_over_color_tolerance_substitutes_reference(self):
@@ -999,7 +1009,7 @@ class TestShadowScore:
                 "ref": "",
                 "ref_source": "syntax",
                 "reason": "Valor inválido para o formato esperado",
-            } in result["to_analisar"]
+            } in _sans_r243(result["to_analisar"])
 
     def test_header_n_operador_valid_syntax_without_colaboradores_confirms(self):
         refs = {"available": True, "of_to_entries": {}, "lotes_sap_full": {}, "colaboradores": {}}
@@ -1043,7 +1053,7 @@ class TestShadowScore:
                 "ref": "",
                 "ref_source": "syntax",
                 "reason": "Valor inválido para o formato esperado",
-            } in result["to_analisar"]
+            } in _sans_r243(result["to_analisar"])
 
     def test_header_cod_maquina_valid_syntax_without_maquinas_confirms(self):
         refs = {"available": True, "of_to_entries": {}, "lotes_sap_full": {}}
@@ -1079,13 +1089,13 @@ class TestShadowScore:
         assert result["footer"]["horas_trabalhadas"]["status"] == "NO_MATCH"
         assert "ref" not in result["footer"]["colunas_produzidas"]
         assert "ref" not in result["footer"]["horas_trabalhadas"]
-        assert {item["field_path"] for item in result["to_analisar"]} == {
+        assert {item["field_path"] for item in _sans_r243(result["to_analisar"])} == {
             "footer.colunas_produzidas",
             "footer.horas_trabalhadas",
         }
-        assert {item["ref"] for item in result["to_analisar"]} == {""}
-        assert {item["ref_source"] for item in result["to_analisar"]} == {"syntax"}
-        assert {item["reason"] for item in result["to_analisar"]} == {
+        assert {item["ref"] for item in _sans_r243(result["to_analisar"])} == {""}
+        assert {item["ref_source"] for item in _sans_r243(result["to_analisar"])} == {"syntax"}
+        assert {item["reason"] for item in _sans_r243(result["to_analisar"])} == {
             "Valor inválido para o formato esperado",
         }
 
@@ -1122,7 +1132,7 @@ class TestShadowScore:
                 "ref": "",
                 "ref_source": "syntax",
                 "reason": "Valor inválido para o formato esperado",
-            } in result["to_analisar"]
+            } in _sans_r243(result["to_analisar"])
 
     @pytest.mark.parametrize(
         ("value", "expected_status"),
@@ -1169,7 +1179,7 @@ class TestShadowScore:
                 "ref": "",
                 "ref_source": "syntax",
                 "reason": "Valor inválido para o formato esperado",
-            } in result["to_analisar"]
+            } in _sans_r243(result["to_analisar"])
 
     def test_header_n_operador_validates_against_colaboradores(self):
         refs = {
@@ -1238,7 +1248,7 @@ class TestShadowScore:
             "ref": "AUGUSTO MONTEIRO",
             "ref_source": "colaboradores",
             "reason": "Motor propõe valor muito diferente do OCR",
-        } in bad["to_analisar"]
+        } in _sans_r243(bad["to_analisar"])
         assert {
             "section": "header",
             "row_index": None,
@@ -1248,7 +1258,7 @@ class TestShadowScore:
             "ref": "537",
             "ref_source": "colaboradores",
             "reason": "Motor propõe valor muito diferente do OCR",
-        } in bad["to_analisar"]
+        } in _sans_r243(bad["to_analisar"])
 
     def test_header_operador_alias_matches_colaborador_identity(self):
         refs = {
@@ -1354,7 +1364,7 @@ class TestShadowScore:
             "ref": "10000537",
             "ref_source": "colaboradores",
             "reason": "Motor propõe valor muito diferente do OCR",
-        } in wrong_pernr["to_analisar"]
+        } in _sans_r243(wrong_pernr["to_analisar"])
 
         assert conflict["header"]["n_operador"]["status"] == "NO_MATCH"
         assert conflict["header"]["n_operador"]["ref"] == "537"
@@ -1401,7 +1411,7 @@ class TestShadowScore:
             "ref": "",
             "ref_source": "maquinas",
             "reason": "Valor não encontrado no catálogo de máquinas",
-        } in bad_legacy["to_analisar"]
+        } in _sans_r243(bad_legacy["to_analisar"])
 
     def test_header_cod_maquina_must_match_resolved_setor(self):
         from app.pipeline.scoring_engine import cross_check_sheet
@@ -1440,7 +1450,7 @@ class TestShadowScore:
             "ref": "M032",
             "ref_source": "maquinas",
             "reason": "Motor propõe valor muito diferente do OCR",
-        } in result["to_analisar"]
+        } in _sans_r243(result["to_analisar"])
 
     def test_no_ref_fields_validate_by_local_rule(self):
         """PRI/QTD preenchidos ficam comparáveis por regra local."""
@@ -1672,7 +1682,7 @@ class TestShadowScore:
         assert legacy["status"] == "NO_MATCH"
         assert legacy.get("ref", "") == ""
         assert legacy["ref_source"] == "sap"
-        assert result["to_analisar"][0] == {
+        assert _sans_r243(result["to_analisar"][0]) == {
             "section": "rows",
             "row_index": 0,
             "field": "lote",
@@ -1718,7 +1728,7 @@ class TestShadowScore:
             "ref": "1200",
             "ref_source": "plan",
             "reason": "Motor propõe valor muito diferente do OCR",
-        } in result["to_analisar"]
+        } in _sans_r243(result["to_analisar"])
 
     def test_winner_picks_entry_via_agreement(self):
         """Linha com cliente+of+modelo a apontar para a mesma entry deve
@@ -1968,7 +1978,7 @@ class TestGlobalWinnerScoring:
             "ref": "262108",
             "ref_source": "plan",
             "reason": "Motor propõe valor muito diferente do OCR",
-        } in result["to_analisar"]
+        } in _sans_r243(result["to_analisar"])
 
     def test_of_agreement_confirms(self):
         """OCR de OF que bate exactamente com plan → confirmed (verde)."""
@@ -3388,7 +3398,7 @@ class TestAcabamentoPreservesOperatorReference:
             "ref": "OMEGA 1500 H",
             "ref_source": "plan",
             "reason": "Motor propõe valor muito diferente do OCR",
-        } in result["to_analisar"]
+        } in _sans_r243(result["to_analisar"])
 
     def test_acabamento_soft_of_and_model_errors_snap_with_winner(self):
         refs = {
@@ -3620,7 +3630,7 @@ class TestToAnalisarCoverage:
         result = cross_check_sheet(sheet_data, None, refs)
 
         assert result["summary"]["no_match"] == 1
-        assert result["to_analisar"] == [{
+        assert _sans_r243(result["to_analisar"]) == [{
             "section": "header",
             "row_index": None,
             "field": "operador",
@@ -3736,7 +3746,7 @@ class TestR132MaqFustes:
         for field in ("inicio", "fim", "duracao", "resolvido"):
             assert fields[field]["status"] == "NO_MATCH"
             assert fields[field]["ref_source"] == "syntax"
-        assert {item["field_path"] for item in result["to_analisar"]} == {
+        assert {item["field_path"] for item in _sans_r243(result["to_analisar"])} == {
             "rows[0].inicio",
             "rows[0].fim",
             "rows[0].duracao",

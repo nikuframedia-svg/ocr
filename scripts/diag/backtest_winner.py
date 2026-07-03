@@ -86,7 +86,7 @@ def _winner_of(engine, row: dict, refs: dict, idx: dict, tpl: str | None,
         of = engine.normalize_of(
             (winner or {}).get("_of") or (winner or {}).get("of") or "")
         margin = (winner or {}).get("_margin_bits")
-        return of, margin
+        return of, margin, (winner or {}).get("_bits")
     # Caminho clássico (R231): realinhar → candidatos → winner.
     row2 = engine._realign_misplaced_of(dict(row), idx, tpl)
     if hasattr(engine, "_realign_misplaced_cliente"):
@@ -99,7 +99,7 @@ def _winner_of(engine, row: dict, refs: dict, idx: dict, tpl: str | None,
         cbf, row2, refs, idx, None, None, force_top1=True)
     of = engine.normalize_of(
         (winner or {}).get("_of") or (winner or {}).get("of") or "")
-    return of, (winner or {}).get("_margin_bits")
+    return of, (winner or {}).get("_margin_bits"), (winner or {}).get("_bits")
 
 
 _SHIFT_TOKEN_RE = re.compile(r"(?<!\d)(\d{5,6})(?!\d)")
@@ -117,7 +117,8 @@ def _labeled_sets(db: Path, engine, plan_of_keys: set[str],
         m = _ID_EDIT_RE.match(r["field_path"])
         if m:
             id_edit_rows[r["sheet_id"]].add(int(m.group(1)))
-    sets: dict[str, list] = {"CORR": [], "GOOD": [], "ENG": [], "SHIFT": []}
+    sets: dict[str, list] = {"CORR": [], "GOOD": [], "ENG": [], "SHIFT": [],
+                             "OOD": []}
     for s in con.execute(
         "SELECT id, sheet_data, raw_extraction FROM sheets "
         "WHERE status='validated' AND raw_extraction IS NOT NULL "
@@ -135,7 +136,12 @@ def _labeled_sets(db: Path, engine, plan_of_keys: set[str],
                 continue
             t_of = engine.normalize_of((rf[i] or {}).get("of"))
             if not t_of or t_of not in plan_of_keys:
-                continue  # plano de hoje não cobre — fora do backtest
+                # R243 — conjunto OOD: a verdade está FORA do plano de hoje
+                # (quant7: 10.7% mesmo em folhas frescas). A resposta certa é
+                # ABSTER; usado para calibrar s_ood e medir taxa de abstenção.
+                if t_of and len(sets["OOD"]) < 80:
+                    sets["OOD"].append((s["id"], i, tpl, dict(rr[i]), t_of))
+                continue
             r_of = engine.normalize_of((rr[i] or {}).get("of"))
             rec = (s["id"], i, tpl, dict(rr[i]), t_of)
             # R240 — conjunto SHIFT: a OF verdadeira estava escrita NOUTRA
@@ -170,6 +176,8 @@ def main() -> None:
     ap.add_argument("--eng-cap", type=int, default=70)
     ap.add_argument("--out-dir", type=Path,
                     default=Path("reports/backtest_winner"))
+    ap.add_argument("--calibrate", action="store_true",
+                    help="fitar T/s_ood e gravar em lexicons/cross_params.json")
     args = ap.parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -240,6 +248,8 @@ def main() -> None:
         "candidate_version": cand.ENGINE_VERSION,
         "plan": str(args.plan), "sap": str(args.sap), "sets": {},
     }
+    cal_samples: list[tuple[float, float, float]] = []
+    ood_stats = [0, 0]  # [n, abstencoes]
     flips_path = args.out_dir / "flips.csv"
     with flips_path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
@@ -255,8 +265,8 @@ def main() -> None:
             for rec in S:
                 sid, i, tpl, row, t_of = rec[:5]  # SHIFT traz a coluna-fonte em rec[5]
                 try:
-                    b_of, _ = _winner_of(base, row, refs, idx_b, tpl)
-                    c_of, mg = _winner_of(
+                    b_of, _bm, _bb = _winner_of(base, row, refs, idx_b, tpl)
+                    c_of, mg, cb = _winner_of(
                         cand, row, refs, idx_c, tpl,
                         extra_bias=_prod_bias_for(sheet_dates.get(sid, "")),
                     )
@@ -265,6 +275,13 @@ def main() -> None:
                     print(f"  ERRO s{sid} r{i}: {exc}", file=sys.stderr)
                     continue
                 B, C = b_of == t_of, c_of == t_of
+                if c_of and cb is not None:
+                    cal_samples.append(
+                        (float(cb), float(mg if mg is not None else 99.0),
+                         1.0 if C else 0.0))
+                if name == "OOD":
+                    ood_stats[0] += 1
+                    ood_stats[1] += 0 if c_of else 1  # absteve = certo
                 if name == "SHIFT" and len(rec) > 5:
                     shift_detail.append((str(rec[5]), B, C))
                 b_ok += B
@@ -320,7 +337,7 @@ def main() -> None:
 
     # Total HISTÓRICO comparável (CORR+GOOD+ENG — a referência 89.2% do R236
     # foi medida sem SHIFT; linhas SHIFT podem duplicar as de CORR/ENG).
-    core = [s for k, s in summary["sets"].items() if k != "SHIFT"]
+    core = [s for k, s in summary["sets"].items() if k in ("CORR", "GOOD", "ENG")]
     tot_b = sum(s["baseline_ok"] for s in core)
     tot_c = sum(s["candidate_ok"] for s in core)
     tot_n = sum(s["n"] for s in core)
@@ -347,6 +364,70 @@ def main() -> None:
             and gate_shift
         ),
     }
+    # R243 — calibração (T, s_ood) por grid-search a minimizar o Brier e
+    # relatório de reliability (|confiança − acerto| por bucket).
+    if cal_samples:
+        import math as _math
+
+        def _p(bits, margin, t, s_ood):
+            eff = min(margin, bits - s_ood)
+            return 1.0 / (1.0 + 2.0 ** (-eff / t))
+
+        best_fit = None
+        for t10 in range(10, 81, 5):
+            for s_ood in range(0, 17):
+                t = t10 / 10.0
+                brier = sum(
+                    (_p(b, m, t, float(s_ood)) - y) ** 2
+                    for b, m, y in cal_samples
+                ) / len(cal_samples)
+                if best_fit is None or brier < best_fit[0]:
+                    best_fit = (brier, t, float(s_ood))
+        brier, t_fit, s_fit = best_fit
+        buckets: dict[int, list[tuple[float, float]]] = defaultdict(list)
+        for b, m, y in cal_samples:
+            pv = _p(b, m, t_fit, s_fit)
+            buckets[min(9, int(pv * 10))].append((pv, y))
+        reliability = []
+        max_gap = 0.0
+        for k in sorted(buckets):
+            v = buckets[k]
+            conf = sum(p for p, _ in v) / len(v)
+            acc = sum(y for _, y in v) / len(v)
+            gap = abs(conf - acc)
+            if len(v) >= 10:
+                max_gap = max(max_gap, gap)
+            reliability.append({"bucket": f"{k/10:.1f}-{(k+1)/10:.1f}",
+                                "n": len(v), "conf": round(conf, 3),
+                                "acc": round(acc, 3), "gap": round(gap, 3)})
+        summary["calibration"] = {
+            "n_samples": len(cal_samples), "brier": round(brier, 4),
+            "temperature_bits": t_fit, "s_ood_bits": s_fit,
+            "reliability": reliability,
+            "max_gap_buckets_n>=10": round(max_gap, 3),
+        }
+        if ood_stats[0]:
+            summary["ood"] = {"n": ood_stats[0], "abstencoes": ood_stats[1],
+                              "abstain_pct": round(100 * ood_stats[1] / ood_stats[0], 1)}
+        print(f"calibração: T={t_fit} s_ood={s_fit} brier={brier:.4f} "
+              f"max_gap={max_gap:.3f} (n={len(cal_samples)})")
+        for r in reliability:
+            print(f"  {r['bucket']}: n={r['n']:4d} conf={r['conf']:.2f} acc={r['acc']:.2f} gap={r['gap']:.2f}")
+        if ood_stats[0]:
+            print(f"OOD: n={ood_stats[0]} abstenções={ood_stats[1]} ({summary['ood']['abstain_pct']}%)")
+        if getattr(args, "calibrate", False):
+            import json as _json
+            cp = _REPO / "lexicons" / "cross_params.json"
+            params = _json.loads(cp.read_text(encoding="utf-8")) if cp.exists() else {}
+            params["calibration"] = {
+                "fitted_at_run": str(args.out_dir),
+                "temperature_bits": t_fit, "s_ood_bits": s_fit,
+                "brier": round(brier, 4), "n_samples": len(cal_samples),
+            }
+            cp.write_text(_json.dumps(params, indent=2, ensure_ascii=False) + "\n",
+                          encoding="utf-8")
+            print(f"calibração gravada -> {cp}")
+
     (args.out_dir / "summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"TOTAL baseline {summary['total']['baseline_pct']}% | "

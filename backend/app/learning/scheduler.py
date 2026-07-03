@@ -76,6 +76,15 @@ def run_learning_cycle() -> int | None:
                 else:
                     quar_n += 1
         materialize.materialize_overlay()
+        # R244 — refit dos parâmetros do cross (matriz de chars, contagens)
+        # a partir das edits/validadas novas, com auto-gate (pisos de amostra
+        # + deriva limitada + backup). Falha nunca bloqueia o ciclo.
+        try:
+            from app.learning import cross_refit
+
+            cross_refit.refit_from_db()
+        except Exception:
+            logger.exception("cross_refit falhou — ciclo continua")
         store.finish_run(
             run_id,
             status="done",

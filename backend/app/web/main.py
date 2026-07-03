@@ -520,18 +520,26 @@ def _maybe_apply_snap(
     if cell.get("source") == "obra_concluida":
         return False
     engine_status = cell.get("engine_status")
-    # R236 — gate de gravação para winners MARGINAIS (flag, default OFF):
-    # very_different de linha com winner fraco (margem em bits abaixo do
-    # decisivo) mostra a proposta a vermelho mas NÃO grava por cima do OCR.
-    # Caso provado: folha 2367 (encomenda ausente do plano do dia → winner
-    # marginal por OV → esp correto do operador gravado por cima). Ligar com
-    # CROSS_WRITE_GATE_MARGINAL=1 depois do OK do Luís.
+    # R236/R243 — gate de gravação (flag, default OFF = R219 substitui-sempre):
+    # quando ON, a decisão é por PERDA ESPERADA — grava sse P(winner certo) ≥
+    # limiar do campo (1 − C_rev/C_erro: esp/comp 0.98, identidade 0.95,
+    # resto 0.90). A proposta continua visível a vermelho; o OCR do operador
+    # fica intacto até revisão. Sem confiança calibrada na célula (cross
+    # antigo), cai no critério R236 (winner_mode weak_guess). Caso provado:
+    # folha 2367. Ligar com CROSS_WRITE_GATE_MARGINAL=1 depois do OK do Luís.
     if (
         engine_status == "very_different"
-        and cell.get("winner_mode") == "weak_guess"
         and get_settings().cross_write_gate_marginal
     ):
-        return False
+        conf = cell.get("decision_confidence")
+        if conf is not None:
+            from app.pipeline.scoring_engine import write_confidence_threshold
+
+            field_name = field_path.rsplit(".", 1)[-1]
+            if float(conf) < write_confidence_threshold(field_name):
+                return False
+        elif cell.get("winner_mode") == "weak_guess":
+            return False
     source = cell.get("source")
     ref_source = cell.get("ref_source") or source
     concrete_sources = {"plan", "sap", "ferramenta", "maquinas", "colaboradores", "lexicon"}
@@ -850,6 +858,33 @@ def _run_and_store_cross_check(
 
     if sheet is None or not sheet.get("sheet_data"):
         return result  # defensive — should not happen
+
+    # R246 — descodificação ATIVA (flag, default OFF): para células na zona
+    # cinzenta com duas hipóteses concretas, re-lê o crop com pergunta
+    # discriminativa. Resultados em result['active_rereads'] (shadow — não
+    # mudam valores até a fiabilidade do re-read estar calibrada na fábrica).
+    try:
+        from app.config import get_settings as _gs
+        if _gs().cross_active_reread:
+            from app.pipeline import active_reread
+
+            rereads = []
+            for cand_rr in active_reread.candidates_for_reread(result):
+                rr = active_reread.discriminative_reread(
+                    sheet["image_path"], int(cand_rr["row_index"] or 0),
+                    str(cand_rr["field"]), cand_rr["options"],
+                )
+                if rr is not None:
+                    rereads.append({
+                        "row_index": rr.row_index, "field": rr.field,
+                        "options": list(rr.options), "answer": rr.answer,
+                        "duration_ms": rr.duration_ms,
+                    })
+            if rereads:
+                result["active_rereads"] = rereads
+    except Exception:  # noqa: BLE001 — sensing ativo nunca parte o hot path
+        pass
+
     header = sheet["sheet_data"].get("header", {}) or {}
     operador = header.get("operador") or sheet.get("operador") or "?"
     date_pt = (header.get("data") or "").strip()

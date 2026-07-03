@@ -591,7 +591,22 @@ _STATUS_LABELS = {
 # do veto; (C2) canal humano: veto relaxado p/ rivais da mesma família
 # (p_same_family=0.096 medido) + decision_reason p/ a UI distinguir misread
 # de erro de transcrição. ENG 72.9%→75.7%, TOTAL 90.2%. BUMP obrigatório.
-ENGINE_VERSION = "v27_R241"
+# R242 — contexto como evidência: prior de PRODUÇÃO (P(ativa 14d|verdadeira)
+# =71.2% vs 2.2% aleatória; +2.0/-1.77 bits, anti-circular) + COERÊNCIA de
+# folha (lift medido: OF adjacente 21×, cliente 7.9×; cap +2; passe 2 nas
+# linhas marginais). ENG 80.0%, SHIFT 96.5%, TOTAL 91.8%. BUMP obrigatório.
+# R243 — posterior CALIBRADO (_p_top; T e s_ood fitted no harness com OOD
+# explícito — quant7: 10.7% das linhas frescas têm a OF fora do plano) +
+# decisão de gravação por PERDA ESPERADA (thresholds por classe de campo;
+# absorve a flag CROSS_WRITE_GATE_MARGINAL) + fila to_analisar ordenada por
+# incerteza×criticidade. Reliability: buckets >=0.6 com gap <=6pp; a banda
+# 0.5-0.6 é o ponto cego OOD (conf 0.55, acerto 11%) — nunca grava com o
+# gate ON (thresholds >=0.90), fica em revisão; melhoria futura = s_ood
+# date-aware. R244: refit automático dos params no learning cycle (pisos +
+# deriva limitada + backup). R245: canais de chars POR OPERADOR quando
+# fitted. R246: descodificação ativa (re-read discriminativo de crops,
+# flag OFF até calibrar com imagens na fábrica). BUMP obrigatório.
+ENGINE_VERSION = "v28_R243"
 
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
@@ -1099,7 +1114,8 @@ def _entry_bits_score(
                 # só um misread genuinamente plausível dispensa o veto.
                 token = str(row.get(field) or "")
                 value = entry.get("_of") or entry.get("of") if field == "of" else entry.get("ov")
-                gch = _channel_g(value, token, pad_of=(field == "of"))
+                gch = _channel_g(value, token, pad_of=(field == "of"),
+                                 op=(ctx.get("extra_bias") or {}).get("operator") or "")
                 g_floor = 0.3 if sim >= 0.8 else 0.0
                 g_eff = max(gch, g_floor)
                 if g_eff > 0.0:
@@ -1909,6 +1925,43 @@ def _load_cross_params() -> dict:
         return {}
 
 
+# R243/E1 — POSTERIOR CALIBRADO + OOD explícito. A margem em bits vira uma
+# probabilidade P(top é a linha certa) via logística com temperatura T,
+# limitada pela alternativa "não está no plano" (s_ood): a evidência efetiva
+# é min(margem_para_rival, bits_top − s_ood). T e s_ood são FITTED no
+# harness (backtest_winner --calibrate, minimiza Brier sobre os conjuntos
+# rotulados + OOD; quant7: 10.7% das linhas frescas têm a OF fora do plano
+# de hoje — o OOD é 1 em 9, não um caso raro). Fallbacks razoáveis sem fit.
+def _posterior_p_top(bits_top: float, margin_bits: float | None) -> float:
+    cal = (_load_cross_params().get("calibration") or {})
+    t = max(0.5, float(cal.get("temperature_bits") or 3.0))
+    s_ood = float(cal.get("s_ood_bits") or 4.0)
+    margin_eff = min(
+        float(margin_bits if margin_bits is not None else 99.0),
+        float(bits_top) - s_ood,
+    )
+    return 1.0 / (1.0 + 2.0 ** (-margin_eff / t))
+
+
+# R243/E2 — limiar de gravação por PERDA ESPERADA: grava sse
+# (1−P)·C_erro < C_rev ⇔ P > 1 − C_rev/C_erro. Rácios C_erro/C_rev por
+# classe (defaults defensáveis; a fixar com o Luís): dims críticas de
+# fabrico 50× → 0.98; identidade 20× → 0.95; resto 10× → 0.90.
+_WRITE_P_THRESHOLD = {
+    "esp": 0.98, "comp_mm": 0.98,
+    "of": 0.95, "ov": 0.95, "cliente": 0.95, "modelo": 0.95, "lote": 0.95,
+}
+_REVIEW_CRITICALITY = {
+    "esp": 5.0, "comp_mm": 5.0,
+    "of": 3.0, "ov": 3.0, "cliente": 3.0, "modelo": 3.0, "lote": 3.0,
+}
+
+
+def write_confidence_threshold(field: str) -> float:
+    """P(top) mínimo para auto-gravar `field` (perda esperada, R243)."""
+    return _WRITE_P_THRESHOLD.get(field, 0.90)
+
+
 def _fs_veto_relaxed_bits() -> float:
     """R241/C2 — veto relaxado quando a entry rival é da MESMA família que a
     OF escrita (erro humano de transcrição plausível). Valor fitted:
@@ -1917,8 +1970,16 @@ def _fs_veto_relaxed_bits() -> float:
     return float(hc.get("veto_relaxed_bits") or -3.0)
 
 
-def _char_channel_costs() -> tuple[dict[str, float], float, float]:
-    ch = (_load_cross_params().get("char_channel") or {})
+def _char_channel_costs(op: str = "") -> tuple[dict[str, float], float, float]:
+    params = _load_cross_params()
+    ch = (params.get("char_channel") or {})
+    # R245 — canal POR OPERADOR quando fitted (>=300 pares dele; o refit
+    # R244 povoa char_channel_by_operator sozinho à medida que as correções
+    # crescem). Fallback: matriz global.
+    if op:
+        per_op = (params.get("char_channel_by_operator") or {}).get(op)
+        if per_op:
+            ch = per_op
     return (
         ch.get("sub_costs_bits") or {},
         float(ch.get("cost_default_bits") or 7.0),
@@ -1927,10 +1988,11 @@ def _char_channel_costs() -> tuple[dict[str, float], float, float]:
 
 
 @lru_cache(maxsize=100_000)
-def _channel_align_cost_bits(truth: str, written: str) -> float:
+def _channel_align_cost_bits(truth: str, written: str, op: str = "") -> float:
     """Custo (bits) do alinhamento ótimo escrito|verdadeiro sob a matriz
-    fitted — DP de Needleman-Wunsch com custos por substituição."""
-    subs, default, indel = _char_channel_costs()
+    fitted — DP de Needleman-Wunsch com custos por substituição. ``op``
+    seleciona o canal por operador (R245) quando existe."""
+    subs, default, indel = _char_channel_costs(op)
     n, m = len(truth), len(written)
     if not n or not m:
         return 99.0
@@ -1946,14 +2008,16 @@ def _channel_align_cost_bits(truth: str, written: str) -> float:
     return prev[-1]
 
 
-def _channel_g(truth: object, written: object, *, pad_of: bool = False) -> float:
+def _channel_g(truth: object, written: object, *, pad_of: bool = False,
+               op: str = "") -> float:
     """g ∈ [0, _CHANNEL_G_CAP] — evidência de que `written` é um misread de
-    `truth` segundo o canal de visão fitted. 0 quando o custo excede L0."""
+    `truth` segundo o canal de visão fitted (por operador quando existe).
+    0 quando o custo excede L0."""
     t = _identifier_compact(truth, pad_of=pad_of)
     w = _identifier_compact(written, pad_of=pad_of)
     if not t or not w:
         return 0.0
-    cost = _channel_align_cost_bits(t, w)
+    cost = _channel_align_cost_bits(t, w, op)
     return max(0.0, min(_CHANNEL_G_CAP, 1.0 - cost / _CHANNEL_G_L0))
 
 
@@ -2176,6 +2240,11 @@ def _find_winner_entry(
         winner["_winner_mode"] = (
             "strong" if margin >= _FS_MARGIN_DECISIVE else "weak_guess"
         )
+        # R243/E1 — probabilidade calibrada de o winner ser a linha certa
+        # (logística sobre a evidência efetiva, limitada pelo OOD).
+        winner["_p_top"] = round(
+            _posterior_p_top(float(winner.get("_bits") or 0.0),
+                             winner.get("_margin_bits")), 3)
         # R241/C2 — o winner contradiz uma OF escrita e VÁLIDA: marcar a
         # natureza provável do erro (visão vs transcrição humana) para a UI.
         of_written = str((row or {}).get("of") or "").strip()
@@ -2321,6 +2390,10 @@ def _mark_winner_cell(cell: dict, winner: dict | None) -> dict:
     mode = winner.get("_winner_mode")
     if mode:
         out["winner_mode"] = mode
+    # R243 — confiança calibrada do winner na célula (decisão de gravação
+    # por perda esperada + prioridade da fila de revisão).
+    if winner.get("_p_top") is not None:
+        out.setdefault("decision_confidence", winner.get("_p_top"))
     if winner.get("_score_reasons"):
         out["score_reasons"] = winner.get("_score_reasons")
     match_kind = _winner_match_kind(winner)
@@ -3192,6 +3265,7 @@ def _score_row(
         # diferente; é isto que decide winner_mode (decisivo/marginal).
         "winner_bits": (winner or {}).get("_bits") if winner else None,
         "winner_margin_bits": (winner or {}).get("_margin_bits") if winner else None,
+        "winner_p_top": (winner or {}).get("_p_top") if winner else None,
         "winner_score_reasons": (winner or {}).get("_score_reasons") if winner else None,
         "winner_mode": (winner or {}).get("_winner_mode") if winner else None,
         "identity_conflict": False,
@@ -3660,6 +3734,12 @@ def shadow_score(
             prod_bias = {"of": {k: ab for k in active}, "of_default": ib}
     except Exception:  # noqa: BLE001 — prior é opcional por construção
         prod_bias = None
+    # R245 — operador da folha: seleciona o canal de chars por operador
+    # quando fitted (fallback global; sem efeito até haver >=300 pares dele).
+    _op = str((header or {}).get("operador") or "").strip().upper()
+    if _op:
+        prod_bias = dict(prod_bias or {})
+        prod_bias["operator"] = _op
 
     out_rows = []
     row_tallies: list[tuple[int, int, int, int]] = []
@@ -3803,7 +3883,8 @@ def _to_legacy_cell(v5_cell: dict, ref_value: str | None = None) -> dict:
     }
     if v5_cell.get("match_kind"):
         out["match_kind"] = v5_cell.get("match_kind")
-    for key in ("winner_mode", "score_reasons", "forced_from_status", "warning", "empty_ok"):
+    for key in ("winner_mode", "score_reasons", "forced_from_status", "warning",
+                "empty_ok", "decision_confidence", "decision_reason"):
         if key in v5_cell:
             out[key] = v5_cell[key]
     # Ref para tooltip de referência: prioriza `proposed`,
@@ -3874,6 +3955,11 @@ def cross_check_sheet(
             reason = "Valor não encontrado no plan"
         else:
             reason = "Valor não reconhecido pelo validador do campo"
+        # R243/E2 — prioridade da fila: incerteza × criticidade do campo.
+        # O minuto humano gasto onde rende mais (esp/comp > identidade > resto).
+        conf = legacy_cell.get("decision_confidence")
+        uncertainty = 1.0 - float(conf) if conf is not None else 0.5
+        crit = _REVIEW_CRITICALITY.get(field, 1.0)
         return {
             "section": section,
             "row_index": row_index,
@@ -3883,6 +3969,8 @@ def cross_check_sheet(
             "ref": legacy_cell.get("ref", ""),
             "ref_source": ref_source,
             "reason": reason,
+            "decision_confidence": conf,
+            "review_priority": round(crit * uncertainty, 3),
         }
 
     for r in scoring.get("rows", []):
@@ -3947,6 +4035,9 @@ def cross_check_sheet(
         summary["total"] += 1
         if v["status"] == "NO_MATCH":
             to_analisar.append(_review_item("footer", field, v))
+
+    # R243/E2 — fila ordenada por prioridade (incerteza × criticidade).
+    to_analisar.sort(key=lambda it: -float(it.get("review_priority") or 0.0))
 
     result = {
         "checked_at": scoring.get("checked_at"),

@@ -112,6 +112,19 @@ class Settings(BaseSettings):
         ),
     )
 
+    cross_active_reread: bool = Field(
+        default=False,
+        description=(
+            "R246 — descodificação ATIVA: re-lê o crop da célula ambígua com "
+            "uma pergunta discriminativa (A ou B) antes de escalar para "
+            "revisão humana. Default OFF: ligar só depois de calibrar a "
+            "fiabilidade do re-read com ~50 casos do golden set COM imagem "
+            "(na fábrica). Máx. 3 re-reads/folha; resultados guardados em "
+            "cross_check_json['active_rereads'] (shadow — não muda valores "
+            "até haver calibração)."
+        ),
+    )
+
     cross_write_gate_marginal: bool = Field(
         default=False,
         description=(
