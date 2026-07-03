@@ -4055,3 +4055,63 @@ class TestAlignmentHypotheses:
         result = cross_check_sheet(sheet_data, None, _REFS)
         row = result["rows"][0]
         assert row["winner_of"] is None
+
+    def test_of_in_cliente_column_recovered(self):
+        """R240 — OF válida na coluna CLIENTE (8 casos confirmados por humanos
+        no app.db; custo medido 0.29 bits). Coberto por forma, sem regra."""
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"of": "", "cliente": "262107", "modelo": "OMEGA 1200 H"}],
+        }
+        result = cross_check_sheet(sheet_data, None, _REFS)
+        row = result["rows"][0]
+        assert row["winner_of"] == "262107"
+        assert row["fields"]["of"]["value"] == "262107"
+        assert row["fields"]["cliente"]["value"] == "ELECNOR"
+
+    def test_of_in_modelo_column_recovered_with_corroboration(self):
+        """R240 — OF válida na coluna MODELO (o caso perguntado pelo
+        utilizador). Nunca confirmado nos dados (0/1) → exige corroboração
+        (>=2 campos): aqui o cliente corrobora."""
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"of": "", "modelo": "262107", "cliente": "ELECNOR"}],
+        }
+        result = cross_check_sheet(sheet_data, None, _REFS)
+        row = result["rows"][0]
+        assert row["winner_of"] == "262107"
+        assert row["fields"]["of"]["value"] == "262107"
+
+    def test_of_in_modelo_column_alone_stays_for_review(self):
+        """R240 — OF válida na coluna modelo SEM mais nada escrito: sem
+        corroboração não se move (a validade sozinha já está contada na
+        assinatura medida — mover seria dupla contagem). Fica para revisão."""
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"of": "", "modelo": "262107"}],
+        }
+        result = cross_check_sheet(sheet_data, None, _REFS)
+        assert result["rows"][0]["winner_of"] != "262107"
+
+    def test_of_embedded_in_cliente_column(self):
+        """R240 — OF embebida em texto da coluna cliente: extrai a OF e
+        preserva o resto como cliente."""
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"of": "", "cliente": "ELECNOR 262107", "modelo": ""}],
+        }
+        result = cross_check_sheet(sheet_data, None, _REFS)
+        row = result["rows"][0]
+        assert row["winner_of"] == "262107"
+        assert row["fields"]["of"]["value"] == "262107"
+
+    def test_lote_lookalike_not_moved_without_corroboration(self):
+        """R240 — token na coluna LOTE que parece uma OF válida (0/11
+        confirmados nos dados; custo 3.7 bits + corroboração obrigatória):
+        sem mais evidência, NÃO move."""
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"of": "", "lote": "262107"}],
+        }
+        result = cross_check_sheet(sheet_data, None, _REFS)
+        assert result["rows"][0]["winner_of"] != "262107"

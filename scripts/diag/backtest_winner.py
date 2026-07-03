@@ -97,6 +97,9 @@ def _winner_of(engine, row: dict, refs: dict, idx: dict, tpl: str | None):
     return of, (winner or {}).get("_margin_bits")
 
 
+_SHIFT_TOKEN_RE = re.compile(r"(?<!\d)(\d{5,6})(?!\d)")
+
+
 def _labeled_sets(db: Path, engine, plan_of_keys: set[str],
                   good_cap: int, eng_cap: int) -> dict[str, list]:
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
@@ -109,7 +112,7 @@ def _labeled_sets(db: Path, engine, plan_of_keys: set[str],
         m = _ID_EDIT_RE.match(r["field_path"])
         if m:
             id_edit_rows[r["sheet_id"]].add(int(m.group(1)))
-    sets: dict[str, list] = {"CORR": [], "GOOD": [], "ENG": []}
+    sets: dict[str, list] = {"CORR": [], "GOOD": [], "ENG": [], "SHIFT": []}
     for s in con.execute(
         "SELECT id, sheet_data, raw_extraction FROM sheets "
         "WHERE status='validated' AND raw_extraction IS NOT NULL "
@@ -130,6 +133,19 @@ def _labeled_sets(db: Path, engine, plan_of_keys: set[str],
                 continue  # plano de hoje não cobre — fora do backtest
             r_of = engine.normalize_of((rr[i] or {}).get("of"))
             rec = (s["id"], i, tpl, dict(rr[i]), t_of)
+            # R240 — conjunto SHIFT: a OF verdadeira estava escrita NOUTRA
+            # coluna (validação humana do realinhamento). Independente dos
+            # outros conjuntos (uma linha pode estar em ambos).
+            if r_of != t_of:
+                for src in ("ov", "pri", "cliente", "modelo", "lote"):
+                    src_text = str((rr[i] or {}).get(src) or "")
+                    if any(
+                        engine.normalize_of(m.group(1)) == t_of
+                        for m in _SHIFT_TOKEN_RE.finditer(src_text)
+                    ):
+                        sets["SHIFT"].append((s["id"], i, tpl, dict(rr[i]),
+                                              t_of, src))
+                        break
             if i in id_edit_rows.get(s["id"], set()):
                 sets["CORR"].append(rec)
             elif r_of == t_of and len(sets["GOOD"]) < good_cap:
@@ -187,7 +203,9 @@ def main() -> None:
             b_ok = c_ok = b_only = c_only = neither = errs = 0
             margins_ok: list[float] = []
             margins_bad: list[float] = []
-            for sid, i, tpl, row, t_of in S:
+            shift_detail: list[tuple[str, bool, bool]] = []
+            for rec in S:
+                sid, i, tpl, row, t_of = rec[:5]  # SHIFT traz a coluna-fonte em rec[5]
                 try:
                     b_of, _ = _winner_of(base, row, refs, idx_b, tpl)
                     c_of, mg = _winner_of(cand, row, refs, idx_c, tpl)
@@ -196,6 +214,8 @@ def main() -> None:
                     print(f"  ERRO s{sid} r{i}: {exc}", file=sys.stderr)
                     continue
                 B, C = b_of == t_of, c_of == t_of
+                if name == "SHIFT" and len(rec) > 5:
+                    shift_detail.append((str(rec[5]), B, C))
                 b_ok += B
                 c_ok += C
                 b_only += B and not C
@@ -229,26 +249,52 @@ def main() -> None:
                 "cand_margin_bad_p25_p50_p75": [
                     _q(margins_bad, .25), _q(margins_bad, .5), _q(margins_bad, .75)],
             }
+            if shift_detail:
+                by_src: dict[str, list[tuple[bool, bool]]] = defaultdict(list)
+                for src, okb, okc in shift_detail:
+                    by_src[src].append((okb, okc))
+                summary["sets"][name]["by_source"] = {
+                    src: {"n": len(v), "baseline_ok": sum(b for b, _ in v),
+                          "candidate_ok": sum(c for _, c in v)}
+                    for src, v in sorted(by_src.items())
+                }
             s = summary["sets"][name]
             print(f"=== {name} (n={n}) baseline {s['baseline_pct']}% | "
                   f"candidato {s['candidate_pct']}% "
                   f"(só-base {b_only} / só-cand {c_only} / nenhum {neither})")
+            for src, d in (s.get("by_source") or {}).items():
+                print(f"      fonte {src}: n={d['n']} base {d['baseline_ok']} "
+                      f"| cand {d['candidate_ok']}")
         summary["elapsed_s"] = round(time.time() - t0, 1)
 
-    tot_b = sum(s["baseline_ok"] for s in summary["sets"].values())
-    tot_c = sum(s["candidate_ok"] for s in summary["sets"].values())
-    tot_n = sum(s["n"] for s in summary["sets"].values())
+    # Total HISTÓRICO comparável (CORR+GOOD+ENG — a referência 89.2% do R236
+    # foi medida sem SHIFT; linhas SHIFT podem duplicar as de CORR/ENG).
+    core = [s for k, s in summary["sets"].items() if k != "SHIFT"]
+    tot_b = sum(s["baseline_ok"] for s in core)
+    tot_c = sum(s["candidate_ok"] for s in core)
+    tot_n = sum(s["n"] for s in core)
     summary["total"] = {
         "n": tot_n, "baseline_ok": tot_b, "candidate_ok": tot_c,
         "baseline_pct": round(100 * tot_b / tot_n, 1) if tot_n else None,
         "candidate_pct": round(100 * tot_c / tot_n, 1) if tot_n else None,
     }
-    # Gate do plano R236: GOOD tem de ficar a 100% no candidato; total >= baseline.
+    # Gate: GOOD a 100% no candidato; total (core) >= baseline; SHIFT (se
+    # existir) não pior que o baseline.
     good = summary["sets"].get("GOOD") or {}
+    shift = summary["sets"].get("SHIFT") or {}
+    gate_shift = (
+        True if not shift.get("n")
+        else int(shift.get("candidate_ok") or 0) >= int(shift.get("baseline_ok") or 0)
+    )
     summary["gate"] = {
         "good_100pct": good.get("candidate_ok") == good.get("n"),
         "total_not_worse": tot_c >= tot_b,
-        "passed": (good.get("candidate_ok") == good.get("n")) and tot_c >= tot_b,
+        "shift_not_worse": gate_shift,
+        "passed": (
+            good.get("candidate_ok") == good.get("n")
+            and tot_c >= tot_b
+            and gate_shift
+        ),
     }
     (args.out_dir / "summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")

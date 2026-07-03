@@ -1780,14 +1780,43 @@ def _realign_misplaced_of(
 _ALIGN_MOVE_PENALTY_BITS = 1.5
 _EMBEDDED_OF_RE = re.compile(r"(?<!\d)(\d{5,6})(?!\d)")
 
+# R240 — geradores POR FORMA (shape-driven): qualquer coluna de identidade que
+# contenha uma OF VÁLIDA do plano (cheia ou embebida) quando a coluna OF está
+# inválida gera uma variante "move para OF". O custo é o prior MEDIDO e
+# CONDICIONADO à assinatura — P(o movimento é certo | vejo este token nesta
+# coluna com a OF inválida), das 3.413 linhas validadas do app.db, com
+# suavização de Laplace:
+#   ov       131/166 confirmadas → (131+1)/(166+2)=.786 → 0.35 bits
+#   cliente    8/9               → (8+1)/(9+2)   =.818 → 0.29 bits
+#   pri        2/3               → (2+1)/(3+2)   =.600 → 0.74 bits
+#   modelo     0/1               → (0+1)/(1+2)   =.333 → 1.58 bits
+#   lote       0/11              → (0+1)/(11+2)  =.077 → 3.70 bits
+# (lote é caro DE PROPÓSITO: lotes sem letras parecem OFs e nunca se confirmou
+# um único movimento — a evidência do plano tem de pagar 3.7 bits para mover.)
+# Isto elimina a classe de buraco "permutação sem regra": QUALQUER coluna com
+# uma OF plausível entra na busca, com o custo certo — nada fica por cobrir.
+_SHIFT_TO_OF_COST_BITS = {
+    "ov": 0.35, "cliente": 0.29, "pri": 0.74, "modelo": 1.58, "lote": 3.70,
+}
+# OF embebida em texto (vs coluna que É só a OF): sobretaxa fixa pequena.
+_SHIFT_EMBEDDED_SURCHARGE_BITS = 0.5
+# Fontes NUNCA confirmadas nos dados (modelo 0/1, lote 0/11): mover só com
+# CORROBORAÇÃO (winner da variante com >=2 campos a concordar) — a validade
+# da OF sozinha já está contada na assinatura; sem mais nada, seria dupla
+# contagem e um lote numérico "moveria" só por parecer uma OF.
+_SHIFT_REQUIRE_CORROBORATION = frozenset({"modelo", "lote"})
+
 
 def _alignment_hypotheses(
     row: dict, idx: dict | None, template_name: str | None = None
-) -> list[tuple[str, dict, int]]:
-    """Variantes plausíveis de re-atribuição de colunas: (label, linha, nº de
-    campos movidos). Só gera variantes ref-validadas (o valor movido tem de
-    fazer sentido no campo destino); a maioria das linhas fica só com H0."""
-    hyps: list[tuple[str, dict, int]] = [("H0", row, 0)]
+) -> list[tuple[str, dict, float]]:
+    """Variantes plausíveis de re-atribuição de colunas: (label, linha, CUSTO
+    em bits). Só gera variantes ref-validadas (o valor movido tem de fazer
+    sentido no campo destino); a maioria das linhas fica só com H0. R240: além
+    dos geradores semânticos (R223/R231), qualquer coluna de identidade com
+    uma OF válida do plano gera a variante "move para OF" com o custo medido
+    (_SHIFT_TO_OF_COST_BITS) — nenhuma permutação fica sem cobertura."""
+    hyps: list[tuple[str, dict, float]] = [("H0", row, 0.0)]
     if not idx:
         return hyps
     of_to_entries = idx.get("of_to_entries") or {}
@@ -1800,7 +1829,8 @@ def _alignment_hypotheses(
             1 for k in ("of", "ov", "pri", "modelo")
             if str(realigned.get(k) or "") != str(row.get(k) or "")
         )
-        hyps.append(("realign_of", realigned, max(moved, 1)))
+        cost = max(moved, 1) * _ALIGN_MOVE_PENALTY_BITS
+        hyps.append(("realign_of", realigned, cost))
         # Shift COMPLETO (assinatura em 3.1% das linhas): a OF real veio da
         # OV e a coluna OF trazia o CÓDIGO DE MODELO — a Etapa 1 do R231
         # sobrescreve a OF e perde esse texto. Variante extra que o preserva
@@ -1817,13 +1847,52 @@ def _alignment_hypotheses(
             if _is_missing_ocr(modelo_after) or len(_model_compact(modelo_after)) < 4:
                 keep_model = dict(realigned)
                 keep_model["modelo"] = orig_of
-                hyps.append(("realign_of_keep_model", keep_model, max(moved, 1) + 1))
+                hyps.append(("realign_of_keep_model", keep_model,
+                             cost + _ALIGN_MOVE_PENALTY_BITS))
+
+    # R240 — geradores POR FORMA: OF válida (cheia ou embebida) em QUALQUER
+    # coluna de identidade quando a coluna OF é inválida. Cobre por construção
+    # os casos sem regra (OF na coluna modelo/cliente/lote — cliente→OF tem 8
+    # casos confirmados por humanos no app.db). Custo = prior medido por
+    # coluna-fonte; embebida paga sobretaxa.
+    of_text = str(row.get("of") or "").strip()
+    of_key = normalize_of(_identifier_compact(of_text, pad_of=True))
+    of_col_invalid = of_key not in of_to_entries
+    if of_col_invalid:
+        seen_variants = {str(realigned.get("of") or "") if realigned != row else ""}
+        for src, base_cost in _SHIFT_TO_OF_COST_BITS.items():
+            if src in ("ov", "pri"):
+                continue  # cobertos pela Etapa 1 do realign_of (já testada)
+            src_text = str(row.get(src) or "").strip()
+            if not src_text:
+                continue
+            # (a) a coluna É a OF (token completo)
+            full_key = normalize_of(_identifier_compact(src_text, pad_of=True))
+            if full_key and full_key in of_to_entries and full_key not in seen_variants:
+                variant = dict(row)
+                variant["of"] = full_key
+                variant[src] = ""  # o token era a OF, não um valor de `src`
+                hyps.append((f"{src}_to_of", variant, base_cost))
+                seen_variants.add(full_key)
+                continue
+            # (b) OF embebida em texto da coluna ("PETITJEAN 262107")
+            for m in _EMBEDDED_OF_RE.finditer(src_text):
+                token = normalize_of(m.group(1))
+                if token in of_to_entries and token not in seen_variants:
+                    variant = dict(row)
+                    variant["of"] = token
+                    variant[src] = re.sub(
+                        rf"(?<!\d){re.escape(m.group(1))}(?!\d)", " ",
+                        src_text, count=1,
+                    ).strip()
+                    hyps.append((f"{src}_to_of_embedded", variant,
+                                 base_cost + _SHIFT_EMBEDDED_SURCHARGE_BITS))
+                    seen_variants.add(token)
+                    break
 
     # OF embebida em texto livre na coluna OF ("OF 262882 dobrar" → 262882);
     # o resto do texto pode ser o modelo se o campo modelo estiver vazio/lixo.
-    of_text = str(row.get("of") or "").strip()
-    of_norm = normalize_of(_identifier_compact(of_text, pad_of=True))
-    if of_text and of_norm not in of_to_entries:
+    if of_text and of_col_invalid:
         for m in _EMBEDDED_OF_RE.finditer(of_text):
             token = normalize_of(m.group(1))
             if token not in of_to_entries:
@@ -1843,7 +1912,7 @@ def _alignment_hypotheses(
             ):
                 variant["modelo"] = leftover
                 moved = 2
-            hyps.append(("embedded_of", variant, moved))
+            hyps.append(("embedded_of", variant, moved * _ALIGN_MOVE_PENALTY_BITS))
             break
 
     # Cliente na coluna modelo (generaliza o _realign_misplaced_cliente do
@@ -1855,7 +1924,7 @@ def _alignment_hypotheses(
             variant = dict(row)
             variant["cliente"] = modelo_val
             variant["modelo"] = ""
-            hyps.append(("modelo_to_cliente", variant, 1))
+            hyps.append(("modelo_to_cliente", variant, _ALIGN_MOVE_PENALTY_BITS))
 
     return hyps
 
@@ -1870,13 +1939,13 @@ def _choose_row_alignment(
     template_name: str | None = None,
     trace: dict | None = None,
 ) -> tuple[str, dict, dict[str, list[dict]]]:
-    """R236 — escolhe o alinhamento de colunas com MAIS evidência: pontua o
-    winner (bits) de cada hipótese sobre o seu pool de candidatos e fica com
-    a melhor após o prior de -1.5 bits/campo movido. Devolve (label, linha
-    escolhida, candidatos dessa linha) para o resto do fluxo usar tal-qual."""
+    """R236/R240 — escolhe o alinhamento de colunas com MAIS evidência:
+    pontua o winner (bits) de cada hipótese sobre o seu pool de candidatos e
+    fica com a melhor após o CUSTO da hipótese (prior medido por tipo de
+    movimento). Devolve (label, linha escolhida, candidatos dessa linha)."""
     hyps = _alignment_hypotheses(row, idx, template_name)
-    best: tuple[tuple[float, int], str, dict, dict[str, list[dict]]] | None = None
-    for label, variant, moved in hyps:
+    best: tuple[tuple[float, float], str, dict, dict[str, list[dict]]] | None = None
+    for label, variant, cost_bits in hyps:
         candidates_by_field = {
             f: _candidates_for_field(f, variant, refs, idx)
             for f in _ROW_FIELDS
@@ -1891,9 +1960,17 @@ def _choose_row_alignment(
                                score_fields, idx=idx)
             if pool else None
         )
+        # R240 — fontes de risco (modelo/lote → OF) exigem corroboração: o
+        # winner da variante tem de concordar em >=2 campos (a OF movida + 1).
+        src = label.split("_to_of")[0] if "_to_of" in label else ""
+        if (
+            src in _SHIFT_REQUIRE_CORROBORATION
+            and int((winner or {}).get("_agree") or 0) < 2
+        ):
+            continue
         bits = float((winner or {}).get("_bits") or -99.0)
-        adjusted = bits - moved * _ALIGN_MOVE_PENALTY_BITS
-        key = (adjusted, -moved)  # empate → menos campos movidos (H0 primeiro)
+        adjusted = bits - cost_bits
+        key = (adjusted, -cost_bits)  # empate → custo menor (H0 primeiro)
         if best is None or key > best[0]:
             best = (key, label, variant, candidates_by_field)
     assert best is not None
