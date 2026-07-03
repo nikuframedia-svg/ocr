@@ -1,0 +1,91 @@
+# Protocolo de avaliacao do cross
+
+Objetivo: comparar motores de cross sem batota, sempre com o mesmo pacote de
+OCRs e as mesmas referencias. A metrica principal e o valor final emitido pelo
+cross contra `resultado_atual`, nao a cor `MATCH`/`NO_MATCH`.
+
+## Pacote oficial
+
+Cada corrida tem de fixar:
+
+- `sample_dir`: export dos ultimos 150 OCRs, com `manifest.csv`,
+  `ocr_original` e `resultado_atual`.
+- `doc_dir`: pasta temporaria com o mesmo `plan_colunas_cpis.xlsx`,
+  `StockSAP.xlsx`, `ListaColaboradores.xlsx` e `maquinas.xlsx`.
+- `baseline_ref`: commit/tag do motor baseline, neste momento `601fe7d`
+  para R231.
+- `candidate_repo`: worktree atual do motor candidato.
+
+O script grava `package_manifest.json` com hashes dos ficheiros do pacote para
+garantir que R231 e candidato leram exatamente as mesmas entradas.
+
+## Contrato do motor
+
+Para campos cruzaveis (`of`, `ov`, `cliente`, `modelo`, `lote`, `comp_mm`,
+`larg_mm`, `lbase`, `ltopo`, `esp`, `dbase`, `dtopo`):
+
+- o OCR nunca e autoridade final;
+- o valor final tem de vir de referencia validada ou melhor candidato de
+  referencia;
+- `NO_MATCH` pode continuar a existir como cor/revisao, mas o valor final tem
+  de estar decidido;
+- qualquer `source=ocr_selected`, `decision_source=ocr_candidate`,
+  `source=ocr_raw`, `source=raw_observation`, `source=syntax`, ou
+  `source=ref_unavailable` com valor nao vazio conta como violacao.
+
+## Metricas oficiais
+
+- `output_accuracy_vs_resultado_atual_pct`: acerto final global.
+- `crossable_output_accuracy_pct`: acerto final so em campos cruzaveis.
+- `crossable_reachable_accuracy_pct`: acerto em campos cruzaveis onde o
+  `resultado_atual` existe nas referencias carregadas.
+- `validated_output_accuracy_pct`: acerto cruzavel sem violar o contrato.
+- `corrected_to_truth`: OCR estava errado e o cross corrigiu para a verdade.
+- `regressed_good_raw`: OCR estava certo e o cross estragou.
+- `changed_to_other_wrong`: OCR estava errado e o cross mudou para outro valor
+  tambem errado.
+- `cross_contract_violations`: tem de ser zero no candidato.
+
+## Gate de aceitacao
+
+Um motor novo so passa se:
+
+- `output_accuracy_vs_resultado_atual_pct >= R231 + 3.00pp`;
+- `cross_contract_violations == 0`;
+- `regressed_good_raw < R231`;
+- `corrected_to_truth >= R231`;
+- nao piorar mais de 10% em tempo de execucao.
+
+Se um motor melhora `NO_MATCH` mas piora `output_accuracy`, reprova.
+
+## Comando oficial
+
+Criar uma pasta temporaria de referencias com os quatro ficheiros e correr:
+
+```bash
+uv run python scripts/diag/compare_cross_engines.py \
+  --out-dir reports/cross_engine_compare_uploaded_refs_official \
+  --baseline-ref 601fe7d \
+  --sample-dir /Users/martimnicolau/Downloads/ultimos_150_ocr \
+  --doc-dir "$TMPDOC"
+```
+
+O resultado principal fica em:
+
+- `comparison.json`: resumo R231 vs candidato.
+- `lost_vs_baseline.csv`: celulas que R231 acertou e o candidato falhou.
+- `gained_vs_baseline.csv`: celulas que o candidato acertou e R231 falhou.
+- `diff_by_field.csv`: impacto por campo.
+- `diff_by_template.csv`: impacto por template.
+- `baseline/*/cells.csv` e `candidate/*/cells.csv`: auditoria celula-a-celula.
+
+## Processo para variantes
+
+1. Criar uma variante pequena e generica.
+2. Correr primeiro o avaliador read-only do candidato.
+3. Se piorar acerto, regressao ou contrato, reverter.
+4. Se melhorar, correr a comparacao oficial contra R231.
+5. So promover a variante se passar o gate completo.
+
+O criterio e sempre o mesmo: melhorar o valor final validado, nao apenas mudar
+a cor.
