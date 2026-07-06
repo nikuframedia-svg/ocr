@@ -38,7 +38,14 @@ CREATE TABLE IF NOT EXISTS sheets (
     extracted_at TIMESTAMP,
     validated_at TIMESTAMP,
     error_message TEXT,
-    image_rotation INTEGER NOT NULL DEFAULT 0  -- user-set quarter-turns CW (0/90/180/270)
+    image_rotation INTEGER NOT NULL DEFAULT 0,  -- user-set quarter-turns CW (0/90/180/270)
+    -- rev00 (captura guiada frente/verso): pista de página do operador ('F'/'V'),
+    -- token que liga as 2 fotos do mesmo kanban, e flag de revisão quando o
+    -- cross-check do lado discorda / fica indeterminado.
+    page_hint TEXT,
+    capture_group TEXT,
+    needs_review INTEGER NOT NULL DEFAULT 0,
+    review_reason TEXT
 );
 
 CREATE TABLE IF NOT EXISTS edits (
@@ -96,6 +103,8 @@ CREATE TABLE IF NOT EXISTS production_rows (
     cesta_n TEXT,
     inicio TEXT,
     fim TEXT,
+    -- rev00 — SUCATA (nº de peças sucatadas). NULL para folhas do formato antigo.
+    sucata INTEGER,
     UNIQUE (sheet_id, row_index)
 );
 
@@ -296,6 +305,15 @@ def init_db() -> None:
         cols = {r["name"] for r in c.execute("PRAGMA table_info(sheets)").fetchall()}
         if "image_rotation" not in cols:
             c.execute("ALTER TABLE sheets ADD COLUMN image_rotation INTEGER NOT NULL DEFAULT 0")
+        # rev00 — captura guiada frente/verso + flag de revisão do lado.
+        if "page_hint" not in cols:
+            c.execute("ALTER TABLE sheets ADD COLUMN page_hint TEXT")
+        if "capture_group" not in cols:
+            c.execute("ALTER TABLE sheets ADD COLUMN capture_group TEXT")
+        if "needs_review" not in cols:
+            c.execute("ALTER TABLE sheets ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0")
+        if "review_reason" not in cols:
+            c.execute("ALTER TABLE sheets ADD COLUMN review_reason TEXT")
         # R86 — production_rows ganhou m2 + nesting (Gemini fields).
         # R97 — production_rows ganhou qtd_metros (Soldline/Laser),
         # cesta_n (Expedição), inicio/fim (Gemini/Paragens).
@@ -314,6 +332,8 @@ def init_db() -> None:
             ("cesta_n", "TEXT"),
             ("inicio", "TEXT"),
             ("fim", "TEXT"),
+            # rev00 — SUCATA (nº de peças sucatadas).
+            ("sucata", "INTEGER"),
         ):
             if col not in pr_cols:
                 c.execute(f"ALTER TABLE production_rows ADD COLUMN {col} {type_}")
@@ -346,13 +366,57 @@ def init_db() -> None:
             c.execute("ALTER TABLE shadow_runs ADD COLUMN cells_very_different INTEGER")
 
 
-def insert_sheet(image_path: str) -> int:
+def insert_sheet(
+    image_path: str,
+    *,
+    page_hint: str | None = None,
+    capture_group: str | None = None,
+) -> int:
+    """Cria a folha. rev00 — a captura guiada pode passar a pista de página
+    ('F'/'V') e o token que liga as 2 fotos do mesmo kanban (`capture_group`).
+    Ambos são opcionais (uploads desktop/legacy não os enviam)."""
+    ph = (page_hint or "").strip().upper() or None
+    if ph not in ("F", "V", None):
+        ph = None
+    cg = (capture_group or "").strip() or None
     with conn() as c:
         cur = c.execute(
-            "INSERT INTO sheets (image_path, status) VALUES (?, 'pending')",
-            (image_path,),
+            "INSERT INTO sheets (image_path, status, page_hint, capture_group) "
+            "VALUES (?, 'pending', ?, ?)",
+            (image_path, ph, cg),
         )
         return cur.lastrowid
+
+
+def set_needs_review(sheet_id: int, reason: str) -> None:
+    """rev00 — marca a folha para revisão humana (lado indeterminado ou o
+    cross-check do mini-OCR discordou da pista de página). O depósito de CSV
+    fica suspenso até o humano resolver no desktop."""
+    with conn() as c:
+        c.execute(
+            "UPDATE sheets SET needs_review = 1, review_reason = ? WHERE id = ?",
+            ((reason or "").strip() or "side_review", sheet_id),
+        )
+
+
+def clear_needs_review(sheet_id: int) -> None:
+    """Limpa a flag de revisão (humano confirmou o lado no desktop)."""
+    with conn() as c:
+        c.execute(
+            "UPDATE sheets SET needs_review = 0, review_reason = NULL WHERE id = ?",
+            (sheet_id,),
+        )
+
+
+def set_page_hint(sheet_id: int, side: str) -> None:
+    """rev00 — força a pista de página ('F'/'V') numa folha. Usado pela
+    resolução humana de `needs_review` (banner "é frente ou verso?"): a seguir
+    faz-se reprocess e o `run_pipeline` honra a pista como autoritativa."""
+    s = (side or "").strip().upper()
+    if s not in ("F", "V"):
+        raise ValueError(f"side must be 'F' or 'V', got {side!r}")
+    with conn() as c:
+        c.execute("UPDATE sheets SET page_hint = ? WHERE id = ?", (s, sheet_id))
 
 
 def update_extraction(
@@ -1020,8 +1084,9 @@ def _sync_production_rows(c: sqlite3.Connection, sheet_id: int, sheet_data: dict
                 comp_mm, larg_mm, lote, coni, esp, lbase, ltopo,
                 dbase, dtopo,
                 m2, nesting,
-                qtd_metros, cesta_n, inicio, fim)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                qtd_metros, cesta_n, inicio, fim,
+                sucata)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 sheet_id, i,
                 operador, sheet_date_raw, sheet_iso, captured_at, validated_at,
@@ -1052,6 +1117,8 @@ def _sync_production_rows(c: sqlite3.Connection, sheet_id: int, sheet_data: dict
                 (row.get("cesta_n") or "").strip() or None,
                 (row.get("inicio") or "").strip() or None,
                 (row.get("fim") or "").strip() or None,
+                # rev00 — SUCATA (nº de peças sucatadas). NULL se vazio.
+                _parse_int(row.get("sucata")),
             ),
         )
 
@@ -1127,6 +1194,7 @@ def list_sheets(status: str | None = None, limit: int = 100) -> list[dict]:
     # extra cost vs the legacy SELECT.
     sql = """
         SELECT id, captured_at, status, operador, validated_at, image_path,
+               needs_review, review_reason, page_hint, capture_group,
                json_extract(sheet_data, '$.header.operador') AS sheet_operador,
                COALESCE(json_extract(sheet_data, '$.template_name'),
                         json_extract(raw_extraction, '$.template_name')) AS template_name,
@@ -1599,6 +1667,7 @@ def list_sheets_filtered(
     placeholders = ",".join("?" * len(statuses))
     sql = f"""
         SELECT id, captured_at, status, operador, validated_at, image_path,
+               needs_review, review_reason, page_hint, capture_group,
                json_extract(sheet_data, '$.header.operador') AS sheet_operador,
                json_extract(sheet_data, '$.header.data') AS sheet_data_str,
                json_extract(sheet_data, '$.header.setor_maquina') AS sheet_setor,

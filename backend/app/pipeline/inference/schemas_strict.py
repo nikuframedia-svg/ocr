@@ -115,6 +115,9 @@ _ROW_SCHEMA: dict[str, Any] = {
         # `additionalProperties: False` válido para os outros.
         "dbase": _string(_NUMERIC_DIM),
         "dtopo": _string(_NUMERIC_DIM),
+        # rev00 — coluna SUCATA (nº de peças sucatadas). Não vai a `required`;
+        # só preenchida nos templates de produção rev00.
+        "sucata": _string(_NUMERIC_SHORT),
     },
 }
 

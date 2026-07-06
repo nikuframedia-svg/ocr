@@ -26,6 +26,21 @@ _HHMM_RE = re.compile(r"^\s*(\d{1,2})[:hH](\d{1,2})\s*$")          # 09:30 or 09
 _HHMM_DOT_RE = re.compile(r"^\s*(\d{1,2})[.,](\d{1,2})\s*$")        # 09.30 or 09,30
 
 
+def _paragens_template_names() -> tuple[str, ...]:
+    """All registry templates that are paragens (verso) sheets — driven by
+    `has_production_rows=False`. rev00 added a generic `paragens` template and
+    keeps `maq_fustes_paragens`; this auto-covers both (and any future verso)
+    so the downtime dashboard never falls behind the registry again.
+
+    Historical note: the query used to hardcode `quinadora_pav4_paragens`, a
+    name removed when PAV.4 became a production template — which silently hid
+    every `maq_fustes_paragens` sheet from the dashboard.
+    """
+    from app.templates_registry import TEMPLATES
+
+    return tuple(sorted(n for n, t in TEMPLATES.items() if not t.has_production_rows))
+
+
 def _parse_time_to_minutes(s: Any) -> int | None:
     """Parse a clock time string to minutes-since-midnight.
 
@@ -109,13 +124,17 @@ def list_downtime_sheets(db_path: Path) -> list[dict]:
     """
     c = sqlite3.connect(db_path)
     c.row_factory = sqlite3.Row
-    sql = """
+    # rev00 — filtro dirigido pelo registry: qualquer template com
+    # has_production_rows=False (paragens genérico, maq_fustes_paragens, …).
+    paragens_names = _paragens_template_names()
+    placeholders = ", ".join("?" for _ in paragens_names) or "NULL"
+    sql = f"""
         SELECT id, captured_at, status, operador, validated_at,
                sheet_data
           FROM sheets
          WHERE sheet_data IS NOT NULL
            AND (
-                 json_extract(sheet_data, '$.template_name') = 'quinadora_pav4_paragens'
+                 json_extract(sheet_data, '$.template_name') IN ({placeholders})
               OR (
                    json_extract(sheet_data, '$.template_name') IS NULL
                    AND UPPER(TRIM(json_extract(sheet_data, '$.header.setor_maquina')))
@@ -124,7 +143,7 @@ def list_downtime_sheets(db_path: Path) -> list[dict]:
            )
          ORDER BY captured_at DESC
     """
-    raw_rows = c.execute(sql).fetchall()
+    raw_rows = c.execute(sql, paragens_names).fetchall()
     c.close()
 
     out: list[dict] = []

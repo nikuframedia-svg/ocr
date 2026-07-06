@@ -60,6 +60,9 @@ _FIELD_LABELS: dict[str, str] = {
     "dtopo": "DTOPO",
     "sobras": "SOBRAS",
     "cesta_n": "CESTA Nº",
+    # rev00 (13/04/2026) — coluna SUCATA (nº de peças sucatadas) em todas as
+    # tabelas de produção.
+    "sucata": "SUCATA",
     "motivo": "MOTIVO DA PARAGEM",
     "inicio": "INÍCIO",
     "fim": "FIM",
@@ -180,9 +183,11 @@ _RULES_PRODUCTION = """IMPORTANT RULES:
 - CLIENTE may have no spaces (MTGBELUX) or have spaces (MTG GMBH, DAV NORDIC, LE HAVRE).
 - FERRAMENTA / CONI can only be CONI, TORRES, OCT, CIL, CIO, CIB, or a number.
   Normalize obvious punctuation/case variants in your JSON (for example OCT. -> OCT).
-- TURNO (header field in templates that show shift checkboxes) is one of:
-  M, R, XM, T. Empty string for other templates.
+- TURNO is the shift checkbox in the header: one of M, R, XM, T. Report the
+  marked one; use empty string "" if no checkbox is marked or none is present.
 - LOTE follows pattern like M25B0746, M26B0307, H24B1003 — copy exactly what you see.
+- SUCATA is the number of scrapped/rejected pieces for that row (a small integer).
+  It is usually blank — use "" when the cell is empty; never invent a value.
 - If a field is empty or not visible, use empty string "".
 - Do NOT invent values. If a digit is unclear, copy your best reading; do not make up plausible alternatives.
 - Normalize date to DD-MM-YYYY format.
@@ -241,6 +246,8 @@ _RULES_GEMINI = """IMPORTANT RULES:
 - NESTING is the nesting program code (alphanumeric).
 - INÍCIO and FIM are times in HH:MM.
 - NP is a numbering field — copy verbatim.
+- SUCATA is the number of scrapped/rejected pieces (a small integer); usually
+  blank — use "" when empty.
 - If a field is empty, use empty string "".
 - Do NOT invent values."""
 

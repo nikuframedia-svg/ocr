@@ -236,3 +236,112 @@ def test_mobile_qtd_batch_persists_multiple_rows_and_production_rows(
         (1, 23, 33),
     ]
     assert isolate == [(sid,)]
+
+
+# ---------------------------------------------------------------------------
+# rev00 — SUCATA por linha no mobile (espelha cesta_n)
+# ---------------------------------------------------------------------------
+
+def _seed_bobine(rows: list[dict] | None = None) -> int:
+    """Folha de produção com template que declara `sucata` (bobine_formato)."""
+    sid = db.insert_sheet("mobile.jpg")
+    sheet_data = {
+        "template_name": "bobine_formato",
+        "header": {
+            "operador": "TESTE", "n_operador": "123",
+            "setor_maquina": "BOBINE-FORMATO", "cod_maquina": "M032",
+            "data": "25-05-2026", "turno": "M",
+        },
+        "rows": rows or [{"of": "262892", "modelo": "CGC2E10D", "qtd": "4", "sucata": ""}],
+        "footer": {"colunas_produzidas": "4", "horas_trabalhadas": "8"},
+    }
+    db.update_extraction(sid, sheet_data, {}, sheet_data)
+    return sid
+
+
+def _seed_paragens() -> int:
+    sid = db.insert_sheet("verso.jpg")
+    sheet_data = {
+        "template_name": "paragens",
+        "header": {"operador": "TESTE", "n_operador": "1", "setor_maquina": "GUILHOTINA",
+                   "data": "25-05-2026", "turno": "M"},
+        "rows": [{"motivo": "avaria", "inicio": "09:00", "fim": "09:30"}],
+        "footer": {},
+    }
+    db.update_extraction(sid, sheet_data, {}, sheet_data)
+    return sid
+
+
+def test_mobile_qtds_lists_sucata_for_production(tmp_db, isolate, client):
+    sid = _seed_bobine()
+    body = client.get(f"/mobile/qtds?ids={sid}", headers=_MOBILE).json()
+    sheet = body["sheets"][0]
+    assert "sucata" in sheet["row_fields_extra"]
+    assert "sucata" in sheet["rows"][0]
+
+
+def test_mobile_qtds_skips_paragens_sheet(tmp_db, isolate, client):
+    prod = _seed_bobine()
+    verso = _seed_paragens()
+    body = client.get(f"/mobile/qtds?ids={prod},{verso}", headers=_MOBILE).json()
+    ids = [s["sheet_id"] for s in body["sheets"]]
+    assert prod in ids
+    assert verso not in ids  # verso de paragens não vai ao ecrã de QTDs
+
+
+def test_mobile_qtd_batch_saves_sucata(tmp_db, isolate, client):
+    sid = _seed_bobine()
+    r = client.post(
+        "/mobile/qtds-batch",
+        json={"edits": [{"sheet_id": sid, "field_path": "rows[0].sucata", "value": "2"}]},
+        headers=_MOBILE,
+    )
+    assert r.status_code == 200
+    assert r.json()["applied"] == 1
+    assert db.get_sheet(sid)["sheet_data"]["rows"][0]["sucata"] == "2"
+    # rev00 — e chega à tabela production_rows como INTEIRO (não só no JSON).
+    with db.conn() as c:
+        row = c.execute(
+            "SELECT sucata FROM production_rows WHERE sheet_id = ? AND row_index = 0",
+            (sid,),
+        ).fetchone()
+    assert row["sucata"] == 2
+
+
+def _seed_paragens_sheet(template_name: str, setor: str) -> int:
+    sid = db.insert_sheet("verso.jpg")
+    sd = {
+        "template_name": template_name,
+        "header": {"operador": "X", "data": "25-05-2026", "setor_maquina": setor},
+        "rows": [{"motivo": "avaria", "inicio": "09:00", "fim": "09:30"}],
+        "footer": {},
+    }
+    db.update_extraction(sid, sd, {}, sd)
+    return sid
+
+
+def test_downtime_lists_generic_and_maq_fustes_paragens(tmp_db):
+    """rev00 — o filtro dirigido pelo registry mostra o paragens genérico E o
+    maq_fustes_paragens (o bug histórico escondia este último)."""
+    from app.downtime import list_downtime_sheets
+
+    p1 = _seed_paragens_sheet("paragens", "GUILHOTINA")
+    p2 = _seed_paragens_sheet("maq_fustes_paragens", "MÁQUINA DE FUSTES")
+    prod = _seed_bobine()  # produção → NÃO deve aparecer
+
+    ids = {s["sheet_id"] for s in list_downtime_sheets(db._DB_PATH)}
+    assert p1 in ids
+    assert p2 in ids
+    assert prod not in ids
+
+
+def test_mobile_qtd_batch_rejects_sucata_on_template_without_it(tmp_db, isolate, client):
+    # acabamento não declara sucata → edição rejeitada.
+    sid = _seed_sheet()
+    r = client.post(
+        "/mobile/qtds-batch",
+        json={"edits": [{"sheet_id": sid, "field_path": "rows[0].sucata", "value": "2"}]},
+        headers=_MOBILE,
+    )
+    assert r.status_code == 400
+    assert "sucata" in str(r.json()["errors"])

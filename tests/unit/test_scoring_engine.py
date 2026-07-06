@@ -216,8 +216,10 @@ class TestShadowScore:
         assert dur_ms >= 0
         assert len(scoring["rows"]) == 1
         # R123 (B9) — header/footer agora validados (já não forçados a NA).
+        # rev00 — `turno` passou a fazer parte do header por defeito.
         assert set(scoring["header"]) == {
             "operador", "n_operador", "setor_maquina", "cod_maquina", "data",
+            "turno",
         }
         assert set(scoring["footer"]) == {"colunas_produzidas", "horas_trabalhadas"}
         _valid = {"confirmed", "snapped", "very_different", "NA"}
@@ -3781,7 +3783,9 @@ class TestR132MaqFustes:
         assert not result["to_analisar"]
 
     def test_two_sided_templates_map(self, monkeypatch):
-        """Garantia: o map em ocr_runner aponta maq_fustes → maq_fustes_paragens."""
+        """rev00 — TODAS as folhas de produção têm verso; o map aponta cada
+        template de produção → template genérico `paragens`. Os próprios
+        templates de paragens não estão no map."""
         import importlib
         import sys
         from types import SimpleNamespace
@@ -3800,7 +3804,21 @@ class TestR132MaqFustes:
                 ),
             )
             ocr_runner = importlib.import_module("app.web.ocr_runner")
-        assert ocr_runner.TWO_SIDED_TEMPLATES.get("maq_fustes") == "maq_fustes_paragens"
+        from app.templates_registry import TEMPLATES
+
+        m = ocr_runner.TWO_SIDED_TEMPLATES
+        # maq_fustes (e qualquer produção) → paragens genérico
+        assert m.get("maq_fustes") == "paragens"
+        assert m.get("bobine_formato") == "paragens"
+        assert m.get("gasparini") == "paragens"
+        # os templates de paragens não são 2-lados
+        assert "paragens" not in m
+        assert "maq_fustes_paragens" not in m
+        # cobre exactamente os templates de produção do registry
+        assert set(m.keys()) == {
+            n for n, t in TEMPLATES.items() if t.has_production_rows
+        }
+        assert all(v == "paragens" for v in m.values())
 
     def test_side_detect_prompt_mentions_both_options(self):
         """O prompt de side-detect tem que mencionar ambos os cabeçalhos

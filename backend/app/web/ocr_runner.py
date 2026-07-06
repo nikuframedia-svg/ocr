@@ -41,16 +41,21 @@ from app.pipeline.prompt_builder import (  # noqa: E402
 )
 from app.templates_registry import (  # noqa: E402
     DEFAULT_TEMPLATE,
+    TEMPLATES,
     detect_template_with_reason,
     get_template,
 )
 
-# R132 — kanbans com 2 lados (frente/verso) que partilham `setor_maquina`.
-# Map: nome do template default (frente, devolvido por detect_template) →
-# nome do template do verso. `run_pipeline` corre um Pass-1.5 mini-OCR
-# (side-detect) para escolher qual usar.
+# rev00 (13/04/2026) — TODAS as folhas passaram a ter frente (produção) + verso
+# (paragens) partilhando o `setor_maquina`. Qualquer template de produção pode
+# aparecer como verso → mapeia-se para o template genérico `paragens`. O
+# `run_pipeline` usa a pista de página da captura guiada (autoritativa) e/ou o
+# mini-OCR side-detect para escolher o lado.
+_GENERIC_PARAGENS: Final[str] = "paragens"
 TWO_SIDED_TEMPLATES: Final[dict[str, str]] = {
-    "maq_fustes": "maq_fustes_paragens",  # TPL103 MÁQUINA DE FUSTES
+    name: _GENERIC_PARAGENS
+    for name, tpl in TEMPLATES.items()
+    if tpl.has_production_rows
 }
 
 _PROMPT_PATH = _REPO / "prompts" / "ocr6_v3.txt"
@@ -76,15 +81,19 @@ def _swap_prompt(prompt_text: str) -> tuple[str, str]:
 
 
 def _detect_side(image_path: Path) -> str:
-    """R132 — Pass-1.5 mini OCR para kanbans 2-lados (TPL103 MÁQUINA DE
-    FUSTES). Devolve 'F' (frente, produção) ou 'V' (verso, paragens).
+    """R132 / rev00 — Pass-1.5 mini OCR para kanbans 2-lados. Devolve
+    'F' (frente, produção), 'V' (verso, paragens) ou '?' (indeterminado).
 
     Strategy: swap o `ocr6.PROMPT` para o side-detect prompt (~3-5s output),
-    corre process_image, parse o `raw_response` JSON em busca da chave
-    `side`. Fallback silencioso a 'F' em qualquer erro (default frente é o
-    caso mais comum).
+    corre process_image, parse o `raw_response` JSON em busca da chave `side`.
 
-    Custo: 1 chamada extra ao Ollama por upload MAQ_FUSTES (~5s).
+    rev00: deixou de haver fallback silencioso a 'F'. Em qualquer falha
+    (resposta vazia, JSON impossível de parsear, valor inesperado) devolve
+    '?' para o chamador poder marcar a folha para revisão humana em vez de a
+    tratar cegamente como frente — agora que ~metade das fotos são versos, um
+    verso lido como produção corromperia o CSV da fábrica.
+
+    Custo: 1 chamada extra ao Ollama (~5s) quando corre inline.
     """
     prompt = build_side_detect_prompt()
     with _PROMPT_LOCK:
@@ -95,7 +104,7 @@ def _detect_side(image_path: Path) -> str:
             ocr6.PROMPT, ocr6.PROMPT_HASH = prev
     raw = getattr(result, "raw_response", "") or ""
     if not raw:
-        return "F"
+        return "?"
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
@@ -103,13 +112,58 @@ def _detect_side(image_path: Path) -> str:
         start = raw.find("{")
         end = raw.rfind("}")
         if start == -1 or end == -1 or end <= start:
-            return "F"
+            return "?"
         try:
             parsed = json.loads(raw[start:end + 1])
         except json.JSONDecodeError:
-            return "F"
-    side = str(parsed.get("side", "F")).strip().upper()
-    return side if side in ("F", "V") else "F"
+            return "?"
+    side = str(parsed.get("side", "")).strip().upper()
+    return side if side in ("F", "V") else "?"
+
+
+def _looks_confidently_frente(pass1_raw: dict) -> bool:
+    """Structural fast-path — decide, sem custo, que a foto é frente.
+
+    O Pass-1 já correu o prompt de produção; se devolveu ≥2 linhas com
+    identidade de produção (OF de 6 dígitos ou um MODELO não-trivial), a folha
+    é inequivocamente uma frente e pode saltar-se o mini-OCR de ~5s. Um verso
+    de paragens não tem colunas OF/MODELO, por isso nunca dispara isto — a
+    estrutura só é confiada na direcção SEGURA (frente-confiante → saltar),
+    nunca para declarar um verso. Não depende de QTD (preenchida no mobile
+    depois do upload), logo apanha frentes ainda sem quantidades.
+    """
+    good = 0
+    for r in pass1_raw.get("rows") or []:
+        if not isinstance(r, dict):
+            continue
+        of = str(r.get("of", "") or "").strip()
+        modelo = str(r.get("modelo", "") or "").strip()
+        if (of.isdigit() and len(of) == 6) or len(modelo) >= 4:
+            good += 1
+            if good >= 2:
+                return True
+    return False
+
+
+def _pass1_looks_nonproduction(pass1_raw: dict) -> bool:
+    """rev00 — Pass-1 (prompt de produção) com ≥2 linhas PREENCHIDAS mas NENHUMA
+    com identidade de produção (OF de 6 díg / MODELO) → provável verso (paragens)
+    lido como produção. Usado só para o check estrutural de pista=F: conservador
+    (exige conteúdo mas sem produção), para não marcar frentes esparsas/mal-lidas.
+    """
+    filled = 0
+    ident = 0
+    for r in pass1_raw.get("rows") or []:
+        if not isinstance(r, dict):
+            continue
+        if not any(str(v or "").strip() for v in r.values()):
+            continue
+        filled += 1
+        of = str(r.get("of", "") or "").strip()
+        modelo = str(r.get("modelo", "") or "").strip()
+        if (of.isdigit() and len(of) == 6) or len(modelo) >= 4:
+            ident += 1
+    return filled >= 2 and ident == 0
 
 
 def _run_ocr(image_path: Path, template: Any = None) -> tuple[dict, Any]:
@@ -350,17 +404,24 @@ def _build_current_and_dq(raw_extraction: dict, template: Any) -> tuple[dict, di
     return current, dq
 
 
-def run_pipeline(image_path: Path) -> dict:
+def run_pipeline(image_path: Path, page_hint: str | None = None) -> dict:
     """R109 — corre OCR + detecção de template. Sem DQ.
 
     A normalização (snap_cliente, snap_modelo, etc.) acontece no motor
     unificado via cross_check_sheet (chamado a seguir pelo main).
 
-    R132 — kanbans com 2 lados (TPL103 MÁQUINA DE FUSTES) partilham o
-    `setor_maquina` mas têm tabelas diferentes (frente=produção vs
-    verso=paragens). Para esses templates corre-se um Pass-1.5 mini-OCR
-    (`_detect_side`, ~5s) que inspecciona o cabeçalho da tabela na foto
-    e escolhe o template apropriado antes do Pass-2 completo.
+    rev00 (13/04/2026) — TODAS as folhas têm 2 lados (frente=produção,
+    verso=paragens) partilhando o `setor_maquina`. Escolha do lado:
+      • `page_hint` ∈ {"F","V"} da captura guiada é **autoritativo** para o
+        routing. Um check estrutural INLINE (custo zero) compara a pista com o
+        Pass-1 e marca `needs_review` quando contradizem (pista=V mas parece
+        frente / pista=F mas sem produção) — o depósito fica suspenso.
+      • Sem pista → corre o `_detect_side` mini-OCR inline como decisor. Se
+        devolver '?' (indeterminado), extrai como frente MAS marca
+        `needs_review=True` para o depósito ficar suspenso até revisão humana.
+
+    Devolve, além do habitual, chaves de lado no dict: `side` ('F'/'V'),
+    `side_source` ('hint'/'detect'/'na') e `needs_review` (bool) + `review_reason`.
     """
     timing: dict[str, int] = {}  # R224 — ms por etapa (profiling)
 
@@ -391,22 +452,58 @@ def run_pipeline(image_path: Path) -> dict:
         "structural_reasons": structure.get("reasons", []),
     }
 
-    # R132 — side-detect Pass-1.5 para kanbans 2-lados. Falha do detector
-    # é silenciosa (assume frente — caso mais comum); operador pode usar
-    # `rerun_pipeline_for_template` se o template wrongly detected.
+    # rev00 — escolha do lado (frente/verso) para kanbans 2-lados.
+    side = "F"
+    side_source = "na"
+    needs_review = False
+    review_reason = ""
+    hint = (page_hint or "").strip().upper()
     if template.name in TWO_SIDED_TEMPLATES:
-        t = time.perf_counter()
-        try:
-            side = _detect_side(image_path)
-            if side == "V":
-                template = get_template(TWO_SIDED_TEMPLATES[template.name])
-        except Exception as exc:  # noqa: BLE001
-            print(
-                f"[side_detect] {image_path.name}: {type(exc).__name__}: {exc} "
-                "— fallback to frente",
-                file=sys.stderr,
-            )
-        timing["side_detect_ms"] = int((time.perf_counter() - t) * 1000)
+        if hint in ("F", "V"):
+            # Pista da captura guiada é autoritativa para o routing.
+            side = hint
+            side_source = "hint"
+            # rev00 — check estrutural INLINE (custo zero, corre ANTES do
+            # depósito): se a pista contradiz o que o Pass-1 mostra, marca a
+            # folha para revisão (o gate de depósito trava-a). Substitui o
+            # cross-check assíncrono (removido: era assimétrico e corria tarde
+            # demais). Conservador — só as direcções de baixo falso-positivo.
+            if hint == "V" and _looks_confidently_frente(pass1_raw):
+                needs_review = True          # verso marcado, mas parece frente
+                review_reason = "side_hint_conflict"
+            elif hint == "F" and _pass1_looks_nonproduction(pass1_raw):
+                needs_review = True          # frente marcada, mas sem produção
+                review_reason = "side_hint_conflict"
+        elif _looks_confidently_frente(pass1_raw):
+            # Fast-path estrutural: Pass-1 já mostra produção → é frente, salta
+            # o mini-OCR (custo zero). Nunca declara verso por estrutura.
+            side = "F"
+            side_source = "structure"
+            timing["side_detect_ms"] = 0
+        else:
+            # Sem pista e sem sinal claro de frente: mini-OCR inline decide.
+            # '?' → extrai como frente mas marca para revisão (não deposita
+            # produção de folha duvidosa).
+            t = time.perf_counter()
+            try:
+                detected = _detect_side(image_path)
+            except Exception as exc:  # noqa: BLE001
+                print(
+                    f"[side_detect] {image_path.name}: {type(exc).__name__}: {exc}"
+                    " — indeterminado, marcado para revisão",
+                    file=sys.stderr,
+                )
+                detected = "?"
+            timing["side_detect_ms"] = int((time.perf_counter() - t) * 1000)
+            side_source = "detect"
+            if detected in ("F", "V"):
+                side = detected
+            else:
+                side = "F"  # extrai como frente, mas sinaliza
+                needs_review = True
+                review_reason = "side_indeterminate"
+        if side == "V":
+            template = get_template(TWO_SIDED_TEMPLATES[template.name])
 
     m2 = None
     if template.name == DEFAULT_TEMPLATE.name:
@@ -436,6 +533,11 @@ def run_pipeline(image_path: Path) -> dict:
         "current": current,
         "template_name": template.name,
         "template_detection": template_detection,
+        # rev00 — info de lado (frente/verso) para o cross-check + gate de depósito.
+        "side": side,
+        "side_source": side_source,
+        "needs_review": needs_review,
+        "review_reason": review_reason,
         "timing": timing,
         "metrics": {
             "model": getattr(m1, "model", None),

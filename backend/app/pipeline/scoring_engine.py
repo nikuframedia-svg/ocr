@@ -270,6 +270,8 @@ _NO_REF_FIELDS = frozenset({
     # R132 — qtd_metros (soldline, laser, maq_fustes) é informativo, NA cinza.
     "qtd_metros",
     "sobras", "cesta_n",
+    # rev00 — SUCATA (nº peças sucatadas): informativo, sem ref no plano/SAP.
+    "sucata",
     # TPL102 Gemini: área informativa, sem ref, mas com sintaxe numérica.
     "m2",
 })
@@ -2474,7 +2476,7 @@ def _score_no_ref_row_cell(
         valid = _looks_like_pri(ocr_value)
     elif field == "qtd":
         valid = _looks_like_short_digits(ocr_value)
-    elif field in ("qtd_metros", "m2", "sobras"):
+    elif field in ("qtd_metros", "m2", "sobras", "sucata"):
         valid = _looks_like_non_negative_decimal(ocr_value)
     elif field == "cesta_n":
         valid = any(ch.isdigit() for ch in ocr_value)

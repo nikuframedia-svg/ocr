@@ -133,6 +133,36 @@
   </div>
 {% endif %}
 
+{# rev00 — lado (frente/verso) duvidoso: o depósito de CSV está suspenso até
+   o humano confirmar. "É Frente" processa como produção; "É Verso" como
+   paragens (via page_hint autoritativo + reprocess). #}
+{% if sheet.needs_review %}
+  <div class="alert warn" style="margin-bottom:16px;">
+    <div>
+      <b>Lado duvidoso — esta folha é frente ou verso?</b><br>
+      <span class="muted tiny">
+        O sistema não confirmou o lado{% if sheet.review_reason %} ({{ sheet.review_reason }}){% endif %}.
+        Confirma para retomar o depósito.
+      </span>
+      {# rev00 — guarda de duplo-submit: o 1º submit desabilita ambos os botões
+         para não re-enfileirar a folha 2× (o side vai no hidden input, por isso
+         desabilitar o botão não afecta os dados enviados). #}
+      <div style="margin-top:10px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <form method="post" action="/sheet/{{ sheet.id }}/resolve-side" style="display:inline; margin:0;"
+              onsubmit="this.closest('div').querySelectorAll('button').forEach(b => b.disabled = true)">
+          <input type="hidden" name="side" value="F">
+          <button type="submit" class="btn primary">É Frente (produção)</button>
+        </form>
+        <form method="post" action="/sheet/{{ sheet.id }}/resolve-side" style="display:inline; margin:0;"
+              onsubmit="this.closest('div').querySelectorAll('button').forEach(b => b.disabled = true)">
+          <input type="hidden" name="side" value="V">
+          <button type="submit" class="btn">É Verso (paragens)</button>
+        </form>
+      </div>
+    </div>
+  </div>
+{% endif %}
+
 <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px;" class="sheet-grid">
   <!-- Image -->
   <div class="card" style="padding:8px; position:relative;"

@@ -41,6 +41,17 @@
         </div>
       </div>
 
+      <!-- rev00 — lado da próxima foto (frente=produção / verso=paragens) -->
+      <div style="display:flex; gap:6px;">
+        <button type="button" class="btn" style="flex:1;"
+                :class="{ primary: side==='F' }" @click="side='F'">FRENTE</button>
+        <button type="button" class="btn" style="flex:1;"
+                :class="{ primary: side==='V' }" @click="side='V'">VERSO</button>
+      </div>
+      <div class="muted tiny" style="text-align:center; margin-top:-8px;">
+        Fotografa a FRENTE e depois o VERSO de cada kanban.
+      </div>
+
       <!-- shutter row -->
       <div class="cam-bar" style="border-radius: 12px;">
         <div class="cam-meta">
@@ -61,6 +72,8 @@
           <div class="thumb">
             <img :src="p.url" :alt="'foto ' + (idx+1)">
             <span class="thumb-num" x-text="idx + 1"></span>
+            <span class="thumb-side" x-text="p.side"
+                  :class="{ verso: p.side === 'V' }"></span>
             <button class="thumb-x" @click="removePhoto(p.id)" aria-label="Remover foto">×</button>
           </div>
         </template>
@@ -74,7 +87,7 @@
       <div class="card" style="text-align:center; padding:24px;">
         <div style="font-size:64px; line-height:1; margin-bottom:8px;" x-text="photos.length"></div>
         <div style="font-size:18px; color:var(--ink-2);">
-          <span x-text="photos.length === 1 ? 'kanban capturado' : 'kanbans capturados'"></span>
+          <span x-text="photos.length === 1 ? 'foto capturada' : 'fotos capturadas'"></span>
         </div>
       </div>
 
@@ -96,7 +109,7 @@
         <button class="btn lg" style="flex:1;" @click="backToPreview()">Voltar</button>
         <button class="btn lg primary" style="flex:2;" @click="uploadAll()">
           Enviar <span x-text="photos.length"></span>
-          <span x-text="photos.length === 1 ? 'kanban' : 'kanbans'"></span>
+          <span x-text="photos.length === 1 ? 'foto' : 'fotos'"></span>
         </button>
       </div>
     </div>
@@ -225,6 +238,9 @@
                   <template x-if="hasCesta(sheet)">
                     <th style="text-align:right; padding:6px 8px; width:70px;">CESTA</th>
                   </template>
+                  <template x-if="hasSucata(sheet)">
+                    <th style="text-align:right; padding:6px 8px; width:70px;">SUCATA</th>
+                  </template>
                 </tr>
               </thead>
               <tbody>
@@ -257,6 +273,18 @@
                                       border:1px solid var(--rule-2); border-radius:4px;">
                       </td>
                     </template>
+                    <template x-if="hasSucata(sheet)">
+                      <td style="padding:6px 8px;">
+                        {# rev00 — sucata: nº de peças sucatadas (normalmente vazio) #}
+                        <input type="text" inputmode="numeric"
+                               placeholder="sucata"
+                               :value="row.sucata"
+                               @input="row.sucata = $event.target.value"
+                               style="width:100%; padding:6px; text-align:right;
+                                      font-family:var(--font-mono); font-size:14px;
+                                      border:1px solid var(--rule-2); border-radius:4px;">
+                      </td>
+                    </template>
                   </tr>
                 </template>
               </tbody>
@@ -265,7 +293,7 @@
                   <td colspan="3" style="padding:8px; font-weight:600;">
                     Total colunas produzidas
                   </td>
-                  <td :colspan="hasCesta(sheet) ? 2 : 1" style="padding:6px 8px;">
+                  <td :colspan="1 + (hasCesta(sheet) ? 1 : 0) + (hasSucata(sheet) ? 1 : 0)" style="padding:6px 8px;">
                     <input type="text" inputmode="numeric"
                            :value="sheet.colunas_produzidas"
                            @input="sheet.colunas_produzidas = $event.target.value"
@@ -300,7 +328,7 @@
       <div style="font-size:80px; line-height:1;">✓</div>
       <div style="font-size:24px; font-weight:600;">
         <span x-text="photos.length"></span>
-        <span x-text="photos.length === 1 ? 'kanban gravado' : 'kanbans gravados'"></span>
+        <span x-text="photos.length === 1 ? 'foto gravada' : 'fotos gravadas'"></span>
       </div>
       <div class="muted">Bom trabalho!</div>
       <button class="btn lg primary" @click="reset()" style="margin-top:24px;">
@@ -327,6 +355,13 @@
   background:rgba(0,0,0,0.7); color:#fff;
   font-size:11px; font-weight:600; padding:2px 6px; border-radius:4px;
 }
+/* rev00 — marca F/V por miniatura */
+.thumb-side {
+  position:absolute; bottom:4px; left:4px;
+  background:#2F7D43; color:#fff;
+  font-size:11px; font-weight:700; padding:2px 6px; border-radius:4px;
+}
+.thumb-side.verso { background:#b06a00; }
 .thumb-x {
   position:absolute; top:4px; right:4px;
   background:rgba(220,40,40,0.85); color:#fff; border:none;
@@ -351,7 +386,15 @@ function captureApp() {
     stage: 'preview',         // preview | confirm | uploading | processing | qtd_confirm | done
     streamReady: false,
     streamErr: '',
-    photos: [],               // [{ id, blob, url }]
+    photos: [],               // [{ id, blob, url, side, capture_group }]
+    // rev00 — captura guiada frente/verso. `side` é o lado da PRÓXIMA foto;
+    // `captureGroup` liga a frente ao verso do mesmo kanban. Sem crypto.randomUUID
+    // (não existe em http/LAN) → id = sessão(Date.now) + contador.
+    side: 'F',
+    captureGroup: null,
+    _groupSeq: 0,
+    _sessionId: String(Date.now()),
+    _shooting: false,         // rev00 — guarda: 1 disparo de cada vez
     uploadIdx: 0,
     uploadedSheetIds: [],     // sheet_ids returned by /upload?return=json
     pendingSheets: [],        // [{ sheet_id, status, error_message }] — R71 polling
@@ -475,9 +518,29 @@ function captureApp() {
       this.streamReady = false;
     },
 
+    // rev00 — atribui lado + capture_group à foto e auto-avança o toggle
+    // (F→V→F...), para o caso comum "frente depois verso" ser zero toques.
+    _assignSide() {
+      if (this.side === 'F' || !this.captureGroup) {
+        this._groupSeq++;
+        this.captureGroup = this._sessionId + '-' + this._groupSeq;
+      }
+      const tag = { side: this.side, capture_group: this.captureGroup };
+      this.side = (this.side === 'F') ? 'V' : 'F';   // auto-avanço
+      return tag;
+    },
+
     shoot() {
       const v = this.$refs.video;
       if (!v || !v.videoWidth) return;
+      // rev00 — guarda: impede um 2º disparo antes de o toBlob do 1º resolver.
+      if (this._shooting) return;
+      this._shooting = true;
+      // rev00 — fixar o lado SÍNCRONAMENTE no toque (o toBlob é async). Antes,
+      // _assignSide corria dentro do callback → um duplo-toque rápido marcava a
+      // 2ª foto com o lado errado (frente→verso) e a pista autoritativa perdia
+      // a produção. O toggle também avança já, dando feedback imediato.
+      const tag = this._assignSide();
       const c = this.$refs.canvas;
       const maxW = 1600;
       const ratio = Math.min(1, maxW / Math.max(v.videoWidth, v.videoHeight));
@@ -485,14 +548,16 @@ function captureApp() {
       c.height = Math.round(v.videoHeight * ratio);
       c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
       c.toBlob(b => {
+        this._shooting = false;
         if (!b) return;
         this._photoCounter++;
         this.photos.push({
           id: this._photoCounter,
           blob: b,
           url: URL.createObjectURL(b),
+          side: tag.side,
+          capture_group: tag.capture_group,
         });
-        // Brief flash effect for feedback (could enhance later)
       }, 'image/jpeg', 0.85);
     },
 
@@ -500,10 +565,16 @@ function captureApp() {
       const files = Array.from(ev.target.files || []);
       for (const f of files) {
         this._photoCounter++;
+        // Fallback de galeria (câmara indisponível): NÃO auto-alterna — um
+        // multi-select fora de ordem F,V marcaria mal. Usa o lado escolhido no
+        // toggle para todos; cada foto no seu grupo (o operador importa por lado).
+        this._groupSeq++;
         this.photos.push({
           id: this._photoCounter,
           blob: f,
           url: URL.createObjectURL(f),
+          side: this.side,
+          capture_group: this._sessionId + '-' + this._groupSeq,
         });
       }
     },
@@ -551,6 +622,9 @@ function captureApp() {
         const photo = this.photos[i];
         const fd = new FormData();
         fd.append('image', photo.blob, `kanban_${i+1}.jpeg`);
+        // rev00 — captura guiada: lado (F/V) + token que liga frente↔verso.
+        fd.append('page', photo.side || 'F');
+        fd.append('capture_group', photo.capture_group || '');
         try {
           // /upload now just enqueues + returns; 30s is plenty for image upload
           const ctrl = new AbortController();
@@ -698,6 +772,11 @@ function captureApp() {
     get anyCesta() {
       return this.qtdSheets.some(s => this.hasCesta(s));
     },
+    // rev00 — SUCATA por linha (mesmo mecanismo do cesta_n)
+    hasSucata(sheet) {
+      return Array.isArray(sheet.row_fields_extra)
+        && sheet.row_fields_extra.includes('sucata');
+    },
 
     async submitQtds() {
       if (this.savingQtds) return;
@@ -720,6 +799,13 @@ function captureApp() {
               sheet_id: s.sheet_id,
               field_path: `rows[${r.row_index}].cesta_n`,
               value: String(r.cesta_n ?? ''),
+            });
+          }
+          if (this.hasSucata(s)) {
+            edits.push({
+              sheet_id: s.sheet_id,
+              field_path: `rows[${r.row_index}].sucata`,
+              value: String(r.sucata ?? ''),
             });
           }
         }
@@ -778,6 +864,12 @@ function captureApp() {
       this.savingQtds = false;
       this._photoCounter = 0;
       this.streamErr = '';
+      // rev00 — nova sessão de captura guiada
+      this.side = 'F';
+      this.captureGroup = null;
+      this._groupSeq = 0;
+      this._sessionId = String(Date.now());
+      this._shooting = false;
       this.stage = 'preview';
       // R66 — defer start() to next tick so the <template x-if="stage==='preview'">
       // mounts the <video x-ref="video"> element before we try to attach the

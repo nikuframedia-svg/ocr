@@ -164,6 +164,12 @@
                     title="Setor/Máquina: {{ s.setor_maquina or '' }}">
                 {{ tn.replace('_', ' ').replace('quinadora pav4 paragens', 'pav.4 paragens') }}
               </span>
+              {# rev00 — lado da captura guiada (frente/verso) #}
+              {% if s.page_hint %}
+                <span class="pill neutral mono" style="font-size:10px;" title="Lado capturado">
+                  {{ 'FRENTE' if s.page_hint == 'F' else 'VERSO' }}
+                </span>
+              {% endif %}
             </td>
             <td>
               {% if s.status == 'validated' %}
@@ -174,6 +180,10 @@
                 <span class="pill crit">erro</span>
               {% else %}
                 <span class="pill neutral">{{ s.status }}</span>
+              {% endif %}
+              {# rev00 — folha com lado duvidoso: depósito de CSV suspenso #}
+              {% if s.needs_review %}
+                <span class="pill crit" title="{{ s.review_reason or 'lado duvidoso' }}">rever lado</span>
               {% endif %}
             </td>
             <td style="text-align:right; white-space:nowrap;">

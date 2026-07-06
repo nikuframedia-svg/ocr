@@ -133,6 +133,9 @@ class Row(_StringFields):
     # R128 — kanban LASER (dimensões diâmetro base/topo)
     dbase: str = ""
     dtopo: str = ""
+    # rev00 (13/04/2026) — coluna SUCATA (nº de peças sucatadas) em todas as
+    # tabelas de produção. Informativo; sem cross-check contra plano/SAP.
+    sucata: str = ""
 
     @field_validator("coni", mode="after")
     @classmethod

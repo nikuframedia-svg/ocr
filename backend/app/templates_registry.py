@@ -95,17 +95,21 @@ class TemplateSpec:
     # Empty for paragens (no plan to compare against).
     cross_check_fields: tuple[str, ...] = ()
 
-    # Header fields specific to this template. All 11 share the same
-    # 5-field header (operador, n_operador, setor_maquina, cod_maquina,
-    # data) so this is constant; kept as a field for future flexibility.
+    # Header fields shared by every template. rev00 (13/04/2026) added the
+    # TURNO checkbox (M/R/XM/T) to ALL kanban headers, so `turno` is now part
+    # of the default header. Templates that predate this (acabamento,
+    # maq_fustes) already listed it explicitly — harmless overlap.
     # cod_maquina (e.g. "M032") was added for the CPIS migration export —
     # legacy sheets without it still parse (Pydantic Header default "").
+    # NOTE: putting `turno` here changes the OCR prompt for every template —
+    # gated behind a golden-set A/B before deploy (see plan / CLAUDE.md).
     header_fields: tuple[str, ...] = (
         "operador",
         "n_operador",
         "setor_maquina",
         "cod_maquina",
         "data",
+        "turno",
     )
 
     # Label for the production block in the deposit CSV. Different
@@ -140,7 +144,7 @@ _BOBINE_FORMATO = TemplateSpec(
     row_fields=(
         "pri", "cliente", "ov", "of", "modelo",
         "qtd", "comp_mm", "larg_mm", "lote", "coni",
-        "esp", "lbase", "ltopo",
+        "esp", "lbase", "ltopo", "sucata",
     ),
     cross_check_fields=(
         "cliente", "ov", "of", "modelo",
@@ -155,10 +159,10 @@ _GUILHOTINA = TemplateSpec(
     name="guilhotina",
     tpl_code="TPL103",
     phase="Corte",
-    setor_aliases=("GUILHOTINA",),
+    setor_aliases=("GUILHOTINA 6M", "GUILHOTINA"),
     row_fields=(
         "pri", "cliente", "ov", "of", "modelo",
-        "qtd", "comp_mm", "coni", "esp", "lbase", "ltopo",
+        "qtd", "comp_mm", "coni", "esp", "lbase", "ltopo", "sucata",
     ),
     cross_check_fields=(
         "cliente", "ov", "of", "modelo",
@@ -175,7 +179,7 @@ _LINHA_CORTE = TemplateSpec(
     setor_aliases=("LINHA DE CORTE", "LINHA CORTE"),
     row_fields=(
         "pri", "cliente", "ov", "of", "modelo",
-        "qtd", "coni", "esp", "lbase", "ltopo",
+        "qtd", "coni", "esp", "lbase", "ltopo", "sucata",
     ),
     cross_check_fields=(
         "cliente", "ov", "of", "modelo",
@@ -193,9 +197,12 @@ _QUINADORA_PAV8 = TemplateSpec(
     tpl_code="TPL103",
     phase="Quinadora",
     setor_aliases=("QUINADORA PAV.8", "QUINADORA PAV 8", "QUINADORA PAV8"),
+    # Coexistência: o papel rev00 da PAV só tem QTD+SUCATA, mas mantemos as
+    # dimensões (coni/esp/lbase/ltopo) para as folhas do formato antigo ainda
+    # em circulação lerem; num papel novo essas colunas voltam "".
     row_fields=(
         "pri", "cliente", "ov", "of", "modelo",
-        "qtd", "coni", "esp", "lbase", "ltopo",
+        "qtd", "coni", "esp", "lbase", "ltopo", "sucata",
     ),
     cross_check_fields=(
         "cliente", "ov", "of", "modelo",
@@ -213,7 +220,7 @@ _GUIFIL = TemplateSpec(
     setor_aliases=("GUIFIL", "QUINADORA GUIFIL"),
     row_fields=(
         "pri", "cliente", "ov", "of", "modelo",
-        "qtd", "coni", "esp", "lbase", "ltopo",
+        "qtd", "coni", "esp", "lbase", "ltopo", "sucata",
     ),
     cross_check_fields=(
         "cliente", "ov", "of", "modelo",
@@ -230,7 +237,7 @@ _SOLDLINE = TemplateSpec(
     setor_aliases=("SOLDLINE 4", "SOLDLINE", "SOLDLINE4"),
     row_fields=(
         "pri", "cliente", "ov", "of", "modelo",
-        "qtd", "qtd_metros",
+        "qtd", "qtd_metros", "sucata",
     ),
     cross_check_fields=(
         "cliente", "ov", "of", "modelo",
@@ -245,10 +252,10 @@ _LASER = TemplateSpec(
     name="laser",
     tpl_code="TPL103",
     phase="Soldadura",
-    setor_aliases=("LASER", "SOLDADURA LASER"),
+    setor_aliases=("LASER MTG2", "LASER", "SOLDADURA LASER"),
     row_fields=(
         "pri", "cliente", "ov", "of", "modelo",
-        "qtd", "qtd_metros", "dbase", "dtopo",
+        "qtd", "qtd_metros", "dbase", "dtopo", "sucata",
     ),
     cross_check_fields=(
         "cliente", "ov", "of", "modelo",
@@ -265,7 +272,7 @@ _MANUAL = TemplateSpec(
     setor_aliases=("MANUAL",),
     row_fields=(
         "pri", "cliente", "ov", "of", "modelo",
-        "qtd", "sobras",
+        "qtd", "sobras", "sucata",
     ),
     cross_check_fields=(
         "cliente", "ov", "of", "modelo",
@@ -278,10 +285,10 @@ _ROBOT = TemplateSpec(
     name="robot",
     tpl_code="TPL103",
     phase="Abertura Portinholas",
-    setor_aliases=("ROBOT", "ROBOT COLUNAS"),
+    setor_aliases=("ROBOT MTG2", "ROBOT", "ROBOT COLUNAS"),
     row_fields=(
         "pri", "cliente", "ov", "of", "modelo",
-        "qtd", "sobras",
+        "qtd", "sobras", "sucata",
     ),
     cross_check_fields=(
         "cliente", "ov", "of", "modelo",
@@ -297,7 +304,7 @@ _EXPEDICAO = TemplateSpec(
     setor_aliases=("EXPEDIÇÃO", "EXPEDICAO", "EXPEDIÇAO"),
     row_fields=(
         "pri", "cliente", "ov", "of", "modelo",
-        "qtd", "cesta_n",
+        "qtd", "cesta_n", "sucata",
     ),
     cross_check_fields=(
         "cliente", "ov", "of", "modelo",
@@ -324,12 +331,13 @@ _QUINADORA_PAV4 = TemplateSpec(
     ),
     row_fields=(
         "pri", "cliente", "ov", "of", "modelo",
-        "qtd", "coni", "esp", "lbase", "ltopo",
+        "qtd", "coni", "esp", "lbase", "ltopo", "sucata",
     ),
     cross_check_fields=(
         "cliente", "ov", "of", "modelo",
         "esp", "lbase", "ltopo",
     ),
+    csv_block_label="TABELA DE EXPEDIÇÃO",
     description="Quinadora PAV.4 (produção de colunas).",
 )
 
@@ -378,7 +386,7 @@ _MAQUINA_FUSTES = TemplateSpec(
     setor_aliases=("MÁQUINA DE FUSTES", "MAQUINA DE FUSTES",
                    "MAQ DE FUSTES", "MAQ FUSTES"),
     row_fields=(
-        "pri", "cliente", "ov", "of", "modelo", "qtd", "qtd_metros",
+        "pri", "cliente", "ov", "of", "modelo", "qtd", "qtd_metros", "sucata",
     ),
     cross_check_fields=("cliente", "ov", "of", "modelo"),
     header_fields=(
@@ -416,6 +424,33 @@ _MAQUINA_FUSTES_PARAGENS = TemplateSpec(
 )
 
 
+# rev00 (13/04/2026) — TODAS as folhas passaram a ter um verso de paragens
+# idêntico. Este template genérico serve o verso de QUALQUER máquina. Como o
+# `setor_maquina` é lido em ambas as páginas (preservado pelo merge Pass-2), a
+# identidade da máquina fica no header — não é preciso um paragens por máquina.
+# `setor_aliases=()` → nunca é auto-detectado; só é escolhido pela pista de
+# página (captura guiada) ou pelo side-detect (ver ocr_runner.TWO_SIDED_TEMPLATES).
+# `_MAQUINA_FUSTES_PARAGENS` mantém-se registado para folhas já persistidas.
+_PARAGENS = TemplateSpec(
+    name="paragens",
+    tpl_code="TPL103",
+    phase="Paragens",
+    setor_aliases=(),
+    row_fields=(
+        "motivo", "inicio", "fim", "duracao", "resolvido",
+    ),
+    cross_check_fields=(),
+    header_fields=(
+        "operador", "n_operador", "setor_maquina", "cod_maquina",
+        "data", "turno",
+    ),
+    footer_fields=(),
+    has_production_rows=False,
+    csv_block_label="TABELA DE PARAGENS",
+    description="Verso genérico rev00 — paragens (motivo/início/fim/duração/resolvido).",
+)
+
+
 # ============================================================================
 #  TPL102 — Produção Gemini (corte térmico, nesting de chapa)
 # ============================================================================
@@ -423,7 +458,7 @@ _MAQUINA_FUSTES_PARAGENS = TemplateSpec(
 # Schema partilhado pelas 3 máquinas de corte térmico
 _GEMINI_ROW_FIELDS = (
     "pf", "cliente", "of", "modelo", "cf",
-    "m2", "qtd", "nesting", "inicio", "fim", "np",
+    "m2", "qtd", "nesting", "inicio", "fim", "np", "sucata",
 )
 _GEMINI_FOOTER = ("horas_trabalhadas",)
 _GEMINI_CROSS_CHECK = ("cliente", "of", "modelo")  # nesting domain — limited refs
@@ -489,6 +524,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         _ACABAMENTO,
         _MAQUINA_FUSTES,
         _MAQUINA_FUSTES_PARAGENS,
+        _PARAGENS,
         _GASPARINI,
         _HPE32,
         _HD36,
@@ -566,10 +602,18 @@ def _looks_like_acabamento_setor(norm: str) -> bool:
 
 
 def _has_mtg_token(norm: str) -> bool:
+    """True only when the setor is essentially a BARE MTG token (e.g. "MTG2",
+    "MIG 3") with no machine base-name.
+
+    rev00 added MTG suffixes to real machines (ROBOT MTG2, LASER MTG2). A
+    substring MTG match would mis-route those to `acabamento` whenever the
+    base token OCRs badly (e.g. "R0B0T MTG2") — the exact/fuzzy alias then
+    fails and this fallback would fire. So we require the WHOLE compact setor
+    to BE the token, not merely contain it; a garbled base falls through to
+    cod_maquina / default instead of silently becoming acabamento.
+    """
     if not norm:
         return False
-    if re.search(r"\bM[TI]G\s*[2345]\b", norm):
-        return True
     return _compact_setor(norm) in {
         "MTG2", "MTG3", "MTG4", "MTG5",
         "MIG2", "MIG3", "MIG4", "MIG5",

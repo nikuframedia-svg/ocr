@@ -16,9 +16,8 @@ from __future__ import annotations
 import base64
 
 import pytest
-from fastapi.testclient import TestClient
-
 from app.web import db, main, ocr_runner
+from fastapi.testclient import TestClient
 
 # PNG 1×1 mínimo e válido (sem dependências externas).
 _PNG_1x1 = base64.b64decode(
@@ -65,8 +64,10 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "_DATA_DIR", tmp_path)
     monkeypatch.setattr(main, "_IMAGES_DIR", images)
 
-    # OCR simulado — sem Ollama.
-    monkeypatch.setattr(ocr_runner, "run_pipeline", lambda _p: _fake_extraction())
+    # OCR simulado — sem Ollama. rev00: run_pipeline aceita page_hint.
+    monkeypatch.setattr(
+        ocr_runner, "run_pipeline", lambda _p, **_kw: _fake_extraction()
+    )
 
     # Neutralizar efeitos de disco/rede do pós-processamento (testados noutro lado).
     monkeypatch.setattr(main, "_run_and_store_cross_check", lambda sid: None)
@@ -156,3 +157,164 @@ def test_upload_rejects_unsupported_extension(env, client):
         headers=_DESKTOP,
     )
     assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# rev00 — captura guiada: pista de página + capture_group + resolução do lado
+# ---------------------------------------------------------------------------
+
+def test_upload_persists_page_and_capture_group(env, client):
+    """A captura guiada envia `page` + `capture_group`; ficam gravados."""
+    sheet_id = client.post(
+        "/upload?return=json",
+        files={"image": ("kanban.png", _PNG_1x1, "image/png")},
+        data={"page": "V", "capture_group": "sess-1"},
+        headers=_DESKTOP,
+    ).json()["sheet_id"]
+    sheet = db.get_sheet(sheet_id)
+    assert sheet["page_hint"] == "V"
+    assert sheet["capture_group"] == "sess-1"
+
+
+def test_upload_without_hint_leaves_page_hint_null(env, client):
+    sheet_id = client.post(
+        "/upload?return=json",
+        files={"image": ("kanban.png", _PNG_1x1, "image/png")},
+        headers=_DESKTOP,
+    ).json()["sheet_id"]
+    sheet = db.get_sheet(sheet_id)
+    assert sheet["page_hint"] is None
+
+
+def test_hinted_upload_clean_not_flagged(env, client):
+    """Upload com pista + extração limpa não fica marcado para revisão."""
+    sheet_id = client.post(
+        "/upload?return=json",
+        files={"image": ("kanban.png", _PNG_1x1, "image/png")},
+        data={"page": "F", "capture_group": "g"},
+        headers=_DESKTOP,
+    ).json()["sheet_id"]
+    main._process_sheet_ocr(sheet_id)
+    sheet = db.get_sheet(sheet_id)
+    assert not sheet["needs_review"]
+
+
+def test_needs_review_result_sets_flag_and_suspends_deposit(env, client, monkeypatch):
+    """rev00 — garantia anti-corrupção: se o run_pipeline devolve needs_review,
+    o worker marca a folha E NÃO deposita CSV na fábrica."""
+    fake = _fake_extraction()
+    fake["needs_review"] = True
+    fake["review_reason"] = "side_hint_conflict"
+    monkeypatch.setattr(ocr_runner, "run_pipeline", lambda _p, **_k: fake)
+    deposited: list[int] = []
+    monkeypatch.setattr(main, "_deposit_csv_to_factory", lambda sid: deposited.append(sid))
+    sheet_id = client.post(
+        "/upload?return=json",
+        files={"image": ("kanban.png", _PNG_1x1, "image/png")},
+        data={"page": "V"},
+        headers=_DESKTOP,
+    ).json()["sheet_id"]
+    main._process_sheet_ocr(sheet_id)
+    sheet = db.get_sheet(sheet_id)
+    assert sheet["needs_review"]
+    assert sheet["review_reason"] == "side_hint_conflict"
+    assert deposited == []  # depósito suspenso
+
+
+def test_clean_reprocess_clears_stale_review_and_deposits(env, client, monkeypatch):
+    """Um reprocess que agora resolve limpo desmarca a folha E deposita."""
+    deposited: list[int] = []
+    monkeypatch.setattr(main, "_deposit_csv_to_factory", lambda sid: deposited.append(sid))
+    sheet_id = client.post(
+        "/upload?return=json",
+        files={"image": ("kanban.png", _PNG_1x1, "image/png")},
+        headers=_DESKTOP,
+    ).json()["sheet_id"]
+    db.set_needs_review(sheet_id, "side_indeterminate")  # marcada antes
+    main._process_sheet_ocr(sheet_id)  # run_pipeline (mock) devolve limpo
+    sheet = db.get_sheet(sheet_id)
+    assert not sheet["needs_review"]
+    assert deposited == [sheet_id]
+
+
+def test_resolve_side_sets_hint_clears_review_requeues(env, client):
+    """Resolver 'é verso' → page_hint='V', needs_review limpo, folha re-enfileirada."""
+    sheet_id = client.post(
+        "/upload?return=json",
+        files={"image": ("kanban.png", _PNG_1x1, "image/png")},
+        headers=_DESKTOP,
+    ).json()["sheet_id"]
+    main._process_sheet_ocr(sheet_id)
+    db.set_needs_review(sheet_id, "side_indeterminate")
+    assert db.get_sheet(sheet_id)["needs_review"]
+
+    resp = client.post(
+        f"/sheet/{sheet_id}/resolve-side",
+        data={"side": "V"},
+        headers=_DESKTOP,
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    sheet = db.get_sheet(sheet_id)
+    assert sheet["page_hint"] == "V"
+    assert not sheet["needs_review"]
+    assert sheet["status"] == "pending"
+
+
+def test_resolve_side_rejects_bad_side(env, client):
+    sheet_id = client.post(
+        "/upload?return=json",
+        files={"image": ("kanban.png", _PNG_1x1, "image/png")},
+        headers=_DESKTOP,
+    ).json()["sheet_id"]
+    resp = client.post(
+        f"/sheet/{sheet_id}/resolve-side",
+        data={"side": "X"},
+        headers=_DESKTOP,
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+
+
+def test_list_sheets_exposes_new_columns(env, client):
+    sheet_id = client.post(
+        "/upload?return=json",
+        files={"image": ("kanban.png", _PNG_1x1, "image/png")},
+        data={"page": "F", "capture_group": "g9"},
+        headers=_DESKTOP,
+    ).json()["sheet_id"]
+    row = next(s for s in db.list_sheets() if s["id"] == sheet_id)
+    assert row["page_hint"] == "F"
+    assert row["capture_group"] == "g9"
+    assert "needs_review" in row and "review_reason" in row
+
+
+def test_capture_and_queue_pages_render(env, client):
+    """Smoke: os templates editados renderizam sem erro de Jinja."""
+    # semear uma folha com pista + revisão para exercitar os badges da queue
+    sid = client.post(
+        "/upload?return=json",
+        files={"image": ("kanban.png", _PNG_1x1, "image/png")},
+        data={"page": "V", "capture_group": "g"},
+        headers=_DESKTOP,
+    ).json()["sheet_id"]
+    main._process_sheet_ocr(sid)
+    db.set_needs_review(sid, "side_indeterminate")
+    assert client.get("/capture").status_code == 200
+    q = client.get("/queue", headers=_DESKTOP)
+    assert q.status_code == 200
+    assert "rever lado" in q.text  # badge de revisão renderiza
+
+
+def test_sheet_renders_review_banner(env, client):
+    sid = client.post(
+        "/upload?return=json",
+        files={"image": ("kanban.png", _PNG_1x1, "image/png")},
+        headers=_DESKTOP,
+    ).json()["sheet_id"]
+    main._process_sheet_ocr(sid)
+    db.set_needs_review(sid, "side_indeterminate")
+    resp = client.get(f"/sheet/{sid}", headers=_DESKTOP)
+    assert resp.status_code == 200
+    assert "Lado duvidoso" in resp.text
+    assert "/resolve-side" in resp.text

@@ -166,13 +166,26 @@ def _process_sheet_ocr(sheet_id: int) -> None:
             return
         # R224 — distingue 1º processamento de reprocesso (já tinha OCR cru).
         was_reprocess = bool(sheet.get("raw_extraction"))
-        result = ocr_runner.run_pipeline(img_path)
+        # rev00 — pista de página da captura guiada (autoritativa p/ o routing).
+        page_hint = (sheet.get("page_hint") or "").strip().upper() or None
+        result = ocr_runner.run_pipeline(img_path, page_hint=page_hint)
         db.update_extraction(
             sheet_id=sheet_id,
             raw_extraction=result["raw"],
             dq_audit=result["dq"],
             sheet_data=result["current"],
         )
+        # rev00 — flag de revisão do lado: o `run_pipeline` decide inline (pista
+        # vs estrutura do Pass-1, ou mini-OCR '?' sem pista). Marca OU limpa —
+        # um reprocess que agora resolve limpo desmarca a folha (senão o badge/
+        # banner "rever lado" ficaria preso).
+        try:
+            if result.get("needs_review"):
+                db.set_needs_review(sheet_id, result.get("review_reason") or "side_review")
+            else:
+                db.clear_needs_review(sheet_id)
+        except Exception:  # noqa: BLE001
+            pass
         try:
             _run_and_store_cross_check(
                 sheet_id,
@@ -183,8 +196,12 @@ def _process_sheet_ocr(sheet_id: int) -> None:
         except Exception as cc_err:  # noqa: BLE001
             print(f"[worker cross-check] sheet {sheet_id}: {cc_err}", file=sys.stderr)
             traceback.print_exc()
+        # rev00 — só deposita CSV se a folha NÃO estiver marcada p/ revisão
+        # (não corrompe o CSV da fábrica com um lado duvidoso). O check de lado
+        # corre inline no run_pipeline, portanto o result é autoritativo aqui.
         try:
-            _deposit_csv_to_factory(sheet_id)
+            if not result.get("needs_review"):
+                _deposit_csv_to_factory(sheet_id)
         except Exception as dep_err:  # noqa: BLE001
             print(f"[worker deposit] sheet {sheet_id}: {dep_err}", file=sys.stderr)
     except Exception as e:  # noqa: BLE001
@@ -321,6 +338,10 @@ _MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB — phone photos are typically 3-1
 async def upload(
     image: UploadFile = File(...),
     return_mode: str | None = Query(default=None, alias="return"),
+    # rev00 — captura guiada frente/verso: pista de página ('F'/'V') +
+    # token que liga as 2 fotos do mesmo kanban. Ambos opcionais.
+    page: str | None = Form(default=None),
+    capture_group: str | None = Form(default=None),
 ) -> Response:
     if not image.filename:
         raise HTTPException(400, "no filename")
@@ -348,7 +369,9 @@ async def upload(
             f.write(chunk)
 
     rel_path = str(target.relative_to(_DATA_DIR))
-    sheet_id = db.insert_sheet(rel_path)
+    sheet_id = db.insert_sheet(
+        rel_path, page_hint=page, capture_group=capture_group,
+    )
 
     # R117 — kernel event: folha aceite pelo servidor (pré-OCR).
     try:
@@ -1609,11 +1632,17 @@ def mobile_qtds(ids: str) -> JSONResponse:
         template_name = db.get_sheet_template_name(sheet)
         try:
             tpl = get_template(template_name)
-            extra_fields = [
-                fname for fname in ("cesta_n",) if fname in tpl.row_fields
-            ]
         except Exception:  # noqa: BLE001
-            extra_fields = []
+            tpl = None
+        # rev00 — o ecrã de QTDs é só para folhas de produção; um verso de
+        # paragens não tem qtd → saltá-lo (senão mostrava uma tabela partida).
+        if tpl is not None and not tpl.has_production_rows:
+            continue
+        # rev00 — SUCATA por linha entra como campo extra (espelha cesta_n).
+        extra_fields = (
+            [fname for fname in ("cesta_n", "sucata") if fname in tpl.row_fields]
+            if tpl is not None else []
+        )
         out.append({
             "sheet_id": sid,
             "status": sheet["status"],
@@ -1630,6 +1659,8 @@ def mobile_qtds(ids: str) -> JSONResponse:
                     "qtd": r.get("qtd", ""),
                     # R114 — campo extra (vazio se template não usa cesta)
                     "cesta_n": r.get("cesta_n", ""),
+                    # rev00 — SUCATA por linha (vazio se template não a usa)
+                    "sucata": r.get("sucata", ""),
                 }
                 for i, r in enumerate(rows)
             ],
@@ -1692,8 +1723,8 @@ async def mobile_qtds_batch(request: Request) -> JSONResponse:
     if not isinstance(edits, list):
         raise HTTPException(400, "edits must be a list")
 
-    # Whitelist: qty + cesta_n (R114) + footer counters
-    row_field_re = re.compile(r"^rows\[(\d{1,3})\]\.(qtd|cesta_n)$")
+    # Whitelist: qty + cesta_n (R114) + sucata (rev00) + footer counters
+    row_field_re = re.compile(r"^rows\[(\d{1,3})\]\.(qtd|cesta_n|sucata)$")
     allowed_footer = {"footer.colunas_produzidas", "footer.horas_trabalhadas"}
     errors: list[dict] = []
     valid_edits: list[tuple[int, str, str]] = []
@@ -1738,13 +1769,15 @@ async def mobile_qtds_batch(request: Request) -> JSONResponse:
                     "error": f"row index {row_index} out of range",
                 })
                 continue
-            if row_field == "cesta_n":
+            # cesta_n (R114) e sucata (rev00) só são aceites se o template os
+            # declarar; qtd é universal.
+            if row_field in ("cesta_n", "sucata"):
                 from app.templates_registry import get_template
                 tpl = get_template(db.get_sheet_template_name(sheet))
-                if "cesta_n" not in tpl.row_fields:
+                if row_field not in tpl.row_fields:
                     errors.append({
                         "edit": e,
-                        "error": "cesta_n not allowed for this template",
+                        "error": f"{row_field} not allowed for this template",
                     })
                     continue
         elif field_path not in allowed_footer:
@@ -2463,6 +2496,31 @@ def sheet_reprocess(sheet_id: int) -> RedirectResponse:
     img_path = _DATA_DIR / sheet["image_path"]
     if not img_path.exists():
         raise HTTPException(404, "image file missing")
+    db.update_status(sheet_id, "pending")
+    db.clear_error(sheet_id)
+    ocr_queue.enqueue(sheet_id)
+    return RedirectResponse(f"/sheet/{sheet_id}", status_code=303)
+
+
+@app.post("/sheet/{sheet_id}/resolve-side")
+def sheet_resolve_side(sheet_id: int, side: str = Form(...)) -> RedirectResponse:
+    """rev00 — resolve uma folha marcada `needs_review`: o humano diz se é
+    frente ('F') ou verso ('V'). Força a pista, limpa a flag e reprocessa —
+    o worker relê `page_hint` (autoritativo) e encaminha para o template de
+    produção ou para `paragens`. O cross-check não corre num reprocess
+    (`was_reprocess`), portanto a escolha humana não é re-questionada."""
+    s = (side or "").strip().upper()
+    if s not in ("F", "V"):
+        raise HTTPException(400, f"side must be F or V, got {side!r}")
+    sheet = db.get_sheet(sheet_id)
+    if sheet is None:
+        raise HTTPException(404, f"sheet {sheet_id} not found")
+    img_path = _DATA_DIR / sheet["image_path"]
+    if not img_path.exists():
+        raise HTTPException(404, "image file missing")
+    db.set_page_hint(sheet_id, s)
+    db.clear_needs_review(sheet_id)
+    # Reusa a cauda do reprocess (R71): reenfileira para o worker.
     db.update_status(sheet_id, "pending")
     db.clear_error(sheet_id)
     ocr_queue.enqueue(sheet_id)
@@ -3392,9 +3450,10 @@ def dashboard_nesting(request: Request) -> Response:
 def dashboard_downtime(request: Request) -> Response:
     """Round 54 Fase 6 — Paragens (downtime) dashboard.
 
-    Pulls all paragens sheets (template_name=quinadora_pav4_paragens or
-    legacy sheets with setor=QUINADORA PAV.4) and aggregates total
-    minutes by operador / motivo / resolved status.
+    rev00 — puxa todas as folhas de paragens (qualquer template com
+    `has_production_rows=False`: `paragens` genérico, `maq_fustes_paragens`, …
+    via `downtime.list_downtime_sheets`) + legacy por setor QUINADORA PAV.4, e
+    agrega minutos por operador / motivo / estado resolvido.
 
     Empty state when no paragens sheets exist yet.
     """
