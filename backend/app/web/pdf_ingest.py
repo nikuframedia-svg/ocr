@@ -21,8 +21,17 @@ import os
 import threading
 from pathlib import Path
 
-import pypdfium2 as pdfium  # type: ignore[import-untyped]  # sem stubs publicados
 from PIL import Image
+
+# rev01 — `pypdfium2` é uma dependência OPCIONAL do ponto de vista do arranque:
+# a app tem de conseguir bootar sem ela (só o upload de PDF degrada). O import é
+# feito no topo de um módulo que o main importa, por isso NUNCA pode rebentar o
+# arranque — se faltar (ex.: a fábrica correu `git pull` sem `pip install -e .`),
+# fica None e `rasterize_pdf` devolve um erro claro a pedir a instalação.
+try:
+    import pypdfium2 as pdfium  # type: ignore[import-untyped]  # sem stubs publicados
+except ImportError:  # dep ausente → PDF indisponível, resto da app intacto
+    pdfium = None
 
 # Defaults (env override lido em runtime → testes podem monkeypatch os.environ).
 _DEFAULT_DPI = 200
@@ -32,7 +41,7 @@ _JPEG_QUALITY = 90
 # PDFium não é thread-safe entre documentos; serializa uploads concorrentes.
 _PDFIUM_LOCK = threading.Lock()
 
-_REASONS = ("corrupt", "encrypted", "empty", "too_many_pages")
+_REASONS = ("corrupt", "encrypted", "empty", "too_many_pages", "missing_dep")
 
 
 class PdfIngestError(Exception):
@@ -92,10 +101,17 @@ def rasterize_pdf(
 
     Raises :class:`PdfIngestError` em: PDF ilegível/corrompido (``corrupt``),
     encriptado/protegido (``encrypted``), 0 páginas (``empty``), ou nº de páginas
-    acima de ``max_pages`` (``too_many_pages``). Renderiza **página-a-página**
-    (nunca segura N bitmaps em memória) e verifica o cap **antes** de renderizar
-    (um PDF-bomba de milhares de páginas não consome memória).
+    acima de ``max_pages`` (``too_many_pages``), ou dependência ausente
+    (``missing_dep``). Renderiza **página-a-página** (nunca segura N bitmaps em
+    memória) e verifica o cap **antes** de renderizar (um PDF-bomba de milhares
+    de páginas não consome memória).
     """
+    if pdfium is None:
+        raise PdfIngestError(
+            "missing_dep",
+            "Suporte a PDF indisponível: falta a dependência 'pypdfium2'. "
+            r"Correr uma vez no servidor: `.venv\Scripts\python -m pip install -e .`",
+        )
     dpi = dpi if dpi is not None else _env_int("PDF_RASTER_DPI", _DEFAULT_DPI)
     max_pages = (
         max_pages if max_pages is not None

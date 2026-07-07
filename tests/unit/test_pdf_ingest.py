@@ -136,6 +136,18 @@ def test_rasterize_render_failure_cleans_partials(tmp_path, monkeypatch):
     assert not list(out.glob("*.jpg"))      # o p01 já escrito foi removido
 
 
+def test_rasterize_missing_dep_raises(tmp_path, monkeypatch):
+    """Sem pypdfium2 (import falhou → pdfium=None), rasterize devolve um erro
+    claro em vez de rebentar. Prova que a app pode bootar sem a dependência."""
+    monkeypatch.setattr(pdf_ingest, "pdfium", None)
+    pdf = tmp_path / "x.pdf"
+    pdf.write_bytes(b"%PDF-1.4 stub")
+    with pytest.raises(pdf_ingest.PdfIngestError) as ei:
+        pdf_ingest.rasterize_pdf(pdf, tmp_path / "images")
+    assert ei.value.reason == "missing_dep"
+    assert "pypdfium2" in str(ei.value)
+
+
 def test_rasterize_empty_raises(tmp_path, monkeypatch):
     class _FakeDoc:
         def __len__(self) -> int:

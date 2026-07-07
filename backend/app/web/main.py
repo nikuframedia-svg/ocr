@@ -433,8 +433,10 @@ async def upload(
                 pdf_ingest.rasterize_pdf, target, _IMAGES_DIR, stem=target.stem
             )
         except pdf_ingest.PdfIngestError as e:
-            target.unlink(missing_ok=True)  # PDF ilegível → não deixa lixo no disco
-            raise HTTPException(422, str(e)) from e
+            target.unlink(missing_ok=True)  # PDF ilegível/indisponível → não deixa lixo
+            # missing_dep = servidor sem pypdfium2 (503); resto = ficheiro inválido (422).
+            status_code = 503 if e.reason == "missing_dep" else 422
+            raise HTTPException(status_code, str(e)) from e
         sheets = [
             _register_image_sheet(
                 p, page_hint=None, capture_group=group, run_autocrop=False,

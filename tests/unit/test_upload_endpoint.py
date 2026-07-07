@@ -456,6 +456,29 @@ def test_upload_pdf_multipage_redirects_to_queue(env, client):
     assert resp.headers["location"] == "/queue"
 
 
+def test_upload_pdf_without_pypdfium2_returns_503(env, client, monkeypatch):
+    """Se o servidor não tiver pypdfium2 (dep ausente), um PDF dá 503 com
+    mensagem clara — e o resto da app continua a funcionar (imagens ok)."""
+    from app.web import pdf_ingest
+
+    monkeypatch.setattr(pdf_ingest, "pdfium", None)
+    resp = client.post(
+        "/upload?return=json",
+        files={"image": ("scan.pdf", _make_pdf_bytes(2), "application/pdf")},
+        headers=_DESKTOP,
+    )
+    assert resp.status_code == 503
+    assert db.list_sheets() == []
+    assert list((env / "images").glob("*.pdf")) == []  # fonte apagada
+    # imagem continua a funcionar mesmo sem a dep de PDF
+    ok = client.post(
+        "/upload?return=json",
+        files={"image": ("k.png", _PNG_1x1, "image/png")},
+        headers=_DESKTOP,
+    )
+    assert ok.status_code == 200
+
+
 def test_upload_pdf_pages_process_to_extracted(env, client):
     """As páginas de PDF passam pelo worker (OCR mockado) até 'extracted'."""
     body = client.post(
