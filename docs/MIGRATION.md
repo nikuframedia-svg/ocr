@@ -132,6 +132,19 @@ Busca o código novo e reinicia. O `update.ps1` protege a base de dados de
 produção (`git update-index --skip-worktree`) — o `git pull` nunca sobrepõe a
 BD nem as fotos da Metalogalva.
 
+> **rev01 — nova dependência `pypdfium2` (ingestão de PDF).** O `update.ps1` só
+> faz `git pull` + restart; **não reinstala dependências**. Na primeira vez que
+> o PC receber esta versão, corre **uma vez** (com internet):
+> ```
+> cd C:\ocr
+> .venv\Scripts\pip install -e .        # (ou: uv sync)
+> ```
+> O `pypdfium2` é um wheel self-contained (PDFium do Google — **sem poppler nem
+> outro binário de sistema**), por isso instala num só passo, e o wheel `abi3`
+> serve qualquer Python 3.x. Se o PC estiver sem internet, pré-descarrega o
+> wheel no portátil (`uv pip download pypdfium2` / `pip download`) e copia-o.
+> Depois disto, os `update.ps1` seguintes voltam a bastar.
+
 ---
 
 ## PARTE E — o fine-tuning (no PC da Metalogalva, depois da migração)

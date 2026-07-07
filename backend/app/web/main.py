@@ -36,7 +36,7 @@ sys.path.insert(0, str(_REPO / "backend"))
 
 from app import kernel  # noqa: E402  — R110.E event log (R117: hoisted for hot-path emits)
 from app.config import get_settings  # noqa: E402  — R236: gate de gravação marginal
-from app.web import attractors, db, export, kpis, llm_assistant, ocr_queue, ocr_runner  # noqa: E402
+from app.web import attractors, db, export, kpis, llm_assistant, ocr_queue, ocr_runner, pdf_ingest  # noqa: E402
 from app.cross_check import (  # noqa: E402
     cross_check_sheet,
     get_watcher,
@@ -332,6 +332,49 @@ def capture_page(request: Request) -> Response:
 
 
 _MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB — phone photos are typically 3-10 MB
+# rev01 — scans de MFP multipágina em PDF podem ser maiores que uma foto.
+_MAX_PDF_UPLOAD_BYTES = int(os.environ.get("PDF_MAX_UPLOAD_MB", "50")) * 1024 * 1024
+_IMAGE_SUFFIXES = (".jpeg", ".jpg", ".png", ".bmp", ".tiff", ".webp")
+
+
+def _register_image_sheet(
+    page_path: Path,
+    *,
+    page_hint: str | None,
+    capture_group: str | None,
+    run_autocrop: bool,
+) -> dict[str, object]:
+    """rev01 — regista UMA imagem-folha e enfileira-a para OCR.
+
+    Extraído do corpo do /upload para ser reutilizado 1x por foto/imagem e Nx
+    por página de um PDF. Faz: insert_sheet → kernel event → (opcional) auto-crop
+    → ocr_queue.enqueue. Devolve ``{sheet_id, status, queue_pos}``.
+
+    ``run_autocrop`` só é True para FOTOS (perspetiva do papel). Páginas de PDF
+    são scans já limpos/axis-aligned → saltam o auto-crop (o _warp_to_a4 rodaria
+    /distorceria páginas portrait, e o OCR usa o original de qualquer forma).
+    """
+    rel_path = str(page_path.relative_to(_DATA_DIR))
+    sheet_id = db.insert_sheet(
+        rel_path, page_hint=page_hint, capture_group=capture_group,
+    )
+    # R117 — kernel event: folha aceite pelo servidor (pré-OCR).
+    try:
+        kernel.emit_event("sheet_uploaded", {"sheet_id": sheet_id, "image_path": rel_path})
+    except Exception:  # noqa: BLE001
+        pass
+    if run_autocrop:
+        # Round 46 — auto-crop kanban paper from photo (background removed,
+        # perspective corrected). Silent no-op if detection fails.
+        try:
+            from .image_crop import auto_crop
+            auto_crop(page_path)
+        except Exception as crop_err:  # noqa: BLE001
+            print(f"[auto-crop] sheet upload {page_path.name}: {crop_err}", file=sys.stderr)
+    # R71 — enqueue for background OCR (worker drains FIFO serially, matching
+    # Ollama's single-inference GPU constraint).
+    queue_pos = ocr_queue.enqueue(sheet_id)
+    return {"sheet_id": sheet_id, "status": "pending", "queue_pos": queue_pos}
 
 
 @app.post("/upload")
@@ -346,69 +389,85 @@ async def upload(
     if not image.filename:
         raise HTTPException(400, "no filename")
     suffix = Path(image.filename).suffix.lower() or ".jpeg"
-    if suffix not in (".jpeg", ".jpg", ".png", ".bmp", ".tiff", ".webp"):
+
+    # rev01 — decidir imagem vs PDF por MAGIC BYTES (%PDF-), autoritativo sobre a
+    # extensão do filename. Lê o 1º chunk antes de escolher o destino/limite.
+    first = await image.read(1024 * 1024)
+    is_pdf = pdf_ingest.is_pdf_bytes(first) or suffix == ".pdf"
+    if suffix == ".pdf" and not pdf_ingest.is_pdf_bytes(first):
+        raise HTTPException(400, "ficheiro .pdf inválido (sem assinatura %PDF-)")
+    if not is_pdf and suffix not in _IMAGE_SUFFIXES:
         raise HTTPException(400, f"unsupported extension {suffix}")
 
-    # Size check before reading the whole file. Starlette exposes size via
-    # Content-Length when available (mobile uploads usually have it).
-    if image.size is not None and image.size > _MAX_UPLOAD_BYTES:
+    # Size check via Content-Length quando disponível (limite maior p/ PDF).
+    max_bytes = _MAX_PDF_UPLOAD_BYTES if is_pdf else _MAX_UPLOAD_BYTES
+    if image.size is not None and image.size > max_bytes:
         raise HTTPException(
-            413, f"image too large ({image.size} bytes > {_MAX_UPLOAD_BYTES})"
+            413, f"file too large ({image.size} bytes > {max_bytes})"
         )
 
+    store_suffix = ".pdf" if is_pdf else suffix
     token = secrets.token_hex(8)
-    target = _IMAGES_DIR / f"{dt.datetime.now():%Y%m%d_%H%M%S}_{token}{suffix}"
+    target = _IMAGES_DIR / f"{dt.datetime.now():%Y%m%d_%H%M%S}_{token}{store_suffix}"
+    # Grava o 1º chunk (já lido) + o resto do stream, com cap incremental.
     bytes_written = 0
     with target.open("wb") as f:
-        while chunk := await image.read(1024 * 1024):
+        chunk = first
+        while chunk:
             bytes_written += len(chunk)
-            if bytes_written > _MAX_UPLOAD_BYTES:
+            if bytes_written > max_bytes:
                 f.close()
                 target.unlink(missing_ok=True)
-                raise HTTPException(413, "image exceeded size limit")
+                raise HTTPException(413, "file exceeded size limit")
             f.write(chunk)
+            chunk = await image.read(1024 * 1024)
 
-    rel_path = str(target.relative_to(_DATA_DIR))
-    sheet_id = db.insert_sheet(
-        rel_path, page_hint=page, capture_group=capture_group,
-    )
+    if is_pdf:
+        # rev01 — explode o PDF em N folhas. Cada página é um kanban
+        # independente; page_hint=None → auto-deteção F/V por página (cobre
+        # "vários kanbans por PDF" e "1 documento por PDF"). O .pdf-fonte é
+        # PRESERVADO em data/images/ (trilho de auditoria EN 1090 / ISO 9001).
+        group = (capture_group or "").strip() or token
+        try:
+            page_paths = await asyncio.to_thread(
+                pdf_ingest.rasterize_pdf, target, _IMAGES_DIR, stem=target.stem
+            )
+        except pdf_ingest.PdfIngestError as e:
+            target.unlink(missing_ok=True)  # PDF ilegível → não deixa lixo no disco
+            raise HTTPException(422, str(e)) from e
+        sheets = [
+            _register_image_sheet(
+                p, page_hint=None, capture_group=group, run_autocrop=False,
+            )
+            for p in page_paths
+        ]
+    else:
+        sheets = [
+            _register_image_sheet(
+                target, page_hint=page, capture_group=capture_group, run_autocrop=True,
+            )
+        ]
 
-    # R117 — kernel event: folha aceite pelo servidor (pré-OCR).
-    try:
-        kernel.emit_event("sheet_uploaded", {"sheet_id": sheet_id, "image_path": rel_path})
-    except Exception:  # noqa: BLE001
-        pass
-
-    # Round 46 — auto-crop kanban paper from photo (background removed,
-    # perspective corrected). Saved as <stem>_cropped.jpg next to original.
-    # Silent no-op if detection fails (image route falls back to original).
-    try:
-        from .image_crop import auto_crop
-        auto_crop(target)
-    except Exception as crop_err:  # noqa: BLE001
-        print(f"[auto-crop] sheet upload {target.name}: {crop_err}", file=sys.stderr)
-
-    # R71 — enqueue for background OCR processing. Returns near-instantly
-    # (single SQLite INSERT + queue.put, ~50ms total) instead of blocking
-    # ~22s for OCR. Worker thread (in ocr_queue) drains FIFO serially,
-    # matching Ollama's single-inference GPU constraint while letting
-    # /upload accept N requests in parallel without timeouts.
-    queue_pos = ocr_queue.enqueue(sheet_id)
-
-    # Mobile flow uses `?return=json` to drive the polling UI from JS.
-    # Returns sheet_id + queue_pos for immediate display; status updates
-    # come via subsequent /sheet/{id}/status polls.
+    # rev01 — resposta UNIFORME: `sheets` é uma lista (1 elem p/ imagem, N p/ PDF).
+    # Mantém `sheet_id`/`status`/`queue_pos` no topo (retrocompat: clientes antigos
+    # lêem body.sheet_id e processam só a 1ª página).
     if return_mode == "json":
+        first_sheet = sheets[0]
         return JSONResponse(
             {
-                "sheet_id": sheet_id,
-                "status": "pending",
-                "queue_pos": queue_pos,
+                "sheets": sheets,
+                "sheet_id": first_sheet["sheet_id"],
+                "status": first_sheet["status"],
+                "queue_pos": first_sheet["queue_pos"],
+                "count": len(sheets),
                 "error": None,
             },
             status_code=200,
         )
-    return RedirectResponse(f"/sheet/{sheet_id}", status_code=303)
+    # Não-JSON (desktop): 1 folha → revisão dessa folha; multipágina → a fila.
+    if len(sheets) == 1:
+        return RedirectResponse(f"/sheet/{sheets[0]['sheet_id']}", status_code=303)
+    return RedirectResponse("/queue", status_code=303)
 
 
 # --- Cross-check helper (Round 33: pure verification) ---

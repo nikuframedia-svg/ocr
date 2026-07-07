@@ -28,6 +28,18 @@ _PNG_1x1 = base64.b64decode(
 _DESKTOP = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
 
 
+def _make_pdf_bytes(n_pages: int = 3, size: tuple[int, int] = (842, 595)) -> bytes:
+    """rev01 — PDF sintético (via Pillow) para testar a ingestão sem rede."""
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    imgs = [Image.new("RGB", size, (255, 255, 255)) for _ in range(n_pages)]
+    imgs[0].save(buf, "PDF", save_all=True, append_images=imgs[1:])
+    return buf.getvalue()
+
+
 def _fake_extraction() -> dict:
     """Resultado canónico de OCR (folha de Acabamento MTG2)."""
     data = {
@@ -318,3 +330,139 @@ def test_sheet_renders_review_banner(env, client):
     assert resp.status_code == 200
     assert "Lado duvidoso" in resp.text
     assert "/resolve-side" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# rev01 — ingestão de PDF / multi-PDF (scans de folhas manuscritas)
+# ---------------------------------------------------------------------------
+
+def test_upload_pdf_creates_n_sheets(env, client):
+    """Um PDF de 3 páginas → 3 folhas 'pending'; resposta uniforme com `sheets`."""
+    resp = client.post(
+        "/upload?return=json",
+        files={"image": ("scan.pdf", _make_pdf_bytes(3), "application/pdf")},
+        headers=_DESKTOP,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["count"] == 3
+    assert len(body["sheets"]) == 3
+    assert body["sheet_id"] == body["sheets"][0]["sheet_id"]  # retrocompat
+    for s in body["sheets"]:
+        assert db.get_sheet(s["sheet_id"])["status"] == "pending"
+    # 3 páginas rasterizadas + o PDF-fonte preservado no disco.
+    assert len(list((env / "images").glob("*.jpg"))) == 3
+    assert len(list((env / "images").glob("*.pdf"))) == 1
+
+
+def test_upload_pdf_detected_by_magic_not_extension(env, client):
+    """Filename `.bin` mas conteúdo `%PDF-` → tratado como PDF (magic > extensão)."""
+    resp = client.post(
+        "/upload?return=json",
+        files={"image": ("scan.bin", _make_pdf_bytes(2), "application/octet-stream")},
+        headers=_DESKTOP,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["count"] == 2
+
+
+def test_upload_rejects_fake_pdf(env, client):
+    """Filename `.pdf` sem assinatura %PDF- → 400."""
+    resp = client.post(
+        "/upload?return=json",
+        files={"image": ("x.pdf", b"hello, not a pdf", "application/pdf")},
+        headers=_DESKTOP,
+    )
+    assert resp.status_code == 400
+
+
+def test_upload_pdf_skips_autocrop_but_image_runs_it(env, client, monkeypatch):
+    """auto_crop corre para FOTOS mas é SALTADO para páginas de PDF (regressão)."""
+    from app.web import image_crop
+
+    calls: list[str] = []
+    monkeypatch.setattr(image_crop, "auto_crop", lambda p, *a, **k: calls.append(str(p)))
+
+    client.post(
+        "/upload?return=json",
+        files={"image": ("k.png", _PNG_1x1, "image/png")},
+        headers=_DESKTOP,
+    )
+    assert len(calls) == 1  # imagem → 1 chamada
+    calls.clear()
+
+    client.post(
+        "/upload?return=json",
+        files={"image": ("scan.pdf", _make_pdf_bytes(2), "application/pdf")},
+        headers=_DESKTOP,
+    )
+    assert calls == []  # PDF → nenhuma chamada
+
+
+def test_upload_pdf_page_hint_null_and_group_shared(env, client):
+    """Mesmo com page='F', as páginas de PDF ficam page_hint NULL (auto-deteção)
+    e partilham o mesmo capture_group (agrupadas pelo PDF)."""
+    body = client.post(
+        "/upload?return=json",
+        files={"image": ("scan.pdf", _make_pdf_bytes(3), "application/pdf")},
+        data={"page": "F"},
+        headers=_DESKTOP,
+    ).json()
+    groups = set()
+    for s in body["sheets"]:
+        sh = db.get_sheet(s["sheet_id"])
+        assert sh["page_hint"] is None
+        groups.add(sh["capture_group"])
+    assert len(groups) == 1
+
+
+def test_upload_image_response_shape_unchanged(env, client):
+    """Retrocompat: upload de imagem mantém sheet_id/status/error e ganha `sheets`."""
+    body = client.post(
+        "/upload?return=json",
+        files={"image": ("k.png", _PNG_1x1, "image/png")},
+        headers=_DESKTOP,
+    ).json()
+    assert isinstance(body["sheet_id"], int)
+    assert body["status"] == "pending"
+    assert body["error"] is None
+    assert body["count"] == 1
+    assert len(body["sheets"]) == 1
+    assert body["sheets"][0]["sheet_id"] == body["sheet_id"]
+
+
+def test_upload_pdf_too_many_pages_422(env, client, monkeypatch):
+    """PDF acima do cap → 422, nenhuma folha criada, PDF-fonte apagado."""
+    monkeypatch.setenv("PDF_MAX_PAGES", "1")
+    resp = client.post(
+        "/upload?return=json",
+        files={"image": ("scan.pdf", _make_pdf_bytes(2), "application/pdf")},
+        headers=_DESKTOP,
+    )
+    assert resp.status_code == 422
+    assert db.list_sheets() == []  # nenhuma folha
+    assert list((env / "images").glob("*.pdf")) == []  # fonte apagada
+
+
+def test_upload_pdf_multipage_redirects_to_queue(env, client):
+    """Sem ?return=json, um PDF multipágina redireciona para /queue."""
+    resp = client.post(
+        "/upload",
+        files={"image": ("scan.pdf", _make_pdf_bytes(2), "application/pdf")},
+        headers=_DESKTOP,
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/queue"
+
+
+def test_upload_pdf_pages_process_to_extracted(env, client):
+    """As páginas de PDF passam pelo worker (OCR mockado) até 'extracted'."""
+    body = client.post(
+        "/upload?return=json",
+        files={"image": ("scan.pdf", _make_pdf_bytes(2), "application/pdf")},
+        headers=_DESKTOP,
+    ).json()
+    for s in body["sheets"]:
+        main._process_sheet_ocr(s["sheet_id"])
+        assert db.get_sheet(s["sheet_id"])["status"] == "extracted"

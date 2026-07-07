@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Captura — Metalogalva OCR{% endblock %}
 {% block content %}
-<div x-data="captureApp()" x-init="start()" class="capture-root" style="display:flex; flex-direction:column; min-height:calc(100vh - 0px);">
+<div x-data="captureApp()" class="capture-root" style="display:flex; flex-direction:column; min-height:calc(100vh - 0px);">
 
   <div class="page-h">
     <div>
@@ -12,6 +12,75 @@
     <span x-show="stage === 'preview' && !streamReady && !streamErr" class="pill neutral">A iniciar câmara…</span>
     <span x-show="stage === 'preview' && streamErr" class="pill warn">Sem câmara</span>
   </div>
+
+  <!-- ============== STAGE: CHOOSE (câmara vs ficheiros/PDF) ============== -->
+  <!-- rev01 — ecrã inicial: o utilizador escolhe entre tirar fotos (câmara) ou
+       carregar ficheiros/PDF (scans do escritório). A câmara SÓ arranca ao
+       escolher "Tirar fotos" (antes auto-arrancava — no desktop pedia webcam
+       sem necessidade). -->
+  <template x-if="stage === 'choose'">
+    <div style="flex:1; padding:18px; display:flex; flex-direction:column; gap:14px; justify-content:center;">
+      <div class="muted" style="text-align:center; margin-bottom:4px;">
+        Como queres meter os kanbans?
+      </div>
+      <button class="btn lg primary" style="padding:22px; font-size:18px;" @click="goCamera()">
+        📷 Tirar fotos
+      </button>
+      <button class="btn lg" style="padding:22px; font-size:18px;" @click="goImport()">
+        📄 Carregar ficheiros / PDF
+      </button>
+      <div class="muted tiny" style="text-align:center; margin-top:6px;">
+        Fotos pela câmara do telemóvel, ou arrasta imagens/PDF do computador.
+      </div>
+    </div>
+  </template>
+
+  <!-- ============== STAGE: IMPORT (ficheiros/PDF, arrastar-e-largar) ============== -->
+  <template x-if="stage === 'import'">
+    <div style="flex:1; padding:18px; display:flex; flex-direction:column; gap:14px;">
+      <div class="dropzone" :class="{ dragging: dragOver }"
+           @dragover.prevent="dragOver = true"
+           @dragleave.prevent="dragOver = false"
+           @drop.prevent="onDrop($event)">
+        <div style="font-size:40px; line-height:1;">📄</div>
+        <div style="font-weight:600; margin-top:8px;">Arrasta imagens ou PDF para aqui</div>
+        <div class="muted tiny" style="margin-top:4px;">ou</div>
+        <label class="btn primary" style="cursor:pointer; margin-top:8px;">
+          Escolher ficheiros
+          <input type="file" accept="image/*,application/pdf" multiple
+                 @change="onFiles($event)" style="display:none;">
+        </label>
+        <div class="muted tiny" style="margin-top:10px;">
+          PDF de kanbans digitalizados: cada página vira uma folha.
+        </div>
+      </div>
+
+      <!-- lista de itens escolhidos (imagem = miniatura; PDF = ícone) -->
+      <div x-show="photos.length > 0" style="display:flex; flex-direction:column; gap:8px;">
+        <template x-for="(p, idx) in photos" :key="p.id">
+          <div class="card" style="display:flex; align-items:center; gap:10px; padding:10px;">
+            <div style="width:44px; height:44px; border-radius:6px; overflow:hidden; background:#2a271f; flex-shrink:0; display:flex; align-items:center; justify-content:center;">
+              <template x-if="p.kind === 'pdf'"><span style="font-size:22px;">📄</span></template>
+              <template x-if="p.kind !== 'pdf'"><img :src="p.url" style="width:100%; height:100%; object-fit:cover;"></template>
+            </div>
+            <div style="flex:1; min-width:0;">
+              <div class="mono tiny" style="font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"
+                   x-text="p.name || ('imagem ' + (idx+1))"></div>
+              <div class="muted tiny" x-text="p.kind === 'pdf' ? 'PDF' : 'imagem'"></div>
+            </div>
+            <button class="thumb-x" style="position:static;" @click="removePhoto(p.id)" aria-label="Remover">×</button>
+          </div>
+        </template>
+      </div>
+
+      <div style="display:flex; gap:10px; margin-top:auto;">
+        <button class="btn lg" style="flex:1;" @click="backToChoose()">Voltar</button>
+        <button class="btn lg primary" style="flex:2;" @click="uploadAll()" :disabled="photos.length === 0">
+          Enviar <span x-text="photos.length"></span>
+        </button>
+      </div>
+    </div>
+  </template>
 
   <!-- ============== STAGE: PREVIEW (camera live + thumb strip) ============== -->
   <template x-if="stage === 'preview'">
@@ -150,11 +219,13 @@
       <template x-for="(s, idx) in pendingSheets" :key="s.sheet_id">
         <div class="card" style="padding:14px; display:flex; align-items:center; gap:12px;">
           <div style="width:48px; height:48px; border-radius:6px; overflow:hidden; background:#2a271f; flex-shrink:0;">
-            <img :src="photoThumb(idx)" style="width:100%; height:100%; object-fit:cover;">
+            <!-- rev01 — thumb via servidor (1 foto = 1 folha, mas 1 PDF = N folhas;
+                 o blob local já não mapeia 1:1 → usar /image/{sheet_id}). -->
+            <img :src="'/image/' + s.sheet_id" loading="lazy" style="width:100%; height:100%; object-fit:cover;">
           </div>
           <div style="flex:1; min-width:0;">
             <div style="font-size:13px; font-weight:600;">
-              Foto <span x-text="idx + 1"></span>
+              Folha <span x-text="idx + 1"></span>
             </div>
             <div class="muted tiny" x-text="statusLabel(s.status)"></div>
           </div>
@@ -202,8 +273,8 @@
         <div class="card-h">
           <div class="card-h-title">Confirmar quantidades</div>
           <div class="card-h-sub muted tiny">
-            <span x-text="photos.length"></span>
-            <span x-text="photos.length === 1 ? 'folha pronta' : 'folhas prontas'"></span> ·
+            <span x-text="qtdSheets.length"></span>
+            <span x-text="qtdSheets.length === 1 ? 'folha pronta' : 'folhas prontas'"></span> ·
             edita só QTD se for necessário
           </div>
         </div>
@@ -327,12 +398,12 @@
     <div class="proc">
       <div style="font-size:80px; line-height:1;">✓</div>
       <div style="font-size:24px; font-weight:600;">
-        <span x-text="photos.length"></span>
-        <span x-text="photos.length === 1 ? 'foto gravada' : 'fotos gravadas'"></span>
+        <span x-text="doneCount"></span>
+        <span x-text="doneCount === 1 ? 'folha gravada' : 'folhas gravadas'"></span>
       </div>
       <div class="muted">Bom trabalho!</div>
       <button class="btn lg primary" @click="reset()" style="margin-top:24px;">
-        Tirar mais fotos
+        Nova captura
       </button>
     </div>
   </template>
@@ -341,6 +412,18 @@
 </div>
 
 <style>
+/* rev01 — zona de arrastar-e-largar do stage 'import' (desktop) */
+.dropzone {
+  border: 2px dashed var(--rule-2, #b9b19a);
+  border-radius: 12px;
+  padding: 28px 18px;
+  text-align: center;
+  transition: background .15s, border-color .15s;
+}
+.dropzone.dragging {
+  border-color: var(--accent, #2F7D43);
+  background: rgba(47,125,67,0.06);
+}
 .thumb-strip {
   display:flex; gap:8px; overflow-x:auto; padding:4px 0;
   scrollbar-width: thin;
@@ -383,10 +466,15 @@
 <script>
 function captureApp() {
   return {
-    stage: 'preview',         // preview | confirm | uploading | processing | qtd_confirm | done
+    // rev01 — arranca no ecrã de escolha; a câmara só liga em goCamera().
+    stage: 'choose',          // choose | import | preview | confirm | uploading | processing | qtd_confirm | done
     streamReady: false,
     streamErr: '',
-    photos: [],               // [{ id, blob, url, side, capture_group }]
+    dragOver: false,          // rev01 — feedback visual do arrastar-e-largar
+    // rev01 — cada item pode ser imagem (kind:'image', url=object-URL) ou PDF
+    // (kind:'pdf', url=null — sem miniatura cliente). `side`=null nos imports →
+    // o servidor auto-deteta frente/verso por página.
+    photos: [],               // [{ id, blob, url, kind, name, side, capture_group }]
     // rev00 — captura guiada frente/verso. `side` é o lado da PRÓXIMA foto;
     // `captureGroup` liga a frente ao verso do mesmo kanban. Sem crypto.randomUUID
     // (não existe em http/LAN) → id = sessão(Date.now) + contador.
@@ -555,36 +643,64 @@ function captureApp() {
           id: this._photoCounter,
           blob: b,
           url: URL.createObjectURL(b),
+          kind: 'image',
+          name: '',
           side: tag.side,
           capture_group: tag.capture_group,
         });
       }, 'image/jpeg', 0.85);
     },
 
-    onFiles(ev) {
-      const files = Array.from(ev.target.files || []);
-      for (const f of files) {
+    // rev01 — adiciona ficheiros escolhidos/arrastados (imagens ou PDF). O lado
+    // fica null → o servidor auto-deteta frente/verso por página (o utilizador
+    // escolheu auto-deteção; um PDF tem N páginas, um único F/V não as descreve).
+    _addFiles(fileList) {
+      for (const f of Array.from(fileList || [])) {
         this._photoCounter++;
-        // Fallback de galeria (câmara indisponível): NÃO auto-alterna — um
-        // multi-select fora de ordem F,V marcaria mal. Usa o lado escolhido no
-        // toggle para todos; cada foto no seu grupo (o operador importa por lado).
         this._groupSeq++;
+        const isPdf = f.type === 'application/pdf' || /\.pdf$/i.test(f.name || '');
         this.photos.push({
           id: this._photoCounter,
           blob: f,
-          url: URL.createObjectURL(f),
-          side: this.side,
+          url: isPdf ? null : URL.createObjectURL(f),
+          kind: isPdf ? 'pdf' : 'image',
+          name: f.name || '',
+          side: null,
           capture_group: this._sessionId + '-' + this._groupSeq,
         });
       }
     },
 
+    onFiles(ev) {
+      this._addFiles(ev.target && ev.target.files);
+      if (ev.target) ev.target.value = '';   // permite re-escolher o mesmo ficheiro
+    },
+
+    onDrop(ev) {
+      this.dragOver = false;
+      this._addFiles(ev.dataTransfer && ev.dataTransfer.files);
+    },
+
     removePhoto(id) {
       const idx = this.photos.findIndex(p => p.id === id);
       if (idx >= 0) {
-        URL.revokeObjectURL(this.photos[idx].url);
+        if (this.photos[idx].url) URL.revokeObjectURL(this.photos[idx].url);
         this.photos.splice(idx, 1);
       }
+    },
+
+    // rev01 — navegação do ecrã de escolha
+    goCamera() {
+      this.stage = 'preview';
+      this.$nextTick(() => this.start());
+    },
+    goImport() {
+      this.stage = 'import';
+    },
+    backToChoose() {
+      for (const p of this.photos) { if (p.url) URL.revokeObjectURL(p.url); }
+      this.photos = [];
+      this.stage = 'choose';
     },
 
     goConfirm() {
@@ -621,9 +737,10 @@ function captureApp() {
         this.uploadIdx = i;
         const photo = this.photos[i];
         const fd = new FormData();
-        fd.append('image', photo.blob, `kanban_${i+1}.jpeg`);
+        fd.append('image', photo.blob, photo.name || `kanban_${i+1}.jpeg`);
         // rev00 — captura guiada: lado (F/V) + token que liga frente↔verso.
-        fd.append('page', photo.side || 'F');
+        // rev01 — imports enviam page='' (side null) → servidor auto-deteta.
+        fd.append('page', photo.side || '');
         fd.append('capture_group', photo.capture_group || '');
         try {
           // /upload now just enqueues + returns; 30s is plenty for image upload
@@ -637,13 +754,20 @@ function captureApp() {
           clearTimeout(timer);
           if (res.ok) {
             const body = await res.json().catch(() => ({}));
-            if (body.sheet_id) {
-              this.uploadedSheetIds.push(body.sheet_id);
-              this.pendingSheets.push({
-                sheet_id: body.sheet_id,
-                status: body.status || 'pending',
-                error_message: null,
-              });
+            // rev01 — a resposta traz `sheets` (1 elem p/ imagem, N p/ PDF).
+            // Fallback ao formato antigo (sheet_id no topo) por robustez.
+            const got = (Array.isArray(body.sheets) && body.sheets.length)
+              ? body.sheets
+              : (body.sheet_id ? [{ sheet_id: body.sheet_id, status: body.status || 'pending' }] : []);
+            if (got.length) {
+              for (const sh of got) {
+                this.uploadedSheetIds.push(sh.sheet_id);
+                this.pendingSheets.push({
+                  sheet_id: sh.sheet_id,
+                  status: sh.status || 'pending',
+                  error_message: null,
+                });
+              }
             } else {
               failures.push({i: i+1, reason: body.error || 'no sheet_id'});
             }
@@ -680,17 +804,17 @@ function captureApp() {
       ).length;
     },
 
+    // rev01 — contagem de folhas para o ecrã final (1 PDF → N folhas, portanto
+    // pode diferir do nº de itens enviados). Fallback ao nº de itens.
+    get doneCount() {
+      return this.pendingSheets.length || this.photos.length;
+    },
+
     statusLabel(status) {
       if (status === 'extracted') return '✓ Pronto';
       if (status === 'error') return '✗ Erro';
       if (status === 'pending') return 'A aguardar OCR…';
       return status || '—';
-    },
-
-    photoThumb(idx) {
-      return this.photos[idx] && this.photos[idx].url
-        ? this.photos[idx].url
-        : '';
     },
 
     startPolling() {
@@ -855,28 +979,26 @@ function captureApp() {
     reset() {
       // Round 50 — disarm back-lock when starting fresh capture
       this.disarmBackLock();
-      // Clean up object URLs to avoid memory leak
-      for (const p of this.photos) URL.revokeObjectURL(p.url);
+      // Clean up object URLs to avoid memory leak (PDFs têm url null → guarda)
+      for (const p of this.photos) { if (p.url) URL.revokeObjectURL(p.url); }
       this.photos = [];
       this.uploadIdx = 0;
       this.uploadedSheetIds = [];
+      this.pendingSheets = [];
       this.qtdSheets = [];
       this.savingQtds = false;
       this._photoCounter = 0;
       this.streamErr = '';
+      this.dragOver = false;
       // rev00 — nova sessão de captura guiada
       this.side = 'F';
       this.captureGroup = null;
       this._groupSeq = 0;
       this._sessionId = String(Date.now());
       this._shooting = false;
-      this.stage = 'preview';
-      // R66 — defer start() to next tick so the <template x-if="stage==='preview'">
-      // mounts the <video x-ref="video"> element before we try to attach the
-      // MediaStream. Without this, the stream is acquired (iOS shows the green
-      // dot) but $refs.video is undefined → stream is orphaned, streamReady
-      // stays false, all buttons appear frozen (the symptom user reported).
-      this.$nextTick(() => this.start());
+      // rev01 — volta ao ecrã de escolha (não auto-arranca a câmara; o operador
+      // decide de novo entre fotos e ficheiros/PDF).
+      this.stage = 'choose';
     },
   };
 }
