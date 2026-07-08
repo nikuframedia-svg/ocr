@@ -2481,7 +2481,13 @@ class TestGlobalWinnerScoring:
 
         assert row["winner_of"] == "262532"
         assert row["winner_score"] == 4
-        assert row["fields"]["modelo"]["status"] == "snapped"
+        # R248 — "8661SF00" aparece nas DUAS designações irmãs (TOPO e BASE:
+        # peças diferentes) — o modelo escrito não discrimina a sub-linha.
+        # O desempate continua a escolher uma entry (substitute-everything),
+        # mas a célula fica em revisão em vez de verde-por-desempate.
+        modelo = row["fields"]["modelo"]
+        assert modelo["status"] == "very_different"
+        assert modelo["decision_reason"] == "ambiguous_sibling_designacao"
 
     def test_two_fuzzy_identifiers_without_exact_support_select_best_winner(self):
         refs = {

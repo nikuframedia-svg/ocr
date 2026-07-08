@@ -383,6 +383,17 @@ _FS_DIM_U_FLOOR = {
     "esp": 0.171, "dbase": 0.164, "dtopo": 0.182,
 }
 
+# R247 — match do código-peça embebido após strip do sufixo A/B: quase-pleno
+# (0.97·w ≫ fuzzy do token-família ≈0.67·w), mas <1.0 de propósito — se um
+# irmão bater 1.0 PLENO (o sufixo era código, não decoração), ganha ele; e a
+# guarda de irmãos R248 (gate sim<1.0) continua armada.
+_MODEL_EMBEDDED_STRIPPED_SIM = 0.97
+# R248 — margem (bits) abaixo da qual um IRMÃO da mesma OF com designação
+# diferente torna a célula modelo ambígua. 2.0 cobre o "dígito de sorte" no
+# token-família (Δsim≈0.11 × w_cap 14 ≈ 1.5 bits) e alinha com o cap dos
+# bias de contexto R242 (contexto/sorte nunca vencem evidência real).
+_FS_SIBLING_AMBIG_BITS = 2.0
+
 # Thresholds de "muito diferente" — abaixo destes níveis, vermelho.
 _VERY_DIFF_STR_SIM = 50.0          # se sim < 50, é muito diferente
 _VERY_DIFF_NUM_ABS = {             # diferença absoluta > X = revisão humana
@@ -608,7 +619,24 @@ _STATUS_LABELS = {
 # deriva limitada + backup). R245: canais de chars POR OPERADOR quando
 # fitted. R246: descodificação ativa (re-read discriminativo de crops,
 # flag OFF até calibrar com imagens na fábrica). BUMP obrigatório.
-ENGINE_VERSION = "v28_R243"
+# R247 — modelo compara o CÓDIGO-PEÇA embebido na designação (tokens com
+# dígito+letra len>=4, cacheados) e limpa as decorações do operador ANTES de
+# compactar (prefixo N/Nº/No colado, '(-n)'/'-n' final, fração → match 1.0;
+# sufixo A/B isolado → 0.97, pode ser código real). Canal de visão R241
+# aplicado ao código-peça (misread comum a 1 char ≈ 0.95, MEDIDO, com
+# pré-filtro barato). Motivo: irmãos da MESMA OF (dims idênticas, código a
+# 1 dígito — 45,6% das OFs) deixavam o fuzzy do token-família escolher o
+# irmão errado pelo ÚLTIMO dígito (742→'TME2'), verde com p_top 0.93-0.99;
+# 17 trocas validadas em bloco no app.db. Marcadores de parte A/B↔Nº: a
+# correlação medida é RUÍDO — decoração a limpar, nunca evidência.
+# R248 — posterior consciente de IRMÃOS: `_sibling_margin_bits` (margem
+# para o melhor irmão; a margem OF-level e a calibração R243 ficam
+# intocadas) + guarda de célula: modelo escrito que não discrimina o winner
+# dos irmãos (sim de um irmão >= winner−0.02 — apanha empates a 1.0:
+# família-prefixo, código repetido) → very_different + decision_confidence
+# = p_top × _sibling_p(margem irmãos) + decision_reason
+# "ambiguous_sibling_designacao". Muda decisões em massa → BUMP obrigatório.
+ENGINE_VERSION = "v29_R248"
 
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
@@ -747,6 +775,111 @@ def _model_compact_variants(value: object) -> list[str]:
     return list(set(_o_zero_variants(base)))
 
 
+@lru_cache(maxsize=200_000)
+def _designacao_code_tokens_cached(des: str) -> tuple[str, ...]:
+    """R247 — tokens-código embebidos na designação (ex.: '5100TME2 - CC4H1
+    5100T743 1/2' → ('5100TME2', 'CC4H1', '5100T743')): alfanuméricos com
+    dígito E letra, len>=4. É o código-peça embebido (não o 1º token) que
+    discrimina entries IRMÃS da mesma OF; extração por tokens porque o
+    formato das designações deriva ao longo do tempo ('TSA20 18M Nº1
+    1234TJ02' → '1234TJ02 - … 1234T800 1/2')."""
+    norm = re.sub(r"[^A-Z0-9]+", " ", _norm_ascii_upper(des))
+    return tuple(dict.fromkeys(
+        tok for tok in norm.split()
+        if len(tok) >= 4
+        and any(c.isdigit() for c in tok)
+        and any(c.isalpha() for c in tok)
+    ))
+
+
+@lru_cache(maxsize=200_000)
+def _model_code_cores_cached(raw: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """R247 — núcleos do código-peça ESCRITO, sem as decorações do operador,
+    removidas ANTES de compactar (coladas no compacto partiam o containment:
+    compact('No→1234.T.841(-1) 1/2') = 'NO1234T841112' não é substring de
+    '…N21234T84112'). Decorações medidas no app.db (3.385 modelos escritos):
+    sufixo A/B 9.8%, fração 5.4%, marcador Nº 3.2%, '(-n)' / '-n' final.
+
+    Devolve (cores_puros, cores_sem_sufixo_AB). O sufixo A/B vai à parte
+    porque PODE ser código real (CD03P10B existe no plano) — e a correlação
+    A/B↔Nº1/Nº2 medida é ruído, portanto é decoração a limpar, nunca
+    evidência de parte. Só variantes NOVAS (≠ compacto simples) são
+    devolvidas: o caminho existente já cobre o resto."""
+    t = _norm_ascii_upper(raw)
+    t = re.sub(r"\(\s*-\s*\d\s*\)", " ", t)            # (-1), (-2)
+    t = re.sub(r"(?<=\d)\s*-\s*\d\s*$", " ", t)        # '859-1' no fim
+    t = re.sub(r"\b[12]\s*/\s*[1-4]\s*$", " ", t)      # fração final 1/2
+    core = re.sub(r"[^A-Z0-9]+", "", t)
+    core = re.sub(r"^NO?(?=\d)", "", core)             # prefixo N/Nº/No colado
+    plain = _model_compact(raw)
+    pure = tuple({core} - {"", plain})
+    ab_base = core if core else plain
+    ab = ab_base[:-1] if re.search(r"\d[AB]$", ab_base) else ""
+    ab_cores = tuple({ab} - {"", plain, core})
+    return pure, ab_cores
+
+
+def _model_core_matches(
+    model_value: object, designacao: object, *, strip_ab: bool
+) -> bool:
+    """R247 — containment dos núcleos limpos do OCR nos mesmos haystacks do
+    `_model_compact_matches` (designação compacta + 1º token compacto)."""
+    pure, ab = _model_code_cores_cached(str(model_value or ""))
+    cores = pure + (ab if strip_ab else ())
+    if not cores:
+        return False
+    des_compact = _model_compact(designacao)
+    des_ft_compact = _model_compact(_model_first_token(designacao))
+    haystacks = [h for h in (des_compact, des_ft_compact) if len(h) >= 4]
+    if not haystacks:
+        return False
+    return any(
+        v in h
+        for c in cores
+        for v in _o_zero_variants(c)
+        if len(v) >= 4
+        for h in haystacks
+    )
+
+
+def _model_channel_sim(value: object, designacao: object) -> float:
+    """R247 — canal de visão FITTED aplicado ao MODELO: o melhor g do canal
+    (matriz de confusão R241, custos medidos: 1↔4 barato, 8↔B caro) entre os
+    núcleos escritos e os tokens-código da designação, mapeado para a escala
+    de sim do modelo: sim = min(0.95, 0.55 + g). Um misread comum a 1 char
+    (~6.2 bits) → ~0.95; sub rara/default (10 bits) → ~0.64; d=2 morre (0.0).
+    Mesma semântica L0/cap do canal de of/ov; matriz GLOBAL (sem operador) —
+    o resultado depende só de (valor, designação), preservando o memo R225.
+
+    Pré-filtro barato antes do NW (|Δlen|<=2 e prefixo OU sufixo de 2 chars
+    partilhado): evita ~12k DPs/linha no pool completo; os pares que passam
+    ficam no lru_cache do alinhamento."""
+    tokens = _designacao_code_tokens_cached(str(designacao or ""))
+    if not tokens:
+        return 0.0
+    pure, ab = _model_code_cores_cached(str(value or ""))
+    cores = set(pure) | set(ab)
+    plain = _model_compact(value)
+    if len(plain) >= 4:
+        cores.add(plain)
+    best = 0.0
+    for core in cores:
+        if len(core) < 4:
+            continue
+        for tok in tokens:
+            if abs(len(tok) - len(core)) > 2:
+                continue
+            if tok[:2] != core[:2] and tok[-2:] != core[-2:]:
+                continue
+            cost = _channel_align_cost_bits(tok, core, "")
+            g = max(0.0, min(_CHANNEL_G_CAP, 1.0 - cost / _CHANNEL_G_L0))
+            if g > best:
+                best = g
+    if best <= 0.0:
+        return 0.0
+    return min(0.95, 0.55 + best)
+
+
 def _model_compact_matches(model_value: object, designacao: object) -> bool:
     """Loose model-code containment after removing punctuation/spacing.
 
@@ -783,6 +916,10 @@ def _model_matches_designacao(model_value: object, designacao: object) -> bool:
         model in des
         or (des_ft and des_ft in _o_zero_variants(model))
         or _model_compact_matches(model, des)
+        # R247 — núcleo sem decorações inequívocas (prefixo N/Nº colado,
+        # '(-n)', fração) contido na designação: match pleno. O sufixo A/B
+        # NÃO entra aqui (pode ser código real) — fica no tier 0.97.
+        or _model_core_matches(model, des, strip_ab=False)
     )
 
 
@@ -888,6 +1025,11 @@ def _efs_compute(field: str, entry: dict, row: dict, refs: dict, value: object) 
         designacao = entry.get("designacao")
         if _model_matches_designacao(value, designacao):
             return 1.0
+        # R247 — núcleo sem o sufixo A/B contido: quase-pleno (0.97·w ≫ fuzzy
+        # do token-família ≈0.67·w), mas <1.0 de propósito — um irmão com
+        # match PLENO ganha, e a guarda de irmãos (gate sim<1.0) fica armada.
+        if _model_core_matches(value, designacao, strip_ab=True):
+            return _MODEL_EMBEDDED_STRIPPED_SIM
         model = _model_compact(value)
         if len(model) < 4:
             return None
@@ -895,10 +1037,26 @@ def _efs_compute(field: str, entry: dict, row: dict, refs: dict, value: object) 
             _model_compact(_model_first_token(designacao)),
             _model_compact(designacao),
         ]
+        # R247 — tokens-código embebidos como alvos: dá discriminação entre
+        # irmãos quando o código escrito tem um misread real (T792 →
+        # T742=0.875 vs T743=0.75) em vez do shift +1 pelo token-família
+        # (742 → 'TME2' por coincidência do último dígito).
+        candidates += [
+            _model_compact(t) for t in _designacao_code_tokens_cached(
+                str(designacao or ""))
+        ]
         candidates = [c for c in candidates if c]
         if not candidates:
             return None
-        return max(_str_sim(model, c) / 100.0 for c in candidates)
+        pure, ab = _model_code_cores_cached(str(value or ""))
+        ocr_alts = [model, *pure, *ab]
+        best = max(
+            _str_sim(a, c) / 100.0 for a in ocr_alts for c in candidates
+        )
+        # R247 — canal de visão fitted como piso graduado: um misread comum
+        # a 1 char do código-peça vale ~0.95 (evidência MEDIDA), não o
+        # Levenshtein uniforme.
+        return max(best, _model_channel_sim(value, designacao))
 
     plan_attr = _PLAN_ATTR_BY_FIELD.get(field)
     if plan_attr:
@@ -1735,19 +1893,33 @@ def _best_scored_entry(
     # rivais da guarda de ambiguidade R219 (entries a <= _FS_RIVAL_MARGIN_BITS
     # do topo, qualquer OF, para a cor por campo).
     winner_of_key = str(winner.get("_of") or winner.get("of") or "").strip()
+    winner_des = str(winner.get("designacao") or "").strip().upper()
     margin_bits: float | None = None
+    sibling_margin: float | None = None
     rivals: list[dict] = []
     for cand in eligible[1:]:
         gap = best_bits - float(cand[15])
         cand_of = str((cand[7] or {}).get("_of") or (cand[7] or {}).get("of") or "").strip()
         if margin_bits is None and cand_of and cand_of != winner_of_key:
             margin_bits = gap
+        # R248 — melhor IRMÃO (mesma OF, designação diferente): margem em
+        # bits própria, para telemetria e confiança da célula modelo. NÃO
+        # altera `_margin_bits` (a calibração T/s_ood do R243 foi fitted na
+        # margem OF-level) nem `_rivals`.
+        if (sibling_margin is None and cand_of == winner_of_key
+                and str((cand[7] or {}).get("designacao") or "").strip().upper()
+                != winner_des):
+            sibling_margin = gap
         if gap <= _FS_RIVAL_MARGIN_BITS:
             if len(rivals) < 10:
                 rivals.append(cand[7])
-        elif margin_bits is not None:
-            break  # ordenado por bits: já não há rivais nem margem por achar
+        elif margin_bits is not None and (
+                sibling_margin is not None or gap > _FS_SIBLING_AMBIG_BITS):
+            break  # ordenado por bits: gaps só crescem — nada mais por achar
     winner["_margin_bits"] = round(margin_bits, 2) if margin_bits is not None else 99.0
+    winner["_sibling_margin_bits"] = (
+        round(sibling_margin, 2) if sibling_margin is not None else 99.0
+    )
     if rivals:
         winner["_rivals"] = rivals
     return winner
@@ -1943,6 +2115,51 @@ def _posterior_p_top(bits_top: float, margin_bits: float | None) -> float:
         float(bits_top) - s_ood,
     )
     return 1.0 / (1.0 + 2.0 ** (-margin_eff / t))
+
+
+def _sibling_p(margin_bits: float) -> float:
+    """R248 — P(irmão certo) pela mesma logística/temperatura calibrada do
+    R243, SEM o cap OOD (escolher entre irmãos da mesma OF não é OOD: a
+    encomenda está no plano; a dúvida é qual sub-linha)."""
+    cal = (_load_cross_params().get("calibration") or {})
+    t = max(0.5, float(cal.get("temperature_bits") or 3.0))
+    return 1.0 / (1.0 + 2.0 ** (-max(float(margin_bits), 0.0) / t))
+
+
+def _model_sibling_ambiguous(
+    winner: dict, row: dict, refs: dict, idx: dict | None
+) -> bool:
+    """R248 — o modelo ESCRITO não discrimina o winner dos IRMÃOS da mesma
+    OF (designações diferentes): algum irmão atinge sim de modelo >= winner
+    − 0.02. É a pergunta direta — a margem em bits OF-level ignora irmãos
+    por design (R236) e pintava verde com p_top 0.93-0.99 a troca silenciosa
+    de peça (17 casos históricos validados em bloco no app.db).
+
+    Só com modelo escrito: com a célula vazia os irmãos empatam em bits e a
+    guarda de rivais R219 (<=1.0 bit) já cobre. Compara por SIM e não por
+    bits para apanhar também empates a 1.0 (família-prefixo '5100TME' contém
+    em TODOS os irmãos; código repetido em 2 irmãos — sheet 814)."""
+    if not idx:
+        return False
+    value = (row or {}).get("modelo")
+    if _is_missing_ocr(value):
+        return False
+    w_of = str(winner.get("_of") or winner.get("of") or "").strip()
+    entries = (idx.get("of_to_entries") or {}).get(w_of) or []
+    if len(entries) < 2:
+        return False
+    w_sim = _efs_compute("modelo", winner, row, refs, value)
+    if w_sim is None or w_sim <= 0.0:
+        return False
+    winner_des = str(winner.get("designacao") or "").strip().upper()
+    for e in entries:
+        des = str((e or {}).get("designacao") or "").strip().upper()
+        if not des or des == winner_des:
+            continue
+        s = _efs_compute("modelo", e, row, refs, value)
+        if s is not None and s >= w_sim - 0.02:
+            return True
+    return False
 
 
 # R243/E2 — limiar de gravação por PERDA ESPERADA: grava sse
@@ -2358,6 +2575,15 @@ def _is_very_different(field: str, ocr_value: str, proposed: str) -> bool:
             return False
         if _model_compact_matches(ocr_u, proposed_u):
             return False
+        # R247 — cor honesta com OCR decorado: núcleo limpo contido (mesmo
+        # sem sufixo A/B) ou misread a 1 char do canal fitted no código-peça
+        # NÃO é "muito diferente" — sem isto o winner CERTO ('5100T742A' →
+        # '5100TME1 - CC4H1 5100T742 1/2') ficava vermelho (o OCR decorado
+        # não é substring e o compacto dá 0 pelo guard len>5 do Levenshtein).
+        if _model_core_matches(ocr_u, proposed_u, strip_ab=True):
+            return False
+        if _model_channel_sim(ocr_u, proposed_u) >= 0.9:
+            return False
         return _str_sim(_model_compact(ocr_u), _model_compact(proposed_u)) < _VERY_DIFF_STR_SIM
     sim = _str_sim(str(ocr_value), str(proposed))
     return sim < _VERY_DIFF_STR_SIM
@@ -2760,6 +2986,30 @@ def _winner_ambiguous_for_field(
     return False
 
 
+def _model_rival_competes(winner: dict, row: dict, refs: dict) -> bool:
+    """R248 — um rival quase-empatado só é ambiguidade PARA O MODELO se
+    competir no próprio modelo escrito (sim >= winner − 0.02). Com o
+    código-peça a suportar afirmativamente o winner (containment/tier 0.97),
+    um rival a <1 bit no TOTAL mas sem suporte do modelo não pinta a célula
+    — critério invariante à escala do plano (em fixtures pequenos w_modelo
+    encolhe e o irmão certo caía dentro de _FS_RIVAL_MARGIN_BITS)."""
+    value = (row or {}).get("modelo")
+    if _is_missing_ocr(value):
+        return True  # célula vazia: a ambiguidade R219 mantém-se como era
+    w_sim = _efs_compute("modelo", winner, row, refs, value)
+    if w_sim is None or w_sim <= 0.0:
+        return True
+    proposed_des = str(winner.get("designacao") or "").strip().upper()
+    for rival in winner.get("_rivals") or []:
+        des = str((rival or {}).get("designacao") or "").strip().upper()
+        if not des or des == proposed_des:
+            continue
+        s = _efs_compute("modelo", rival, row, refs, value)
+        if s is not None and s >= w_sim - 0.02:
+            return True
+    return False
+
+
 def _winner_field_fallback_proposal(
     field: str,
     winner: dict,
@@ -2992,6 +3242,34 @@ def _apply_winner_to_field(
 
     score = winner.get("_score") if winner else None
 
+    # R248 — irmãos da mesma OF: o modelo escrito não discrimina qual
+    # sub-linha é (família-prefixo, código repetido em 2 irmãos, ou código
+    # que não existe em nenhum). Substitui na mesma (R219), mas vermelho +
+    # confiança da CÉLULA reduzida pela margem de irmãos — o p_top/margin
+    # OF-level (calibração R243) não é tocado. É o que fecha o buraco das
+    # trocas silenciosas verdes com p_top 0.93-0.99.
+    if (
+        field == "modelo"
+        and winner is not None
+        and proposed
+        and _model_sibling_ambiguous(winner, row, refs, idx)
+    ):
+        proposed_fmt = _format_value(field, proposed)
+        p_top = float(winner.get("_p_top") or 0.0)
+        conf = round(
+            p_top * _sibling_p(float(winner.get("_sibling_margin_bits", 0.0))),
+            3,
+        )
+        return _mark_winner_cell(
+            _make_cell(
+                proposed_fmt, "very_different", "plan",
+                proposed=proposed_fmt, ref_source="plan", score=score,
+                decision_confidence=conf,
+                decision_reason="ambiguous_sibling_designacao",
+            ),
+            winner,
+        )
+
     # R219 — guarda de ambiguidade: o winner não é líder claro (rivais
     # quase-empatados DISCORDAM neste campo) e o OCR não confirma o winner
     # (vazio ou diferente). O sistema SUBSTITUI sempre pelo valor da linha
@@ -3003,6 +3281,10 @@ def _apply_winner_to_field(
         and proposed
         and _winner_ambiguous_for_field(field, proposed, winner, template_name)
         and (_entry_field_similarity(field, winner, row, refs) or 0.0) < 1.0
+        # R248 — para o modelo, um rival só é ambiguidade se COMPETIR no
+        # próprio modelo escrito (código-peça a suportar o winner no tier
+        # 0.97 não fica vermelho por um rival a <1 bit sem suporte).
+        and (field != "modelo" or _model_rival_competes(winner, row, refs))
     ):
         proposed_fmt = _format_value(field, proposed)
         return _mark_winner_cell(
@@ -3267,6 +3549,10 @@ def _score_row(
         # diferente; é isto que decide winner_mode (decisivo/marginal).
         "winner_bits": (winner or {}).get("_bits") if winner else None,
         "winner_margin_bits": (winner or {}).get("_margin_bits") if winner else None,
+        # R248 — margem para o melhor IRMÃO da mesma OF (telemetria/harness).
+        "winner_sibling_margin_bits": (
+            (winner or {}).get("_sibling_margin_bits") if winner else None
+        ),
         "winner_p_top": (winner or {}).get("_p_top") if winner else None,
         "winner_score_reasons": (winner or {}).get("_score_reasons") if winner else None,
         "winner_mode": (winner or {}).get("_winner_mode") if winner else None,
