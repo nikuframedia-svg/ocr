@@ -398,9 +398,15 @@ _MODEL_CHANNEL_SIM_CAP = 0.80
 # R247 — fuzzy sobre tokens-código só conta quando FORTE: abaixo disto uma
 # coincidência fraca ('CD24T5061' vs 'CD11M501' = 0.556) cruzava o limiar
 # _AGREE_THRESHOLD e dava ~6 bits a uma entry errada (caso s2510). Fronteira
-# MEDIDA no backtest vs pré-fix (MODEL_SIB n=150, 0 perdas novas em todos os
-# pontos): 0.80 → +8 líquidas; 0.75 → +12; 0.70 → +14. Não descer para
-# ~0.65: colava na banda do fuzzy de família (0.667) que causou o bug.
+# MEDIDA no backtest vs pré-fix (MODEL_SIB n=150): 0.80 → +8 líquidas;
+# 0.75 → +12; 0.70 → +14. Em todos os pontos ficam 2 perdas (identidades
+# trocam: 0.80 perde s2371; ≤0.75 perde s2375), TODAS com sibling margin
+# ≈0 → a guarda R248 pinta-as de vermelho e o humano decide. Hazard
+# documentado (s2375): um fuzzy 0.75 numa designação RARA pode empatar um
+# match EXATO numa designação repetida ~10× no plano (o prior de raridade
+# u-por-valor desvaloriza o exato) — é a guarda de irmãos que segura estes
+# casos, não o ranking. Não descer o piso para ~0.65: colava na banda do
+# fuzzy de família (0.667) que causou o bug original.
 _MODEL_TOKEN_FUZZY_MIN = 0.70
 # R248 — margem (bits) abaixo da qual um IRMÃO da mesma OF com designação
 # diferente torna a célula modelo ambígua. 2.0 cobre o "dígito de sorte" no
