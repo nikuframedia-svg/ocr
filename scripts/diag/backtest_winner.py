@@ -330,7 +330,8 @@ def main() -> None:
     }
     cal_samples: list[tuple[float, float, float]] = []
     model_rel_samples: list[tuple[float, float]] = []  # R247 — (p_top, acerto)
-    ood_stats = [0, 0]  # [n, abstencoes]
+    post_samples: list[tuple[float, float]] = []  # R252 — (p_of posterior, acerto)
+    ood_stats = [0, 0, 0]  # [n, abstencoes, abstencoes_posterior (p_h0>p_of)]
     flips_path = args.out_dir / "flips.csv"
     model_flips_path = args.out_dir / "model_flips.csv"
     mf_fh = model_flips_path.open("w", newline="", encoding="utf-8")
@@ -388,9 +389,19 @@ def main() -> None:
                         cal_samples.append(
                             (float(cb), float(mg if mg is not None else 99.0),
                              1.0 if C else 0.0))
+                    # R252 — reliability do POSTERIOR (marginal da OF), em
+                    # paralelo com a logística (telemetria de transição).
+                    _p_of_v2 = (c_w or {}).get("_p_of")
+                    if c_of and _p_of_v2 is not None:
+                        post_samples.append((float(_p_of_v2), 1.0 if C else 0.0))
                 if name == "OOD":
                     ood_stats[0] += 1
                     ood_stats[1] += 0 if c_of else 1  # absteve = certo
+                    # R252 — abstenção PROBABILÍSTICA: P(H0) > P(OF winner).
+                    _p_h0 = (c_w or {}).get("_p_h0")
+                    _p_of_v2 = (c_w or {}).get("_p_of")
+                    if _p_h0 is not None and _p_of_v2 is not None:
+                        ood_stats[2] += _p_h0 > _p_of_v2
                 if name == "SHIFT" and len(rec) > 5:
                     shift_detail.append((str(rec[5]), B, C))
                 b_ok += B
@@ -549,14 +560,76 @@ def main() -> None:
             "max_gap_buckets_n>=10": round(max_gap, 3),
         }
         if ood_stats[0]:
-            summary["ood"] = {"n": ood_stats[0], "abstencoes": ood_stats[1],
-                              "abstain_pct": round(100 * ood_stats[1] / ood_stats[0], 1)}
+            summary["ood"] = {
+                "n": ood_stats[0], "abstencoes": ood_stats[1],
+                "abstain_pct": round(100 * ood_stats[1] / ood_stats[0], 1),
+                # R252 — abstenção probabilística do posterior (P(H0)>P(OF)).
+                "abstencoes_posterior": ood_stats[2],
+                "abstain_posterior_pct": round(
+                    100 * ood_stats[2] / ood_stats[0], 1),
+            }
         print(f"calibração: T={t_fit} s_ood={s_fit} brier={brier:.4f} "
               f"max_gap={max_gap:.3f} (n={len(cal_samples)})")
         for r in reliability:
             print(f"  {r['bucket']}: n={r['n']:4d} conf={r['conf']:.2f} acc={r['acc']:.2f} gap={r['gap']:.2f}")
         if ood_stats[0]:
-            print(f"OOD: n={ood_stats[0]} abstenções={ood_stats[1]} ({summary['ood']['abstain_pct']}%)")
+            print(f"OOD: n={ood_stats[0]} abstenções={ood_stats[1]} ({summary['ood']['abstain_pct']}%) "
+                  f"| posterior P(H0)>P(OF): {ood_stats[2]} ({summary['ood']['abstain_posterior_pct']}%)")
+    # R252 — reliability do posterior softmax (marginal da OF do candidato),
+    # medida em paralelo com a logística — é o número que decide o flip R252b.
+    if post_samples:
+        pbuckets: dict[int, list[tuple[float, float]]] = defaultdict(list)
+        for pv, y in post_samples:
+            pbuckets[min(9, int(pv * 10))].append((pv, y))
+        post_rel = []
+        pmax_gap = 0.0
+        for k in sorted(pbuckets):
+            v = pbuckets[k]
+            conf = sum(p for p, _ in v) / len(v)
+            acc = sum(y for _, y in v) / len(v)
+            gap = abs(conf - acc)
+            if len(v) >= 10:
+                pmax_gap = max(pmax_gap, gap)
+            post_rel.append({"bucket": f"{k/10:.1f}-{(k+1)/10:.1f}",
+                             "n": len(v), "conf": round(conf, 3),
+                             "acc": round(acc, 3), "gap": round(gap, 3)})
+        brier_post = sum((p - y) ** 2 for p, y in post_samples) / len(post_samples)
+        # R252 — pós-calibração de PLATT (a,b sobre o logit do p_of) por
+        # grid de log-loss: é o fit do flip — o motor consome via
+        # calibration.posterior_platt_{a,b} quando gravado com --calibrate.
+        import math as _m
+
+        def _logit(p: float) -> float:
+            p = min(max(p, 1e-6), 1 - 1e-6)
+            return _m.log(p / (1 - p))
+
+        def _sig(x: float) -> float:
+            return 1.0 / (1.0 + _m.exp(-x))
+
+        best_platt = None
+        for a10 in range(2, 31, 2):
+            for b10 in range(-40, 41, 4):
+                a, b = a10 / 10.0, b10 / 10.0
+                ll = 0.0
+                for p, y in post_samples:
+                    q = min(max(_sig(a * _logit(p) + b), 1e-6), 1 - 1e-6)
+                    ll -= y * _m.log(q) + (1 - y) * _m.log(1 - q)
+                if best_platt is None or ll < best_platt[0]:
+                    best_platt = (ll, a, b)
+        _ll, pa, pb = best_platt
+        brier_cal = sum(
+            (_sig(pa * _logit(p) + pb) - y) ** 2 for p, y in post_samples
+        ) / len(post_samples)
+        summary["posterior_reliability"] = {
+            "n_samples": len(post_samples), "brier": round(brier_post, 4),
+            "reliability": post_rel,
+            "max_gap_buckets_n>=10": round(pmax_gap, 3),
+            "platt": {"a": pa, "b": pb, "brier_calibrado": round(brier_cal, 4)},
+        }
+        print(f"reliability POSTERIOR (p_of): brier={brier_post:.4f} max_gap={pmax_gap:.3f} "
+              f"| Platt(a={pa}, b={pb}) brier={brier_cal:.4f}")
+        for r in post_rel:
+            print(f"  {r['bucket']}: n={r['n']:4d} conf={r['conf']:.2f} acc={r['acc']:.2f} gap={r['gap']:.2f}")
         if getattr(args, "calibrate", False):
             import json as _json
             cp = _REPO / "lexicons" / "cross_params.json"

@@ -200,29 +200,29 @@
     "plan_day": "2026-07-03",
     "buckets": {
       "0-3": {
-        "n": 476,
-        "ood": 50,
-        "p_ood": 0.107
+        "n": 303,
+        "ood": 17,
+        "p_ood": 0.059
       },
       "4-7": {
-        "n": 323,
-        "ood": 83,
-        "p_ood": 0.258
+        "n": 353,
+        "ood": 71,
+        "p_ood": 0.203
       },
       "8-14": {
-        "n": 290,
-        "ood": 67,
-        "p_ood": 0.233
+        "n": 305,
+        "ood": 95,
+        "p_ood": 0.313
       },
       "15-30": {
-        "n": 1426,
-        "ood": 285,
-        "p_ood": 0.2
+        "n": 1391,
+        "ood": 271,
+        "p_ood": 0.195
       },
       ">30": {
-        "n": 874,
-        "ood": 293,
-        "p_ood": 0.336
+        "n": 998,
+        "ood": 311,
+        "p_ood": 0.312
       }
     }
   },
@@ -236,5 +236,69 @@
       "reports/backtest_winner_r243",
       "reports/backtest_winner_r243b"
     ]
+  },
+  "quant8_identity_joint": {
+    "m_joint": {
+      "of": {
+        "n": 3219,
+        "exatos": 2235,
+        "m": 0.694
+      },
+      "ov": {
+        "n": 2184,
+        "exatos": 1024,
+        "m": 0.469
+      },
+      "cliente": {
+        "n": 2581,
+        "exatos": 999,
+        "m": 0.387
+      },
+      "of+ov": {
+        "n": 2029,
+        "exatos": 834,
+        "m": 0.411
+      },
+      "of+cliente": {
+        "n": 2516,
+        "exatos": 693,
+        "m": 0.276
+      },
+      "ov+cliente": {
+        "n": 1931,
+        "exatos": 497,
+        "m": 0.258
+      },
+      "of+ov+cliente": {
+        "n": 1876,
+        "exatos": 411,
+        "m": 0.219
+      }
+    },
+    "u_floor": {
+      "of": 0.0002,
+      "ov": 0.00068,
+      "cliente": 0.02264
+    },
+    "n_plan": 20839
+  },
+  "model_token_lr": {
+    "oov_alpha": 1.0,
+    "ab_eps_bits": 0.2,
+    "collision_entries_by_distance": {
+      "d0": 2.52,
+      "d1": 16.32,
+      "d2": 70.92
+    },
+    "sibling_acc_by_alpha": {
+      "1.0": {
+        "n": 634,
+        "top1_unico_certo": 521,
+        "acc": 0.8218
+      }
+    },
+    "n_cases": 1096,
+    "fitted_at": "2026-07-08T22:49:37.982854+00:00",
+    "source_db_sha256_16": "df08304d9327d1c5"
   }
 }
