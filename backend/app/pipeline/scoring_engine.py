@@ -397,8 +397,11 @@ _MODEL_EMBEDDED_STRIPPED_SIM = 0.97
 _MODEL_CHANNEL_SIM_CAP = 0.80
 # R247 — fuzzy sobre tokens-código só conta quando FORTE: abaixo disto uma
 # coincidência fraca ('CD24T5061' vs 'CD11M501' = 0.556) cruzava o limiar
-# _AGREE_THRESHOLD e dava ~6 bits a uma entry errada (caso s2510).
-_MODEL_TOKEN_FUZZY_MIN = 0.80
+# _AGREE_THRESHOLD e dava ~6 bits a uma entry errada (caso s2510). Fronteira
+# MEDIDA no backtest vs pré-fix (MODEL_SIB n=150, 0 perdas novas em todos os
+# pontos): 0.80 → +8 líquidas; 0.75 → +12; 0.70 → +14. Não descer para
+# ~0.65: colava na banda do fuzzy de família (0.667) que causou o bug.
+_MODEL_TOKEN_FUZZY_MIN = 0.70
 # R248 — margem (bits) abaixo da qual um IRMÃO da mesma OF com designação
 # diferente torna a célula modelo ambígua. 2.0 cobre o "dígito de sorte" no
 # token-família (Δsim≈0.11 × w_cap 14 ≈ 1.5 bits) e alinha com o cap dos
