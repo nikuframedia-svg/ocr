@@ -215,9 +215,11 @@ class TestSiblingCollisionPass:
         assert r1.get("decision_reason") == "sibling_collision"
 
     def test_rare_misread_is_red_even_alone(self):
-        # Substituição RARA (9→4, custo default) não passa no canal: fica
-        # vermelha pelo caminho da cor, sem precisar do passe de colisões.
-        scoring, *_ = shadow_score(self._sheet("5100T792A"), None, _REFS)
+        # Substituição RARA (4→A, custo default 10 bits — não fitted) não
+        # passa no teto do canal: fica vermelha pelo caminho da cor, sem
+        # precisar do passe de colisões. (Nota: 4↔9 É fitted a 7.5 bits —
+        # essa passa em verde de propósito, a matriz medida decide.)
+        scoring, *_ = shadow_score(self._sheet("5100T7A2A"), None, _REFS)
         assert scoring["rows"][0]["fields"]["modelo"]["status"] == "very_different"
 
     def test_ab_pair_same_piece_not_a_collision(self):

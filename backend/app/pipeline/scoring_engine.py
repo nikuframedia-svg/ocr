@@ -388,6 +388,17 @@ _FS_DIM_U_FLOOR = {
 # irmão bater 1.0 PLENO (o sufixo era código, não decoração), ganha ele; e a
 # guarda de irmãos R248 (gate sim<1.0) continua armada.
 _MODEL_EMBEDDED_STRIPPED_SIM = 0.97
+# R247 — teto do canal de visão no modelo: um misread comum de 1 char vale
+# no máx. 0.80·w, NUNCA quase-exato — alinhado com o R241, onde o canal de
+# of/ov contribui no máx. g_cap≈0.45·w. Sem o teto, 0.95·w era batido por
+# efeitos secundários (freq de designação duplicada ±1 bit) e um código de
+# OUTRA família com confusão barata (1↔4: CD14M504→CD11M504) destronava o
+# match EXATO (caso s2369 do backtest).
+_MODEL_CHANNEL_SIM_CAP = 0.80
+# R247 — fuzzy sobre tokens-código só conta quando FORTE: abaixo disto uma
+# coincidência fraca ('CD24T5061' vs 'CD11M501' = 0.556) cruzava o limiar
+# _AGREE_THRESHOLD e dava ~6 bits a uma entry errada (caso s2510).
+_MODEL_TOKEN_FUZZY_MIN = 0.80
 # R248 — margem (bits) abaixo da qual um IRMÃO da mesma OF com designação
 # diferente torna a célula modelo ambígua. 2.0 cobre o "dígito de sorte" no
 # token-família (Δsim≈0.11 × w_cap 14 ≈ 1.5 bits) e alinha com o cap dos
@@ -850,10 +861,11 @@ def _model_channel_sim(value: object, designacao: object) -> float:
     """R247 — canal de visão FITTED aplicado ao MODELO: o melhor g do canal
     (matriz de confusão R241, custos medidos: 1↔4 barato, 8↔B caro) entre os
     núcleos escritos e os tokens-código da designação, mapeado para a escala
-    de sim do modelo: sim = min(0.95, 0.55 + g). Um misread comum a 1 char
-    (~6.2 bits) → ~0.95; sub rara/default (10 bits) → ~0.64; d=2 morre (0.0).
-    Mesma semântica L0/cap do canal de of/ov; matriz GLOBAL (sem operador) —
-    o resultado depende só de (valor, designação), preservando o memo R225.
+    de sim do modelo: sim = min(_MODEL_CHANNEL_SIM_CAP, 0.55 + g). Um
+    misread comum a 1 char (~6.2 bits) → 0.80 (teto — nunca quase-exato);
+    sub rara/default (10 bits) → ~0.64; d=2 morre (0.0). Mesma semântica
+    L0/cap do canal de of/ov; matriz GLOBAL (sem operador) — o resultado
+    depende só de (valor, designação), preservando o memo R225.
 
     Pré-filtro barato antes do NW (|Δlen|<=2 e prefixo OU sufixo de 2 chars
     partilhado): evita ~12k DPs/linha no pool completo; os pares que passam
@@ -881,7 +893,7 @@ def _model_channel_sim(value: object, designacao: object) -> float:
                 best = g
     if best <= 0.0:
         return 0.0
-    return min(0.95, 0.55 + best)
+    return min(_MODEL_CHANNEL_SIM_CAP, 0.55 + best)
 
 
 def _model_compact_matches(model_value: object, designacao: object) -> bool:
@@ -1037,29 +1049,38 @@ def _efs_compute(field: str, entry: dict, row: dict, refs: dict, value: object) 
         model = _model_compact(value)
         if len(model) < 4:
             return None
-        candidates = [
+        legacy = [
             _model_compact(_model_first_token(designacao)),
             _model_compact(designacao),
         ]
-        # R247 — tokens-código embebidos como alvos: dá discriminação entre
-        # irmãos quando o código escrito tem um misread real (T792 →
-        # T742=0.875 vs T743=0.75) em vez do shift +1 pelo token-família
-        # (742 → 'TME2' por coincidência do último dígito).
-        candidates += [
-            _model_compact(t) for t in _designacao_code_tokens_cached(
-                str(designacao or ""))
-        ]
-        candidates = [c for c in candidates if c]
-        if not candidates:
-            return None
+        legacy = [c for c in legacy if c]
         pure, ab = _model_code_cores_cached(str(value or ""))
         ocr_alts = [model, *pure, *ab]
         best = max(
-            _str_sim(a, c) / 100.0 for a in ocr_alts for c in candidates
+            (_str_sim(a, c) / 100.0 for a in ocr_alts for c in legacy),
+            default=0.0,
         )
+        # R247 — tokens-código embebidos como alvos: dá discriminação entre
+        # irmãos quando o código escrito tem um misread real (T792 →
+        # T742=0.875 vs T743=0.75) em vez do shift +1 pelo token-família
+        # (742 → 'TME2' por coincidência do último dígito). Só conta quando
+        # FORTE (>= _MODEL_TOKEN_FUZZY_MIN): uma coincidência fraca de token
+        # não pode cruzar o _AGREE_THRESHOLD e dar bits a entries erradas.
+        tokens = [
+            _model_compact(t) for t in _designacao_code_tokens_cached(
+                str(designacao or ""))
+        ]
+        if tokens:
+            token_best = max(
+                _str_sim(a, c) / 100.0 for a in ocr_alts for c in tokens
+            )
+            if token_best >= _MODEL_TOKEN_FUZZY_MIN:
+                best = max(best, token_best)
+        if not legacy and not tokens:
+            return None
         # R247 — canal de visão fitted como piso graduado: um misread comum
-        # a 1 char do código-peça vale ~0.95 (evidência MEDIDA), não o
-        # Levenshtein uniforme.
+        # a 1 char do código-peça é evidência MEDIDA (não Levenshtein
+        # uniforme), com teto 0.80 — nunca quase-exato.
         return max(best, _model_channel_sim(value, designacao))
 
     plan_attr = _PLAN_ATTR_BY_FIELD.get(field)
@@ -2586,7 +2607,7 @@ def _is_very_different(field: str, ocr_value: str, proposed: str) -> bool:
         # não é substring e o compacto dá 0 pelo guard len>5 do Levenshtein).
         if _model_core_matches(ocr_u, proposed_u, strip_ab=True):
             return False
-        if _model_channel_sim(ocr_u, proposed_u) >= 0.9:
+        if _model_channel_sim(ocr_u, proposed_u) >= _MODEL_CHANNEL_SIM_CAP:
             return False
         return _str_sim(_model_compact(ocr_u), _model_compact(proposed_u)) < _VERY_DIFF_STR_SIM
     sim = _str_sim(str(ocr_value), str(proposed))
