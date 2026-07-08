@@ -1075,13 +1075,21 @@ def _efs_compute(field: str, entry: dict, row: dict, refs: dict, value: object) 
         # (742 → 'TME2' por coincidência do último dígito). Só conta quando
         # FORTE (>= _MODEL_TOKEN_FUZZY_MIN): uma coincidência fraca de token
         # não pode cruzar o _AGREE_THRESHOLD e dar bits a entries erradas.
+        # Perf: pares com Δlen que torna sim>=0.70 impossível são podados
+        # antes do Levenshtein (o pool tem ~12k designações por linha).
         tokens = [
             _model_compact(t) for t in _designacao_code_tokens_cached(
                 str(designacao or ""))
         ]
         if tokens:
             token_best = max(
-                _str_sim(a, c) / 100.0 for a in ocr_alts for c in tokens
+                (
+                    _str_sim(a, c) / 100.0
+                    for a in ocr_alts for c in tokens
+                    if abs(len(a) - len(c))
+                    <= (1.0 - _MODEL_TOKEN_FUZZY_MIN) * max(len(a), len(c))
+                ),
+                default=0.0,
             )
             if token_best >= _MODEL_TOKEN_FUZZY_MIN:
                 best = max(best, token_best)
@@ -1090,6 +1098,8 @@ def _efs_compute(field: str, entry: dict, row: dict, refs: dict, value: object) 
         # R247 — canal de visão fitted como piso graduado: um misread comum
         # a 1 char do código-peça é evidência MEDIDA (não Levenshtein
         # uniforme), com teto 0.80 — nunca quase-exato.
+        if best >= _MODEL_CHANNEL_SIM_CAP:
+            return best  # o canal já não pode melhorar
         return max(best, _model_channel_sim(value, designacao))
 
     plan_attr = _PLAN_ATTR_BY_FIELD.get(field)
