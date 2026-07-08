@@ -79,6 +79,27 @@ O resultado principal fica em:
 - `diff_by_template.csv`: impacto por template.
 - `baseline/*/cells.csv` e `candidate/*/cells.csv`: auditoria celula-a-celula.
 
+## Metrica de MODELO ao nivel da entry (R247)
+
+O gate por OF do `backtest_winner` e CEGO a trocas de modelo entre entries
+IRMAS da mesma OF (designacoes que diferem 1 digito no codigo-peca; 45,6%
+das OFs do plano tem >=2 irmas). Desde R247 o harness mede tambem:
+
+- `MODEL_SIB`: linhas validadas cuja OF tem >=2 designacoes irmas e o
+  operador escreveu um modelo — acerto = OF certa E designacao consistente
+  com a verdade humana (`_model_truth_consistent`, comparador standalone
+  anti-circular). Verdade fraca (validacao em bloco): ler comparativamente,
+  como ENG.
+- `MODEL_STRONG`: subconjunto com edit humano em `rows[i].modelo` (verdade
+  forte, escassa).
+- `model_flips.csv` + `gate.model_not_worse` / `gate.model_strong_not_worse`
+  (aditivos — nao entram em `gate.passed`) + reliability p_top vs acerto de
+  entry em MODEL_SIB (expoe trocas verdes com p_top alto).
+
+Qualquer mudanca ao matching de modelo corre o `backtest_winner` com estes
+conjuntos ANTES do gate oficial, mais um controlo HEAD-vs-HEAD (delta MODEL
+tem de ser 0 com o mesmo motor dos dois lados).
+
 ## Processo para variantes
 
 1. Criar uma variante pequena e generica.
