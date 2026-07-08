@@ -636,7 +636,11 @@ _STATUS_LABELS = {
 # família-prefixo, código repetido) → very_different + decision_confidence
 # = p_top × _sibling_p(margem irmãos) + decision_reason
 # "ambiguous_sibling_designacao". Muda decisões em massa → BUMP obrigatório.
-ENGINE_VERSION = "v29_R248"
+# R249 — colisões de atribuição (passe 3): núcleos escritos DISTINTOS
+# (pós-strip A/B) na mesma folha a cair na MESMA designação do mesmo OF →
+# o membro NÃO-exato desce para revisão (decision_reason
+# "sibling_collision"); valores intocados (R219). Muda cores → BUMP.
+ENGINE_VERSION = "v30_R249"
 
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
@@ -4087,6 +4091,59 @@ def shadow_score(
             )
             out_rows[i] = row_out
             row_tallies[i] = (s, c, n, vd)
+
+    # R249 — COLISÕES DE ATRIBUIÇÃO (passe 3): >=2 linhas da MESMA folha com
+    # núcleos de modelo escritos DISTINTOS (pós-strip A/B: '742A'+'742B' são
+    # o MESMO núcleo — partes legítimas da mesma peça) a cair na MESMA
+    # designação do mesmo OF (58 casos históricos em 41 folhas). Conservador:
+    # só o membro NÃO-exato (o "boleia" fuzzy/canal) desce para revisão; um
+    # membro com match pleno do código mantém-se — e se todos são exatos é
+    # uso de aliases da mesma entry (designações têm 2 tokens-código), legit.
+    # Só muda COR/confiança, nunca o valor (R219).
+    if len(out_rows) > 1:
+        _coll: dict[tuple[str, str], list[tuple[int, str, bool]]] = {}
+        for i, ro in enumerate(out_rows):
+            cell = (ro.get("fields") or {}).get("modelo") or {}
+            w_of = str(ro.get("winner_of") or "")
+            des = str(cell.get("value") or "").strip().upper()
+            raw_mod = str((rows[i] or {}).get("modelo") or "")
+            if not (w_of and des and raw_mod.strip()):
+                continue
+            pure, ab = _model_code_cores_cached(raw_mod)
+            core = ab[0] if ab else (pure[0] if pure else _model_compact(raw_mod))
+            if len(core) < 4:
+                continue
+            exact = _model_matches_designacao(raw_mod, des) or bool(
+                ab and any(v in _model_compact(des)
+                           for c in ab for v in _o_zero_variants(c))
+            )
+            _coll.setdefault((w_of, des), []).append((i, core, exact))
+        for (_w_of, _des), members in _coll.items():
+            if len(members) < 2 or len({c for _, c, _e in members}) < 2:
+                continue
+            for i, _core, exact in members:
+                if exact:
+                    continue
+                cell = (out_rows[i].get("fields") or {}).get("modelo") or {}
+                if cell.get("status") not in ("snapped", "confirmed"):
+                    continue
+                st_old = cell.get("status")
+                new_cell = dict(
+                    cell,
+                    status="very_different",
+                    label=_STATUS_LABELS["very_different"],
+                    decision_reason="sibling_collision",
+                )
+                conf = new_cell.get("decision_confidence")
+                new_cell["decision_confidence"] = (
+                    min(float(conf), 0.5) if conf is not None else 0.5
+                )
+                out_rows[i]["fields"]["modelo"] = new_cell
+                s, c, n, vd = row_tallies[i]
+                if st_old == "snapped":
+                    row_tallies[i] = (s - 1, c, n, vd + 1)
+                else:
+                    row_tallies[i] = (s, c - 1, n, vd + 1)
 
     snapped = sum(t[0] for t in row_tallies)
     confirmed = sum(t[1] for t in row_tallies)

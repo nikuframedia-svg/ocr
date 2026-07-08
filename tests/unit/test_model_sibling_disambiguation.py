@@ -189,6 +189,62 @@ class TestSiblingAmbiguityGuard:
         assert not _model_sibling_ambiguous(w, row, _REFS, _get_indices(_REFS))
 
 
+class TestSiblingCollisionPass:
+    """R249 — cores distintos na mesma folha a cair na mesma designação."""
+
+    def _sheet(self, *modelos: str) -> dict:
+        return {
+            "template_name": "gasparini", "header": {}, "footer": {},
+            "rows": [
+                {"of": "262593", "cliente": "TSO", "modelo": m, "qtd": "1"}
+                for m in modelos
+            ],
+        }
+
+    def test_fuzzy_hitchhiker_flagged_exact_stays_green(self):
+        # Linha 1 escreve 742A (exato → TME1, verde); linha 2 escreve um
+        # misread com confusão COMUM da matriz fitted (7→3, 6.7 bits) que o
+        # canal arrasta em verde para a MESMA TME1 — núcleos distintos na
+        # mesma entry: só a linha "boleia" desce para revisão.
+        scoring, *_ = shadow_score(self._sheet("5100T742A", "5100T342A"), None, _REFS)
+        r0 = scoring["rows"][0]["fields"]["modelo"]
+        r1 = scoring["rows"][1]["fields"]["modelo"]
+        assert r0["status"] == "snapped"
+        assert r1["value"] == r0["value"]  # canal escolheu a mesma entry
+        assert r1["status"] == "very_different"
+        assert r1.get("decision_reason") == "sibling_collision"
+
+    def test_rare_misread_is_red_even_alone(self):
+        # Substituição RARA (9→4, custo default) não passa no canal: fica
+        # vermelha pelo caminho da cor, sem precisar do passe de colisões.
+        scoring, *_ = shadow_score(self._sheet("5100T792A"), None, _REFS)
+        assert scoring["rows"][0]["fields"]["modelo"]["status"] == "very_different"
+
+    def test_ab_pair_same_piece_not_a_collision(self):
+        # 742A + 742B = as duas metades da MESMA peça (designação '… 1/2')
+        # — núcleo pós-strip idêntico, nunca é colisão.
+        scoring, *_ = shadow_score(self._sheet("5100T742A", "5100T742B"), None, _REFS)
+        r0 = scoring["rows"][0]["fields"]["modelo"]
+        r1 = scoring["rows"][1]["fields"]["modelo"]
+        assert r0["status"] == "snapped"
+        assert r1["status"] == "snapped"
+        assert r0["value"] == r1["value"]
+
+    def test_distinct_codes_resolve_to_distinct_entries(self):
+        # O caso da folha 2786: linhas 742A/743A/744A vão cada uma à sua
+        # entry — sem colisões, tudo verde.
+        scoring, *_ = shadow_score(
+            self._sheet("5100T742A", "5100T743A", "5100T744A"), None, _REFS)
+        values = [scoring["rows"][i]["fields"]["modelo"]["value"] for i in range(3)]
+        assert "5100T742" in values[0]
+        assert "5100T743" in values[1]
+        assert "5100T744" in values[2]
+        assert all(
+            scoring["rows"][i]["fields"]["modelo"]["status"] == "snapped"
+            for i in range(3)
+        )
+
+
 class TestPureHelpers:
     """Funções puras R247 (extração de cores e tokens)."""
 
@@ -233,6 +289,7 @@ class TestPureHelpers:
         lucky = _efs_compute(
             "modelo", _entry("5100TME2", "5100T743"),
             {"modelo": "5100T742A"}, {}, "5100T742A")
+        assert right is not None and lucky is not None
         assert right == pytest.approx(0.97)
         assert lucky < right - 0.05
 
