@@ -4,6 +4,17 @@ Objetivo: comparar motores de cross sem batota, sempre com o mesmo pacote de
 OCRs e as mesmas referencias. A metrica principal e o valor final emitido pelo
 cross contra `resultado_atual`, nao a cor `MATCH`/`NO_MATCH`.
 
+> **Arbitro oficial (R253/R257):** a decisao de promover uma variante e do
+> `scripts/diag/backtest_winner.py` (simetrico desde R253; controlo
+> HEAD-vs-HEAD tem de dar delta exatamente 0) sobre verdade humana, nao
+> deste comparador — `resultado_atual` e em grande parte output anterior do
+> proprio motor (verdade fraca/circular). Este protocolo e um complemento.
+> Nota R257: o avaliador pontuava cada motor na uniao raw ∪ truth ∪ as
+> celulas que o PROPRIO motor emitia (denominadores diferentes — um
+> candidato podia "ganhar" emitindo celulas extra vazias; no run r249 as
+> 492 celulas so-no-candidato contaram todas como corretas). Corrigido:
+> pontua-se apenas raw ∪ truth, identico para os dois motores.
+
 ## Pacote oficial
 
 Cada corrida tem de fixar:

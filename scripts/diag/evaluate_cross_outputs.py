@@ -241,7 +241,15 @@ def _iter_cases(sample_dir: Path, refs: dict, sections: set[str]) -> list[CellCa
         truth_values = _sheet_paths(truth_sheet)
         cells = _cross_paths(result)
         template = str(truth_sheet.get("template_name") or raw_sheet.get("template_name") or "")
-        for path in sorted(set(raw_values) | set(truth_values) | set(cells)):
+        # R257 — pontuar APENAS raw ∪ truth. A união incluía set(cells) — os
+        # paths que o PRÓPRIO motor emite — pelo que cada motor era avaliado
+        # num denominador diferente: um candidato que emitisse células extra
+        # (vazias/auto-consistentes) inflacionava numerador e denominador.
+        # Caso real: no run r249 oficial, TODAS as 492 células só-no-candidato
+        # contaram como corretas — o headline dava +1,61pp quando na base
+        # comum de 5.364 células havia -1,34pp. O gate de +3pp não passou por
+        # margem, mas a métrica permitia inverter uma regressão.
+        for path in sorted(set(raw_values) | set(truth_values)):
             section, row_index, field = _path_parts(path)
             if section not in sections:
                 continue
