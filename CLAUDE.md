@@ -67,6 +67,23 @@ fine-tune por operador · 7 LiLT (opcional). Hoje: Fase 0.5 + R104-R106
 - `ADMIN_TOKEN` (env, opcional): protege /admin* e /refs*; sem env → aberto
   como sempre
 
+## Variantes do cross engine (R250–R255)
+- `SCORING_VARIANT` (ContextVar; env `CROSS_SCORING_VARIANT`, default **v30**):
+  "v30" = produção (melhor ranking medido); "next" (R250-R252) e "next2"
+  (R254) = arquivadas, medidas iguais/piores no ranking; **"v30cal" (R255) =
+  candidata ao flip** — ranking byte-idêntico ao v30 + confiança calibrada
+  (Platt por campo) + abstenção OOD P(H0)>P(OF). Evidência e sequência
+  soak→flip→gate em `docs/DECISAO_v30cal.md`; procedimento formal em
+  `docs/CROSS_EVALUATION_PROTOCOL.md`.
+- `CROSS_SHADOW_VARIANT` (default "current"): variante da thread de sombra;
+  "=v30cal" inicia o soak (triagem em /shadow-queue + scripts/diag/soak_sprt.py).
+- `CROSS_POSTERIOR_TELEMETRY=0`: desliga a telemetria do posterior em v30
+  (recuperação de runtime); na variante ativa é decisão e corre sempre.
+- `CROSS_WRITE_GATE_MARGINAL` (default OFF; ligar só com OK do Luís): gate de
+  gravação por confiança calibrada, limiares sibling-aware.
+- Harness: `scripts/diag/backtest_winner.py` é SIMÉTRICO desde R253 (controlo
+  HEAD-vs-HEAD tem de dar delta exatamente 0); validar variantes SEMPRE por lá.
+
 ## Convenções
 - Comentários `R##` referenciam o round/commit que introduziu a regra — manter
 - Prompts versionados em `prompts/ocr6_v*.txt`; v3 é canónico

@@ -109,6 +109,8 @@ data/images/
 data/events.jsonl
 data/kernel_state.json
 data/kpi_params.json
+# R253 — proveniência do plano por content-hash (a app reescreve em runtime)
+data/plan_provenance.json
 kanban_refs/03_Cross_Check/
 lexicons/operador_aliases.json
 lexicons/cliente_aliases.json
