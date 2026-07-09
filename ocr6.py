@@ -453,7 +453,17 @@ def process_image(
     raw = None
     telemetria = {}
     for edge_idx, edge in enumerate(edges_to_try):
-        image_b64 = image_to_base64(image_path, max_edge=edge)
+        # R256 — upload corrupto/truncado lançava a exceção PIL crua para fora
+        # de process_image (o worker apanhava a montante, mas o caminho de
+        # falha ficava sem status tipado no audit trail).
+        try:
+            image_b64 = image_to_base64(image_path, max_edge=edge)
+        except (OSError, ValueError) as img_err:
+            metrics.duration_sec = time.time() - t0
+            metrics.status = "erro_imagem"
+            metrics.error = f"{type(img_err).__name__}: {img_err}"
+            log.error(f"  ✗ erro_imagem ({img_err})")
+            return result
         for attempt in range(MAX_RETRIES + 1):
             raw, telemetria = ollama_request(image_b64, prompt_text=prompt)
             if raw is not None:

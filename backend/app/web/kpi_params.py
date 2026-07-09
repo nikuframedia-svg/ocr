@@ -335,7 +335,7 @@ def save_kpis(kpis: list[dict], expected_version: int) -> dict:
         history = (raw.get("history") if raw else None) or []
         prev_kpis = raw["kpis"] if raw else copy.deepcopy(DEFAULT_KPIS)
         history.append({
-            "saved_at": datetime.now().isoformat(timespec="seconds"),
+            "saved_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "version": current_version,
             "kpis": prev_kpis,
         })
@@ -369,7 +369,7 @@ def revert_kpis(to: str | int = "defaults") -> dict:
             restored = history[idx]["kpis"]
         prev_kpis = raw["kpis"] if raw else copy.deepcopy(DEFAULT_KPIS)
         history.append({
-            "saved_at": datetime.now().isoformat(timespec="seconds"),
+            "saved_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "version": current_version,
             "kpis": prev_kpis,
         })

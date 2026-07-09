@@ -185,8 +185,11 @@ def _process_sheet_ocr(sheet_id: int) -> None:
                 db.set_needs_review(sheet_id, result.get("review_reason") or "side_review")
             else:
                 db.clear_needs_review(sheet_id)
-        except Exception:
-            pass
+        except Exception as nr_err:
+            # R256 — falha aqui deixa o flag de revisão STALE (badge/banner e
+            # gate de depósito errados); não pode ser silenciosa.
+            print(f"[worker needs_review] sheet {sheet_id}: {nr_err}", file=sys.stderr)
+            traceback.print_exc()
         try:
             _run_and_store_cross_check(
                 sheet_id,
@@ -521,7 +524,7 @@ async def upload(
 
     store_suffix = ".pdf" if is_pdf else suffix
     token = secrets.token_hex(8)
-    target = _IMAGES_DIR / f"{dt.datetime.now():%Y%m%d_%H%M%S}_{token}{store_suffix}"
+    target = _IMAGES_DIR / f"{dt.datetime.now().astimezone():%Y%m%d_%H%M%S}_{token}{store_suffix}"
     # Grava o 1º chunk (já lido) + o resto do stream, com cap incremental.
     bytes_written = 0
     with target.open("wb") as f:
@@ -2325,7 +2328,7 @@ def _revalidate_all_sheets_bg() -> None:
         with _revalidation_lock:
             _revalidation_state.update(
                 running=True, done=0, total=len(sheets), finished_at=None,
-                started_at=dt.datetime.now().isoformat(timespec="seconds"),
+                started_at=dt.datetime.now().astimezone().isoformat(timespec="seconds"),
             )
         for s in sheets:
             try:
@@ -2338,7 +2341,7 @@ def _revalidate_all_sheets_bg() -> None:
         with _revalidation_lock:
             _revalidation_state["running"] = False
             _revalidation_state["finished_at"] = (
-                dt.datetime.now().isoformat(timespec="seconds"))
+                dt.datetime.now().astimezone().isoformat(timespec="seconds"))
 
 
 # Destinos permitidos para o `back` dos POSTs de refs — o corpo da página
@@ -2415,7 +2418,7 @@ def _start_revalidation() -> bool:
             return False
         _revalidation_state.update(
             running=True, done=0, total=0, finished_at=None,
-            started_at=dt.datetime.now().isoformat(timespec="seconds"),
+            started_at=dt.datetime.now().astimezone().isoformat(timespec="seconds"),
         )
     threading.Thread(target=_revalidate_all_sheets_bg, daemon=True).start()
     return True
