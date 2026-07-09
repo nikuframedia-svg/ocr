@@ -433,6 +433,76 @@ def _fs_id_u_floor(fields: tuple[str, ...]) -> float:
     return prod
 
 
+# R254 (variante "next2") — ranking HONESTO da identidade: numeradores por
+# campo informados pelo canal + denominador conjunto. Por entry:
+#   M = campos de identidade que batem EXATO (membro do conjunto do valor
+#       escrito); C = of/ov alcançáveis pelo canal (custo <= G_L0);
+#   D = para lá do canal (evento binário "não bate").
+#   bits_id = log2 m̂_M + Σ_{f∈C}[log2(1−m_f) − custo_f]
+#           − log2 u_inter(M) − Σ_{f∈C} log2 û_f|∩M + Σ_{f∈D} w_disagree_f
+# O kernel de colisão û_f|∩M é RESTRINGIDO à interseção dos campos exatos:
+# um produto independente sobre-conta a raridade (a mesma dupla contagem do
+# R250 no lado C) e o vizinho adjacente ULTRAPASSAVA o exato — verificação
+# à mão: e1(triplo exato) ≈ −2,19+12,8 ≈ 10,6 bits vs e2(of a d=1,
+# ov+cliente exatos) ≈ −10,65+11 ≈ 0,35 → Δ ≈ 10,3 bits (o lado m do canal
+# que a deflação R250 perdia). Com M=∅ o kernel cai no plano inteiro
+# (û_full, cacheado no idx). Sims/guardas R248-R249/cores intactos.
+
+
+def _id_uhat_full(field: str, keys: tuple[str, ...], idx: dict) -> float:
+    """R254 — colisão do valor escrito sob o canal sobre TODO o plano
+    (caso M=∅). 1× por (campo, valor) por plano carregado."""
+    cache = idx.setdefault("fs_id_uhat", {})
+    ck = (field, keys)
+    hit = cache.get(ck)
+    if hit is not None:
+        return hit
+    sets_f = (idx.get("fs_id_sets") or {}).get(field) or {}
+    total = 0.0
+    for v, members in sets_f.items():
+        best = None
+        for k in keys:
+            if abs(len(v) - len(k)) > 2:
+                continue
+            if v[:2] != k[:2] and v[-2:] != k[-2:]:
+                continue
+            c = _channel_align_cost_bits(v, k, "")
+            if best is None or c < best:
+                best = c
+        if best is not None and best <= _CHANNEL_G_L0:
+            total += (2.0 ** -best) * len(members)
+    u = (total + 1.0) / max(int(idx.get("fs_n") or 0), _FS_U_MIN_CORPUS)
+    cache[ck] = u
+    return u
+
+
+def _id_uhat_restricted(field: str, keys: tuple[str, ...],
+                        member_eids: frozenset[int], idx: dict) -> float:
+    """R254 — colisão do valor escrito DENTRO de ∩M (Laplace +1): a fração
+    dos membros da interseção cujo `field` explica a escrita sob o canal."""
+    values = (idx.get("fs_eid_values") or {}).get(field) or {}
+    total = 0.0
+    for eid in member_eids:
+        v = values.get(eid)
+        if not v:
+            continue
+        if v in keys:
+            total += 1.0
+            continue
+        best = None
+        for k in keys:
+            if abs(len(v) - len(k)) > 2:
+                continue
+            if v[:2] != k[:2] and v[-2:] != k[-2:]:
+                continue
+            c = _channel_align_cost_bits(v, k, "")
+            if best is None or c < best:
+                best = c
+        if best is not None and best <= _CHANNEL_G_L0:
+            total += 2.0 ** -best
+    return (total + 1.0) / (len(member_eids) + 1.0)
+
+
 # R247 — match do código-peça embebido após strip do sufixo A/B: quase-pleno
 # (0.97·w ≫ fuzzy do token-família ≈0.67·w), mas <1.0 de propósito — se um
 # irmão bater 1.0 PLENO (o sufixo era código, não decoração), ganha ele; e a
@@ -1499,6 +1569,7 @@ def _fs_row_context(row: dict, idx: dict, score_fields=None,
     # 1× por linha (ContextVar.get() em cada entry custaria ~7 ms/folha).
     variant = scoring_variant()
     id_sets: dict[str, frozenset[int] | None] = {}
+    id_keys: dict[str, tuple[str, ...]] = {}
     if variant != "v30":
         fs_sets = idx.get("fs_id_sets") or {}
         for field in _FS_ID_JOINT_FIELDS:
@@ -1516,6 +1587,8 @@ def _fs_row_context(row: dict, idx: dict, score_fields=None,
                 keys = _o_zero_variants(_identifier_compact(raw_v))
             else:
                 keys = [_cliente_compact(raw_v)]
+            # R254 — variantes escritas normalizadas (kernel do next2).
+            id_keys[field] = tuple(k for k in keys if k)
             members: set[int] = set()
             found = False
             for k in keys:
@@ -1534,7 +1607,11 @@ def _fs_row_context(row: dict, idx: dict, score_fields=None,
         # R250 — variante + identidade conjunta
         "variant": variant,
         "id_sets": id_sets,
+        "id_keys": id_keys,
         "id_joint_memo": {},
+        # R254 (next2) — memos do kernel restringido e das interseções.
+        "n2_uhat_memo": {},
+        "n2_inter_memo": {},
         # R242 — bias de CONTEXTO (bits) por entry: prior de produção (D1:
         # {"of": {of_key: +bits}, "of_default": bits_inativa}) e coerência de
         # folha (D2: {"coh_of": {of_key: +bits}, "coh_cliente": {compact:
@@ -1575,6 +1652,11 @@ def _entry_bits_score(
     if id_sets:
         joint_eid = (idx.get("fs_id_by_key") or {}).get(_entry_key(entry))
     joint_fields: list[str] = []
+    # R254 (variante "next2") — ranking honesto da identidade: campos
+    # alcançáveis pelo canal (C) e para lá dele (D); ver bloco de helpers.
+    n2 = ctx.get("variant") == "next2"
+    n2_C: list[tuple[str, float]] = []
+    n2_D: list[str] = []
     for field in ("of", "ov", "cliente", "modelo"):
         if allowed is not None and field not in allowed:
             continue
@@ -1590,6 +1672,26 @@ def _entry_bits_score(
             and joint_eid in id_sets[field]
         ):
             joint_fields.append(field)
+            continue
+        if n2 and field in ("of", "ov"):
+            # R254 — numerador pelo canal: P(escrita|entry) = (1−m)·2^−c;
+            # substitui os tiers 0.5w/g·w E o veto (o −c JÁ é o veto
+            # honesto — quanto menos plausível o misread, mais custa).
+            keys = (ctx.get("id_keys") or {}).get(field) or ()
+            value = (str(entry.get("_of") or entry.get("of") or "")
+                     if field == "of"
+                     else _identifier_compact(entry.get("ov")))
+            if not keys or not value:
+                continue
+            best_c = None
+            for k in keys:
+                c = _channel_align_cost_bits(value, k, "")
+                if best_c is None or c < best_c:
+                    best_c = c
+            if best_c is not None and best_c <= _CHANNEL_G_L0:
+                n2_C.append((field, best_c))
+            else:
+                n2_D.append(field)
             continue
         if field in ("of", "ov"):
             gch = 0.0
@@ -1665,7 +1767,47 @@ def _entry_bits_score(
     # honestos — era aí que a inflação fazia dano: p_top saturado a 0,99 e
     # H0 esmagada). Rebalancear o próprio ranking = trabalho futuro que
     # exige re-fitar TODAS as constantes contra verdade humana.
-    if joint_fields:
+    if n2 and (joint_fields or n2_C or n2_D):
+        # R254 — bits honestos da identidade (ver bloco de helpers): o
+        # ranking USA a fórmula conjunta diretamente (sem somas infladas,
+        # logo sem id_infl — o posterior consome estes bits tal-e-qual).
+        num = 0.0
+        den_bits = 0.0
+        members: frozenset[int] | None = None
+        if joint_fields:
+            jkey = tuple(joint_fields)
+            imemo = ctx["n2_inter_memo"]
+            members = imemo.get(jkey)
+            if members is None:
+                jinter: frozenset[int] | set[int] = id_sets[jkey[0]]
+                for f in jkey[1:]:
+                    jinter = jinter & id_sets[f]
+                members = frozenset(jinter)
+                imemo[jkey] = members
+            num += math.log2(_fs_id_m_joint(jkey))
+            u_int = max(max(len(members), 1) / ctx["n"],
+                        _fs_id_u_floor(jkey))
+            den_bits += math.log2(u_int)
+        for f, c_f in n2_C:
+            num += math.log2(1.0 - _FS_M[f]) - c_f
+            uk = (f, tuple(joint_fields))
+            umemo = ctx["n2_uhat_memo"]
+            u_c = umemo.get(uk)
+            if u_c is None:
+                keys = (ctx.get("id_keys") or {}).get(f) or ()
+                if members:
+                    u_c = _id_uhat_restricted(f, keys, members, idx)
+                else:
+                    u_c = _id_uhat_full(f, keys, idx)
+                umemo[uk] = u_c
+            den_bits += math.log2(max(u_c, 1e-9))
+        n2_bits = num - den_bits
+        for f in n2_D:
+            n2_bits += _FS_W_DISAGREE[f]
+        all_id = (*joint_fields, *(f for f, _ in n2_C), *n2_D)
+        floor_id = sum(_FS_W_DISAGREE[f] for f in all_id)
+        bits += max(min(n2_bits, _FS_ID_JOINT_CAP), floor_id)
+    elif joint_fields:
         singles = [_fs_value_weight(f, entry, idx) for f in joint_fields]
         bits += sum(singles)  # ranking: byte-idêntico ao v30
         if len(joint_fields) >= 2 and joint_eid is not None:
@@ -1673,10 +1815,10 @@ def _entry_bits_score(
             jmemo = ctx["id_joint_memo"]
             n_joint = jmemo.get(jkey)
             if n_joint is None:
-                jinter: frozenset[int] | set[int] = id_sets[jkey[0]]
+                jinter2: frozenset[int] | set[int] = id_sets[jkey[0]]
                 for f in jkey[1:]:
-                    jinter = jinter & id_sets[f]
-                n_joint = max(len(jinter), 1)
+                    jinter2 = jinter2 & id_sets[f]
+                n_joint = max(len(jinter2), 1)
                 jmemo[jkey] = n_joint
             u_joint_id = max(n_joint / ctx["n"], _fs_id_u_floor(jkey))
             joint_bits = math.log2(_fs_id_m_joint(jkey)) - math.log2(u_joint_id)
@@ -1815,6 +1957,8 @@ def _get_indices(refs: dict) -> dict:
     fs_id_sets: dict[str, dict[str, set[int]]] = {
         "of": {}, "ov": {}, "cliente": {},
     }
+    # R254 — eid → valor compacto (of/ov) p/ o kernel restringido do next2.
+    fs_eid_values: dict[str, dict[int, str]] = {"of": {}, "ov": {}}
     # R251 — token-código → nº de entries que o contêm.
     fs_token_counts: dict[str, int] = {}
     fs_n = 0
@@ -1850,10 +1994,14 @@ def _get_indices(refs: dict) -> dict:
             # chaves do fs_freq): permitem o u CONJUNTO da identidade por
             # interseção, como as dims fazem desde R236.
             fs_id_sets["of"].setdefault(of_key, set()).add(eid)
+            # R254 — valor de of/ov POR eid (kernel de colisão restringido
+            # à interseção no ranking honesto da variante next2).
+            fs_eid_values["of"][eid] = of_key
             ov_c = _identifier_compact(ov_val)
             if ov_c:
                 fs_freq["ov"][ov_c] = fs_freq["ov"].get(ov_c, 0) + 1
                 fs_id_sets["ov"].setdefault(ov_c, set()).add(eid)
+                fs_eid_values["ov"][eid] = ov_c
             cli_c = _cliente_compact(cli_val)
             if cli_c:
                 fs_freq["cliente"][cli_c] = fs_freq["cliente"].get(cli_c, 0) + 1
@@ -1907,11 +2055,14 @@ def _get_indices(refs: dict) -> dict:
         "fs_dim_sorted": fs_dim_sorted,
         # R250 — identidade conjunta
         "fs_id_sets": fs_id_sets,
+        # R254 — valores por eid p/ o kernel restringido (variante next2).
+        "fs_eid_values": fs_eid_values,
         # R251 — LR de token do modelo (û cacheado por core no próprio idx:
         # invalidação grátis quando o plano recarrega via _INDEX_CACHE).
         "fs_token_counts": fs_token_counts,
         "fs_token_buckets": fs_token_buckets,
         "fs_uhat": {},
+        "fs_id_uhat": {},
     }
     if loaded_at:
         _INDEX_CACHE[key] = indices

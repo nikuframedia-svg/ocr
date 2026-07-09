@@ -81,10 +81,20 @@ class TestJointIdentity:
             SCORING_VARIANT.reset(tok)
         assert b_next == pytest.approx(b_v30, abs=1e-9)
 
-    def test_posterior_uses_deflated_bits(self, _variant_next):
+    def test_posterior_uses_deflated_bits(self, _variant_next, monkeypatch):
         # Triple exato: a inflação (Σ singles − joint) é subtraída no
         # posterior → p_h0 sobe e p_of desce vs a telemetria v30 (que usa
-        # os bits crus inflados).
+        # os bits crus inflados). Sem as chaves posterior_* fitted — com o
+        # b_H0 ancorado (R253.5) num plano de fixture minúsculo o p_h0
+        # arredonda a 0 dos dois lados e o teste do MECANISMO ficava cego.
+        import app.pipeline.scoring_engine as se
+        real = dict(se._load_cross_params())
+        cal = dict(real.get("calibration") or {})
+        for k in list(cal):
+            if k.startswith("posterior_") or k.startswith("b_h0"):
+                cal.pop(k)
+        real["calibration"] = cal
+        monkeypatch.setattr(se, "_load_cross_params", lambda: real)
         row = {"of": "262593", "ov": "2601149", "cliente": "TSO CATENAIRES",
                "modelo": "5100T742A", "qtd": "2"}
         w_next = select_winner(dict(row), _REFS, template_name="gasparini")

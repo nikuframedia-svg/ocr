@@ -202,27 +202,32 @@
       "0-3": {
         "n": 303,
         "ood": 17,
-        "p_ood": 0.059
+        "p_ood": 0.059,
+        "p_ood_isotonic": 0.059
       },
       "4-7": {
         "n": 353,
         "ood": 71,
-        "p_ood": 0.203
+        "p_ood": 0.203,
+        "p_ood_isotonic": 0.2028
       },
       "8-14": {
         "n": 305,
         "ood": 95,
-        "p_ood": 0.313
+        "p_ood": 0.313,
+        "p_ood_isotonic": 0.2164
       },
       "15-30": {
         "n": 1391,
         "ood": 271,
-        "p_ood": 0.195
+        "p_ood": 0.195,
+        "p_ood_isotonic": 0.2164
       },
       ">30": {
         "n": 998,
         "ood": 311,
-        "p_ood": 0.312
+        "p_ood": 0.312,
+        "p_ood_isotonic": 0.312
       }
     }
   },
@@ -235,7 +240,36 @@
     "runs": [
       "reports/backtest_winner_r243",
       "reports/backtest_winner_r243b"
-    ]
+    ],
+    "fitted_at_run": "reports/backtest_winner_r253_calibrate_v2",
+    "temperature_bits_brier_min": 2.0,
+    "s_ood_bits_brier_min": 12.0,
+    "brier_brier_min": 0.1014,
+    "posterior_temperature_bits": 1.25,
+    "b_h0_raw_bits": -2.91,
+    "b_h0_raw_by_n_fields": {
+      "3-4": 0.06,
+      "0-2": -7.06
+    },
+    "posterior_floor_a_bits": -4.0,
+    "posterior_brier": 0.0779,
+    "posterior_ood_abstain_rate": 0.15,
+    "posterior_fit_objective": "brier<=min+0.002 → max abstenção OOD (q=0.5, delta=0.0, n_plan_fit=20839)",
+    "posterior_n_samples": 412,
+    "posterior_platt_by_field": {
+      "of": [
+        0.2,
+        1.6
+      ],
+      "cliente": [
+        0.2,
+        2.0
+      ],
+      "modelo": [
+        0.2,
+        1.2
+      ]
+    }
   },
   "quant8_identity_joint": {
     "m_joint": {
@@ -300,5 +334,16 @@
     "n_cases": 1096,
     "fitted_at": "2026-07-08T22:49:37.982854+00:00",
     "source_db_sha256_16": "df08304d9327d1c5"
+  },
+  "calibration_previous": {
+    "temperature_bits": 2.5,
+    "s_ood_bits": 10.0,
+    "brier": 0.108,
+    "n_samples": 412,
+    "chosen_by": "calibração na REGIÃO DE DECISÃO (buckets >=0.6 com gap <=6pp; 0.9-1.0: conf .98 vs acc .96, n=248) — preferida ao Brier-mínimo (T=2.0/s_ood=12, brier .1073) que espalha a massa OOD para 0.6-0.7 (gap .38). Ponto cego conhecido: banda 0.5-0.6 = OOD não separável por um s_ood escalar (conf .55, acc .11); nunca grava com o gate ON (thresholds >=0.90) — melhoria futura: s_ood date-aware / feature OOD própria (quant7).",
+    "runs": [
+      "reports/backtest_winner_r243",
+      "reports/backtest_winner_r243b"
+    ]
   }
 }

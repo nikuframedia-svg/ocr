@@ -93,10 +93,32 @@ class TestPosterior:
         ambig = _winner("5100TME")
         assert ambig["_posterior_entropy_bits"] > exact["_posterior_entropy_bits"]
 
-    def test_p_top_is_p_of_under_next_with_logistic_kept(self, _variant_next):
+    def test_p_top_is_p_of_under_next_with_logistic_kept(
+            self, _variant_next, monkeypatch):
+        # R253.5 — p_top = leitura Platt de p_of; sem fit é identidade.
+        # Independente do cross_params fitted no repo (testa o MECANISMO).
+        import app.pipeline.scoring_engine as se
+        real = dict(se._load_cross_params())
+        cal = dict(real.get("calibration") or {})
+        for k in list(cal):
+            if k.startswith("posterior_") or k.startswith("b_h0"):
+                cal.pop(k)
+        real["calibration"] = cal
+        monkeypatch.setattr(se, "_load_cross_params", lambda: real)
         w = _winner("5100T742A")
         assert w["_p_top"] == w["_p_of"]
         assert "_p_top_logistic" in w
+
+    def test_p_top_is_platt_readout_of_p_of_when_fitted(
+            self, _variant_next, monkeypatch):
+        import app.pipeline.scoring_engine as se
+        real = dict(se._load_cross_params())
+        cal = dict(real.get("calibration") or {})
+        cal["posterior_platt_by_field"] = {"of": [0.5, 0.2]}
+        real["calibration"] = cal
+        monkeypatch.setattr(se, "_load_cross_params", lambda: real)
+        w = _winner("5100T742A")
+        assert w["_p_top"] == se._platt_calibrate(w["_p_of"], "of")
 
     def test_v30_p_top_untouched(self):
         w = _winner("5100T742A")
@@ -138,7 +160,17 @@ class TestPiH0:
 
 
 class TestCellConfidence:
-    def test_modelo_cell_gets_field_marginal_under_next(self, _variant_next):
+    def test_modelo_cell_gets_field_marginal_under_next(
+            self, _variant_next, monkeypatch):
+        # Sem Platt fitted (mecanismo puro): OF confiante, modelo incerto.
+        import app.pipeline.scoring_engine as se
+        real = dict(se._load_cross_params())
+        cal = dict(real.get("calibration") or {})
+        for k in list(cal):
+            if k.startswith("posterior_") or k.startswith("b_h0"):
+                cal.pop(k)
+        real["calibration"] = cal
+        monkeypatch.setattr(se, "_load_cross_params", lambda: real)
         sheet = {"template_name": "gasparini", "header": {}, "footer": {},
                  "rows": [dict(_ROW, modelo="5100TME")]}
         scoring, *_ = shadow_score(sheet, None, _REFS)
