@@ -1718,6 +1718,14 @@ async def sheet_validate(
         raise HTTPException(404, f"sheet {sheet_id} not found")
     if sheet_pre.get("status") == "validated":
         raise HTTPException(409, "Folha já validada — não é possível re-validar")
+    # R257 — needs_review suspende o depósito no worker (main.py:~205), mas o
+    # validate não verificava e depositava na mesma ao validar — o lado
+    # duvidoso contornava a guarda e corrompia o CSV da fábrica. Resolver o
+    # lado primeiro (banner "rever lado" → /resolve-side).
+    if sheet_pre.get("needs_review"):
+        raise HTTPException(
+            409, "Folha marcada para revisão de lado — resolve o lado antes de validar"
+        )
 
     header = (sheet_pre.get("sheet_data") or {}).get("header") or {}
     # R136 — dois fluxos partilham este endpoint:
@@ -3183,10 +3191,22 @@ def sheet_delete(sheet_id: int, request: Request) -> JSONResponse:
     """
     if _is_mobile_request(request):
         raise HTTPException(403, "Apagar só pode ser feito em desktop")
+    sheet_pre = db.get_sheet(sheet_id)
     try:
         result = db.delete_sheet(sheet_id)
     except ValueError as e:
         raise HTTPException(404, str(e))
+    # R257 — trilho de auditoria: o validate emite evento kernel mas o delete
+    # não emitia nada — uma folha (mesmo validada) desaparecia sem rasto.
+    try:
+        kernel.emit_event("sheet_deleted", {
+            "sheet_id": sheet_id,
+            "status": (sheet_pre or {}).get("status"),
+            "operador": (sheet_pre or {}).get("operador"),
+            "removed": result,
+        })
+    except Exception:
+        pass
     return JSONResponse({"ok": True, "removed": result})
 
 
@@ -3204,6 +3224,12 @@ def sheet_reprocess(sheet_id: int) -> RedirectResponse:
     sheet = db.get_sheet(sheet_id)
     if sheet is None:
         raise HTTPException(404, f"sheet {sheet_id} not found")
+    # R257 — Round 50 declarou "folha validada é final", mas este endpoint
+    # não verificava: um POST direto punha a folha em 'pending' e o worker
+    # reescrevia raw_extraction/sheet_data/dq_audit e revertia o status para
+    # 'extracted' — imutabilidade quebrada.
+    if sheet.get("status") == "validated":
+        raise HTTPException(409, "Folha validada é final — não pode ser reprocessada")
     img_path = _DATA_DIR / sheet["image_path"]
     if not img_path.exists():
         raise HTTPException(404, "image file missing")
@@ -3226,6 +3252,9 @@ def sheet_resolve_side(sheet_id: int, side: str = Form(...)) -> RedirectResponse
     sheet = db.get_sheet(sheet_id)
     if sheet is None:
         raise HTTPException(404, f"sheet {sheet_id} not found")
+    # R257 — mesma guarda do /reprocess: folha validada é final (Round 50).
+    if sheet.get("status") == "validated":
+        raise HTTPException(409, "Folha validada é final — não pode ser reprocessada")
     img_path = _DATA_DIR / sheet["image_path"]
     if not img_path.exists():
         raise HTTPException(404, "image file missing")
