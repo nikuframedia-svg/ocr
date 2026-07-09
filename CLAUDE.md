@@ -6,7 +6,9 @@ fabricante de colunas metálicas em Trofa, exporta para a Europa). **NÃO** inte
 com o PP1 (APS interno da NIKUFRA.AI). Audit trail certificável EN 1090 / ISO 9001.
 
 ## Stack (canonical)
-- Python 3.11 + uv, Pydantic v2, FastAPI, Jinja2 + HTMX (sem SPA)
+- Python 3.11–3.12 + uv (`requires-python >=3.11,<3.13`; o venv atual corre
+  3.12 — re-canonicalizar é decisão pendente), Pydantic v2, FastAPI,
+  Jinja2 + HTMX (sem SPA)
 - **Ollama nativo Windows** :11434 com `qwen3.5:9b` + `OCR_NO_THINK=1`
   (sem o flag, ~42% dos OCRs falham JSON parse e a latência é 4x; ver Round 19/20)
 - vLLM dorme até à Fase 4 — RTX 50xx Blackwell SIGINT silencioso aos 30-50s.
@@ -31,7 +33,7 @@ Audit trail do agente Qwen em `backend/app/pipeline/qwen_agent.py` +
 
 ## Estrutura
 - `backend/app/` — código de produção (`web/`, `pipeline/`, `dq/`, `cross_check/`, `learning/`, `evaluation/`)
-- `scripts/` — CLIs operator (`extract`, `annotate_cli`, `benchmark`, `dq_run`);
+- `scripts/` — CLIs operator (`extract`, `annotate_cli`, `benchmark`);
   subdirs `finetune/`, `data/`, `ops/` para utilitários R105+
 - `kanban_refs/` — SAP refs factory (StockSAP, plan_colunas_cpis, ListaColaboradores)
 - `inputs/originais/`, `ground_truth/`, `lexicons/` — dataset histórico (TRACKED em R64)
@@ -115,7 +117,8 @@ powershell -File scripts/ops/update.ps1              # PC da Metalogalva: pull +
 ## Verificação (Boris: "ensure Claude can verify its work")
 - Mudanças no pipeline OCR → `scripts/extract.py` contra `ground_truth/`,
   comparar `reports/extractions/_metrics.md`
-- Mudanças no DQ → `scripts/dq_run.py` em batch
+- Mudanças no DQ → `uv run pytest tests/unit -k "snap or dq" --no-cov`
+  (o antigo `scripts/dq_run.py` já não existe — R256)
 - Mudanças na UI → abrir `/sheet/<id>` no browser e validar render
 - Antes de commit → `uv run pytest -q` (excluindo `-m vllm`)
 

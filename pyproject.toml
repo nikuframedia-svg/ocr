@@ -91,6 +91,11 @@ ignore = [
 
 [tool.mypy]
 python_version = "3.11"
+# R256 — sem alvo, `uv run mypy` falhava com "Missing target module"; o gate
+# era vácuo. Com files+mypy_path corre e REPORTA a dívida (~792 erros strict
+# em app.*) — corrigi-la é ratchet futuro, por módulo.
+files = ["backend/app"]
+mypy_path = ["backend"]
 strict = false
 warn_unused_configs = true
 warn_redundant_casts = true
