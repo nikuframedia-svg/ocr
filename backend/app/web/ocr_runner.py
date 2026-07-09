@@ -17,9 +17,7 @@ Public API:
 """
 from __future__ import annotations
 
-import hashlib
 import sys
-import threading  # R117 — protege swap global de ocr6.PROMPT
 import time  # R224 — timing por passagem (profiling)
 from pathlib import Path
 from typing import Any
@@ -71,30 +69,20 @@ _PROMPT_PATH = _REPO / "prompts" / "ocr6_v3.txt"
 _V3_PROMPT, _V3_PROMPT_HASH = ocr6.load_prompt(_PROMPT_PATH)
 ocr6.PROMPT, ocr6.PROMPT_HASH = _V3_PROMPT, _V3_PROMPT_HASH
 
-# R117 — `ocr6.PROMPT` é estado global no módulo ocr6. _swap_prompt muta-o
-# e a API actual de ocr6.process_image não aceita o prompt como
-# argumento, pelo que temos de o trocar antes da chamada e restaurar
-# depois. Para tornar isto seguro em paralelização futura, serializamos
-# o bloco swap→OCR→restore. Custo: throughput limitado a 1 OCR
-# simultâneo enquanto o lock for segurado (~25 s/folha). Aceitável; a
-# alternativa correcta é refactor ao ocr6 para aceitar o prompt
-# directamente, mas isso está fora do scope deste R117.
-_PROMPT_LOCK = threading.Lock()
-
-
-def _swap_prompt(prompt_text: str) -> tuple[str, str]:
-    prev = (ocr6.PROMPT, ocr6.PROMPT_HASH)
-    ocr6.PROMPT = prompt_text
-    ocr6.PROMPT_HASH = hashlib.sha256(prompt_text.encode()).hexdigest()[:12]
-    return prev
+# R256 — o prompt passou a ser parâmetro de ocr6.process_image; o padrão
+# swap-global de ocr6.PROMPT (R117, _swap_prompt + _PROMPT_LOCK) foi removido.
+# O R117 serializava o bloco swap→OCR→restore, mas o Pass-1 lia o global SEM
+# o lock — em paralelização futura o lock não protegeria nada. Com o prompt
+# por parâmetro a classe de bug desaparece. O install v3 acima mantém-se: é o
+# prompt default do Pass-1 (prompt=None) e do CLI.
 
 
 def _detect_side(image_path: Path) -> str:
     """R132 / rev00 — Pass-1.5 mini OCR para kanbans 2-lados. Devolve
     'F' (frente, produção), 'V' (verso, paragens) ou '?' (indeterminado).
 
-    Strategy: swap o `ocr6.PROMPT` para o side-detect prompt (~3-5s output),
-    corre process_image, parse o `raw_response` JSON em busca da chave `side`.
+    Strategy: corre process_image com o side-detect prompt (~3-5s output)
+    e parse o `raw_response` JSON em busca da chave `side`.
 
     rev00: deixou de haver fallback silencioso a 'F'. Em qualquer falha
     (resposta vazia, JSON impossível de parsear, valor inesperado) devolve
@@ -104,13 +92,9 @@ def _detect_side(image_path: Path) -> str:
 
     Custo: 1 chamada extra ao Ollama (~5s) quando corre inline.
     """
-    prompt = build_side_detect_prompt()
-    with _PROMPT_LOCK:
-        prev = _swap_prompt(prompt)
-        try:
-            result = ocr6.process_image(image_path, idx=1, total=1)
-        finally:
-            ocr6.PROMPT, ocr6.PROMPT_HASH = prev
+    result = ocr6.process_image(
+        image_path, idx=1, total=1, prompt=build_side_detect_prompt(),
+    )
     raw = getattr(result, "raw_response", "") or ""
     if not raw:
         return "?"
@@ -176,17 +160,13 @@ def parse_discovery_response(raw: str) -> dict:
 
 def run_discovery(image_path: Path) -> dict:
     """Task C E4 — mini-OCR de descoberta do layout de um template novo
-    (wizard /admin). Padrão _detect_side: swap do prompt sob _PROMPT_LOCK →
-    process_image → restore. Nunca levanta — falhas devolvem parse_ok=False.
+    (wizard /admin). Padrão _detect_side: process_image com o discovery
+    prompt por parâmetro. Nunca levanta — falhas devolvem parse_ok=False.
     """
-    prompt = build_discovery_prompt()
     try:
-        with _PROMPT_LOCK:
-            prev = _swap_prompt(prompt)
-            try:
-                result = ocr6.process_image(image_path, idx=1, total=1)
-            finally:
-                ocr6.PROMPT, ocr6.PROMPT_HASH = prev
+        result = ocr6.process_image(
+            image_path, idx=1, total=1, prompt=build_discovery_prompt(),
+        )
         raw = getattr(result, "raw_response", "") or ""
     except Exception as exc:
         print(f"[discovery] {image_path.name}: {type(exc).__name__}: {exc}",
@@ -242,13 +222,18 @@ def _pass1_looks_nonproduction(pass1_raw: dict) -> bool:
 
 def _run_ocr(image_path: Path, template: Any = None) -> tuple[dict, Any]:
     """R224 — devolve (dict, metrics): o `ExtractionMetrics` (eval_count,
-    retries, model, duration_sec) deixa de ser descartado, para o profiling."""
+    retries, model, duration_sec) deixa de ser descartado, para o profiling.
+
+    R256 — com template, o prompt do template segue por parâmetro (era o
+    swap-global do R117); sem template usa o global (v3, instalado acima).
+    """
     if template is not None:
         result = ocr6.process_image(
             image_path, idx=1, total=1,
             row_fields=template.row_fields,
             header_fields=template.header_fields,
             footer_fields=template.footer_fields,
+            prompt=build_prompt(template),
         )
     else:
         result = ocr6.process_image(image_path, idx=1, total=1)
@@ -585,16 +570,11 @@ def run_pipeline(image_path: Path, page_hint: str | None = None) -> dict:
     if template.name == DEFAULT_TEMPLATE.name:
         raw_extraction = pass1_raw
     else:
-        # R117 — swap→OCR→restore tem de ser atómico para evitar race em
-        # paralelização futura (Pass-1 da próxima folha veria o prompt errado).
-        with _PROMPT_LOCK:
-            prev = _swap_prompt(build_prompt(template))
-            try:
-                t = time.perf_counter()
-                pass2_raw, m2 = _run_ocr(image_path, template=template)
-                timing["pass2_ms"] = int((time.perf_counter() - t) * 1000)
-            finally:
-                ocr6.PROMPT, ocr6.PROMPT_HASH = prev
+        # R256 — o prompt do template segue por parâmetro dentro de _run_ocr;
+        # o bloco atómico swap→OCR→restore do R117 deixou de ser necessário.
+        t = time.perf_counter()
+        pass2_raw, m2 = _run_ocr(image_path, template=template)
+        timing["pass2_ms"] = int((time.perf_counter() - t) * 1000)
         raw_extraction = _merge_pass2_into_pass1(pass1_raw, pass2_raw)
 
     raw_extraction["template_name"] = template.name
@@ -631,13 +611,7 @@ def rerun_pipeline_for_template(image_path: Path, template_name: str) -> dict:
     if template.name == DEFAULT_TEMPLATE.name:
         raw_extraction, _ = _run_ocr(image_path)
     else:
-        # R117 — ver comentário em run_pipeline; mesmo motivo.
-        with _PROMPT_LOCK:
-            prev = _swap_prompt(build_prompt(template))
-            try:
-                raw_extraction, _ = _run_ocr(image_path, template=template)
-            finally:
-                ocr6.PROMPT, ocr6.PROMPT_HASH = prev
+        raw_extraction, _ = _run_ocr(image_path, template=template)
 
     raw_extraction["template_name"] = template.name
     raw_extraction["template_detection"] = {

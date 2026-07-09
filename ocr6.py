@@ -308,10 +308,15 @@ def clean_json(raw: str) -> dict[str, Any]:
 
 
 # ── Cliente Ollama ────────────────────────────────────────────────────────────
-def ollama_request(image_b64: str) -> tuple[str | None, dict[str, Any]]:
+def ollama_request(
+    image_b64: str, prompt_text: str | None = None
+) -> tuple[str | None, dict[str, Any]]:
     """
     Faz request ao Ollama. Devolve (response_text, telemetria).
     telemetria inclui eval_count, eval_duration, total_duration.
+
+    R256 — ``prompt_text`` explícito substitui o padrão swap-global de
+    ``PROMPT`` (R117); ``None`` mantém o global (CLI / Pass-1).
     """
     # Disable thinking for hybrid models (Qwen3 family). Without this, some
     # builds emit extra reasoning tokens that degrade JSON output and latency.
@@ -319,8 +324,9 @@ def ollama_request(image_b64: str) -> tuple[str | None, dict[str, Any]]:
     # (ex.: qwen3.5:9b): o "thinking" enche tokens até ao teto (8192) → folhas
     # a demorar minutos e por vezes sem JSON. Reforçamos com a convenção Qwen
     # `/no_think` no próprio prompt (cinto-e-suspensórios).
+    base_prompt = prompt_text if prompt_text is not None else PROMPT
     no_think = os.environ.get("OCR_NO_THINK", "").lower() in ("1", "true", "yes")
-    prompt_text = f"{PROMPT}\n/no_think" if no_think else PROMPT
+    prompt_text = f"{base_prompt}\n/no_think" if no_think else base_prompt
     payload = {
         "model": MODEL,
         "prompt": prompt_text,
@@ -425,9 +431,16 @@ def process_image(
     row_fields: list[str] | tuple[str, ...] | None = None,
     header_fields: list[str] | tuple[str, ...] | None = None,
     footer_fields: list[str] | tuple[str, ...] | None = None,
+    prompt: str | None = None,
 ) -> ExtractionResult:
     name = image_path.name
     metrics = ExtractionMetrics(file=name)
+    # R256 — prompt explícito por chamada (fim do swap-global R117). O
+    # default_factory de prompt_hash captura o PROMPT_HASH global; quando o
+    # prompt vem por parâmetro, o hash tem de refletir o prompt REAL usado
+    # (audit trail), não o global.
+    if prompt is not None:
+        metrics.prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()[:12]
     result = ExtractionResult(file=name, metrics=metrics)
 
     log.info(f"[{idx}/{total}] {name} — start")
@@ -442,7 +455,7 @@ def process_image(
     for edge_idx, edge in enumerate(edges_to_try):
         image_b64 = image_to_base64(image_path, max_edge=edge)
         for attempt in range(MAX_RETRIES + 1):
-            raw, telemetria = ollama_request(image_b64)
+            raw, telemetria = ollama_request(image_b64, prompt_text=prompt)
             if raw is not None:
                 metrics.retries = attempt + edge_idx * (MAX_RETRIES + 1)
                 break
@@ -487,7 +500,7 @@ def process_image(
                     f"{MAX_RETRIES + 1}): {e}; retrying OCR..."
                 )
                 time.sleep(1)
-                raw, telemetria = ollama_request(image_b64)
+                raw, telemetria = ollama_request(image_b64, prompt_text=prompt)
                 if raw is None:
                     log.error(f"  retry Ollama call returned None: {telemetria.get('error', '')}")
                     break

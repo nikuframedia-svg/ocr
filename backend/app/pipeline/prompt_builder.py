@@ -311,9 +311,10 @@ def _fewshot_block(template_name: str) -> str:
 def build_prompt(template: TemplateSpec) -> str:
     """Return the full OCR prompt customized for ``template``.
 
-    Drop-in replacement for the global ``ocr6.PROMPT``. Sets the
-    row schema, header guidance, and rules block according to the
-    template's family (production / paragens / gemini).
+    Passed to ``ocr6.process_image(prompt=...)`` per call (R256 — the old
+    global ``ocr6.PROMPT`` swap pattern is gone). Sets the row schema,
+    header guidance, and rules block according to the template's family
+    (production / paragens / gemini).
     """
     setor = _canonical_setor(template)
     if template.name == "acabamento":
