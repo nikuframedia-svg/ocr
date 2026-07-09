@@ -85,8 +85,11 @@ env/
 htmlcov/
 coverage.xml
 
-# uv
-uv.lock
+# R257 — uv.lock passou a ser TRACKED (era um default de template sem
+# rationale): pyproject só tem ranges (>=X,<Y), portanto um provisioning
+# novo resolvia versões diferentes das testadas. Prática recomendada uv
+# para aplicações. (Os deploys da fábrica fazem só git pull + restart, não
+# são afetados.)
 
 # IDE
 .idea/
