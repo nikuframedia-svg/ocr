@@ -43,11 +43,25 @@ reports/mass_ocr_runs/
 reports/r42_baseline.json
 reports/round43_variants_results.json
 
+# R256 — evidência local de backtests/comparações (trilha de decisão v30cal);
+# fica no disco mas fora do git status (48 MB de runs, incl. snapshots
+# congelados do motor que NUNCA devem ser tocados por lint/format)
+reports/backtest_winner*/
+reports/cross_engine_compare*/
+reports/cross_output_eval*/
+reports/cross_r31_r33_*/
+reports/r31_r33_regression_*/
+reports/golden_set/
+reports/pattern_lab_*/
+
 # Local screenshot/zip scratch (not part of repo)
 _captura_extract/
 _correcoes.xlsx
 _shot_*.png
 _screenshot_*.png
+# R256 — scratch antigo na raiz (mantido no disco por decisão; fora do status)
+Captura de ecrã*.zip
+v24_R226
 
 # R105 — fine-tuning artefacts (regenerable from app.db on the 5090 PC)
 data/_finetune/
