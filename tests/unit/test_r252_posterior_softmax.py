@@ -240,6 +240,61 @@ class TestRowConditionalPosteriorParams:
         assert h0_a == h0_b == 10.0  # sem fit, N não entra (byte-idêntico)
 
 
+class TestV30Cal:
+    """R255 — variante híbrida "v30cal": ranking BYTE-IDÊNTICO ao v30 (o
+    melhor medido no backtest honesto) + leitura calibrada do posterior.
+    É a candidata ao flip orientado a RESULTADOS: mesma escolha de winner,
+    mais deteção de fora-do-plano (P(H0)>P(OF)) e confiança por célula."""
+
+    @pytest.fixture()
+    def _variant_v30cal(self):
+        tok = set_scoring_variant("v30cal")
+        yield
+        SCORING_VARIANT.reset(tok)
+
+    def _winner_as(self, variant: str, modelo: str) -> dict:
+        tok = set_scoring_variant(variant)
+        try:
+            return _winner(modelo)
+        finally:
+            SCORING_VARIANT.reset(tok)
+
+    def test_ranking_bits_identical_to_v30_with_modelo(self):
+        # Com modelo escrito, a `next` muda os bits (LR R251); a v30cal NÃO.
+        for modelo in ("5100T742A", "5100TME", "5100T743"):
+            w_v30 = self._winner_as("v30", modelo)
+            w_cal = self._winner_as("v30cal", modelo)
+            assert abs(float(w_cal["_bits"]) - float(w_v30["_bits"])) < 1e-9
+            assert w_cal["designacao"] == w_v30["designacao"]
+            assert w_cal["_margin_bits"] == w_v30["_margin_bits"]
+
+    def test_next_differs_from_v30_where_v30cal_does_not(self):
+        # Guarda de sentido: o desacoplamento é real — a next continua a
+        # usar o LR (bits diferentes), a v30cal não.
+        w_v30 = self._winner_as("v30", "5100T742A")
+        w_next = self._winner_as("next", "5100T742A")
+        w_cal = self._winner_as("v30cal", "5100T742A")
+        assert abs(float(w_next["_bits"]) - float(w_v30["_bits"])) > 0.5
+        assert abs(float(w_cal["_bits"]) - float(w_v30["_bits"])) < 1e-9
+
+    def test_calibrated_readout_active(self, _variant_v30cal):
+        import app.pipeline.scoring_engine as se
+        w = _winner("5100T742A")
+        assert w.get("_p_of") is not None and w.get("_p_h0") is not None
+        assert "_p_top_logistic" in w
+        assert w["_p_top"] == se._platt_calibrate(w["_p_of"], "of")
+
+    def test_cell_confidence_by_field(self, _variant_v30cal):
+        sheet = {"template_name": "gasparini", "header": {}, "footer": {},
+                 "rows": [dict(_ROW, modelo="5100TME")]}
+        scoring, *_ = shadow_score(sheet, None, _REFS)
+        fields = scoring["rows"][0]["fields"]
+        conf_mod = fields["modelo"].get("decision_confidence")
+        conf_of = fields["of"].get("decision_confidence")
+        assert conf_mod is not None and conf_of is not None
+        assert conf_mod < conf_of  # OF confiante, peça ambígua (3 irmãs)
+
+
 class TestSiblingAwareWriteThreshold:
     """R253/F3 — o limiar de gravação sobe um tier com irmão plausível
     (<2 bits), para TODOS os campos da decisão (Sadinle/reject-option)."""

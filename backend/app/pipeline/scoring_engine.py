@@ -1761,11 +1761,18 @@ def _entry_bits_score(
                             veto = _fs_veto_relaxed_bits()
                     bits += veto
         else:
-            # R251 (variante "next") — modelo pelo LR de token; None → ladder
-            # v30 (56% das designações não têm token-código — famílias OMEGA
-            # etc.; e núcleos fora da vizinhança do canal caem no disagree).
+            # R251 (variantes "next"/"next2") — modelo pelo LR de token;
+            # None → ladder v30 (56% das designações não têm token-código).
+            # R255/v30cal — o LR de modelo é RANKING (−3 MODEL_SIB medidas
+            # no backtest honesto) e fica DESACOPLADO do portão da
+            # confiança: a variante "v30cal" = ranking byte-idêntico ao v30
+            # (o melhor medido) + leitura calibrada do posterior (p_of com
+            # Platt, decision_confidence por _p_field, abstenção OOD) — os
+            # consumidores em `scoring_variant() != "v30"` ativam-se
+            # sozinhos para ela.
             lr = None
-            if field == "modelo" and ctx.get("variant", "v30") != "v30":
+            if field == "modelo" and ctx.get("variant", "v30") in (
+                    "next", "next2"):
                 ck = ("modelo_lr", str(entry.get("designacao") or ""))
                 if cache is not None and ck in cache:
                     lr = cache[ck]

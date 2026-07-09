@@ -100,33 +100,60 @@ Qualquer mudanca ao matching de modelo corre o `backtest_winner` com estes
 conjuntos ANTES do gate oficial, mais um controlo HEAD-vs-HEAD (delta MODEL
 tem de ser 0 com o mesmo motor dos dois lados).
 
-## Variante "next" (R250-R252) e procedimento de FLIP
+## Variantes de scoring e procedimento de FLIP
 
-A refundacao matematica (posterior bayesiano) vive atras de
-`SCORING_VARIANT` (ContextVar; default "v30" em producao). Medicao:
+As variantes vivem atras de `SCORING_VARIANT` (ContextVar; default "v30"
+em producao). Estado medido com o harness SIMETRICO (R253 — dois vieses
+corrigidos; HEAD-vs-HEAD da delta exatamente 0):
 
-- `CROSS_SCORING_VARIANT=next` no ambiente poe o backtest a medir a
-  variante nova (o baseline por git-show fica no motor antigo).
-- O harness reporta a reliability do POSTERIOR (`p_of`) em paralelo com a
-  logistica, a abstencao probabilistica no conjunto OOD (P(H0)>P(OF)) e o
-  pos-fit de Platt (o fit do flip).
+- **v30** — producao; o MELHOR ranking medido (TOTAL 92,8, MODEL_SIB
+  111/150, SHIFT 138/141). Nao deteta linhas fora do plano (OOD 0/80).
+- **next** (R250-R252) — ranking igual ou pior (−1 ENG, −3 MODEL_SIB,
+  todas vermelhas); o "+0,5pp" historico era vies do harness. ARQUIVADA
+  como medicao.
+- **next2** (R254) — ranking honesto; GOOD 110/110 mas −3 SHIFT
+  (realinhamento). Re-testar quando a matriz de canal enriquecer (refit
+  R244). ARQUIVADA.
+- **v30cal** (R255) — **O CANDIDATO AO FLIP**: ranking BYTE-IDENTICO ao
+  v30 + leitura calibrada do posterior (p_of com Platt por campo,
+  decision_confidence por celula, abstencao OOD P(H0)>P(OF) ~15% vs 0 do
+  v30). E a via de RESULTADOS: 10-30% das linhas reais sao OOD (quant7) e
+  hoje recebem um valor errado do plano com confianca.
+
+Medicao: `CROSS_SCORING_VARIANT=<variante>` no ambiente poe o backtest a
+medir essa variante (o baseline por git-show fica pinned a v30 e le o
+cross_params do repo — R253). O harness reporta a reliability do POSTERIOR
+em paralelo com a logistica, a abstencao OOD e o fit do posterior (âncora
+OOD + Platt por campo, gravado com `--calibrate`).
 
 Procedimento de flip (por esta ordem, nada se salta):
 
-1. Backtest com `CROSS_SCORING_VARIANT=next` vs o SHA anterior + controlo
-   HEAD-vs-HEAD: GOOD 110/110 inviolavel; TOTAL nao-pior; ler MODEL_SIB
-   comparativamente (as perdas tem de ter sibling margin ~0 = vermelhas).
-2. Soak na fabrica: `CROSS_SHADOW_VARIANT=next` no .env — a thread de
-   sombra corre a variante nova por folha real (producao intocada; output
-   em `sheets.shadow_scoring_json`). Criterios:
-   >=300 folhas, `scripts/diag/shadow_agreement.py` com divergencia de
-   valor <=2%, todas triadas via `/sheet/<id>/shadow-view`, 0 falhas.
-3. Commit de FLIP isolado: default da variante -> "next" + BUMP de
-   `ENGINE_VERSION` + `--calibrate` (grava Platt/posterior params) +
-   re-validacao dos limiares de gravacao (err@0.95 <=5% na reliability
-   nova).
+1. Backtest com `CROSS_SCORING_VARIANT=v30cal` vs o SHA anterior +
+   controlo HEAD-vs-HEAD (delta exatamente 0): GOOD 110/110 inviolavel;
+   ranking EXATAMENTE igual ao v30 (e a definicao da variante); abstencao
+   OOD >= a medida (12/80).
+2. Soak na fabrica: `CROSS_SHADOW_VARIANT=v30cal` no .env — a thread de
+   sombra corre a variante por folha real (producao intocada; output em
+   `sheets.shadow_scoring_json`). Criterios formais (R253):
+   `scripts/diag/soak_sprt.py` com ACCEPT nos DOIS bracos SPRT (geral
+   p0=2%/p1=6%; identidade p0=0.5%/p1=2%; alfa=0.05, beta=0.01) E >=300
+   folhas E todas as divergencias triadas via `/sheet/<id>/shadow-view`
+   (fila em `/shadow-queue`; carimbo `shadow_triaged_at`), 0 falhas de
+   sombra. Nota: para o v30cal os VALORES nao divergem por construcao —
+   a triagem incide nos flips de cor/confianca.
+3. Commit de FLIP isolado: default da variante -> "v30cal" + BUMP de
+   `ENGINE_VERSION` + re-validacao dos limiares de gravacao (err@0.95
+   <=5% por campo na reliability nova).
 4. Reversao: `git revert` do commit de flip (a regeneracao on-demand repoe
    as decisoes antigas); a sombra desliga-se por env sem deploy.
+5. Pos-flip: o monitor `learning/calibration_monitor.py` (staleness +
+   CUSUM) corre no ciclo de aprendizagem e alarma via evento kernel;
+   NUNCA reverte sozinho.
+
+Converter a abstencao OOD em linhas finais corretas exige ligar o
+`CROSS_WRITE_GATE_MARGINAL` (decisao do Luis — caso 2367): com a confianca
+calibrada por campo + limiares sibling-aware, celulas `very_different` de
+baixa confianca deixam de sobrescrever o valor correto do operador.
 
 ## Processo para variantes
 
