@@ -1627,10 +1627,10 @@ async def sheet_edit(
     return HTMLResponse("".join(parts))
 
 
-# Factory deposit: CSVs go here automatically when a sheet is validated.
-# Defaults to the local factory clone in C:\kanban\nifruka\... (set up
-# by the user in this workspace). Set FACTORY_CSV_DIR env var to override
-# or to "" to disable auto-deposit.
+# Factory deposit: CSVs go here automatically after OCR (worker, gated by
+# needs_review) and again on validate. Defaults to the local factory clone
+# in C:\kanban\nifruka\... (set up by the user in this workspace). Set
+# FACTORY_CSV_DIR env var to override or to "" to disable auto-deposit.
 # R118 — usar resolve_kanban_path para cair em repo-local quando o disco
 # C:\kanban\ não existe (laptop dev sem .env).
 if os.environ.get("FACTORY_CSV_DIR", "_DEFAULT_") != "":
@@ -1644,38 +1644,60 @@ else:
     _FACTORY_CSV_DIR = None
 
 
-def _factory_csv_filename(sheet: dict) -> str:
-    """Return the canonical filename to use when depositing a sheet's CSV
-    in the factory dir. Prefer the operador+date encoded in sheet_data
-    (e.g. ``JulioLima_2026.04.15-1.csv``) so the validator log lines stay
-    human-readable; fall back to the raw image stem.
+def _resolve_factory_csv_name(sheet: dict) -> str:
+    """R257 — nome único do CSV desta folha no diretório da fábrica.
+
+    O nome base é ``Operador_AAAA.MM.DD.csv`` (db.factory_csv_filename) —
+    duas folhas do mesmo operador no mesmo dia davam o MESMO nome e a
+    segunda apagava silenciosamente a primeira (colisão real no dataset:
+    JulioLima_2026.04.15 e ...-1). Se o nome base está reclamado por OUTRA
+    folha (sheets.factory_csv_name), acrescenta ``-N`` — a convenção que o
+    próprio docstring histórico documentava mas o código nunca produzia.
+    O consumidor da fábrica faz glob de *.csv, portanto apanha os -N.
     """
-    data = sheet.get("sheet_data") or {}
-    h = data.get("header", {}) or {}
-    operador = (h.get("operador") or "").strip().title().replace(" ", "")
-    data_str = (h.get("data") or "").strip()
-    if operador and data_str:
-        # 15-04-2026 → 2026.04.15
-        parts = data_str.split("-")
-        if len(parts) == 3:
-            iso = f"{parts[2]}.{parts[1]}.{parts[0]}"
-            return f"{operador}_{iso}.csv"
-    return f"{Path(sheet['image_path']).stem}.csv"
+    base = db.factory_csv_filename(sheet)
+    own = sheet.get("factory_csv_name")
+    stem, suffix = base[:-4], ".csv"
+    candidate = base
+    n = 0
+    while True:
+        if candidate == own:
+            return candidate
+        claimant = db.get_factory_csv_claim(candidate)
+        if claimant is None or claimant == sheet["id"]:
+            return candidate
+        n += 1
+        candidate = f"{stem}-{n}{suffix}"
 
 
 def _deposit_csv_to_factory(sheet_id: int) -> Path | None:
     """Write the sheet's 3-block CSV to FACTORY_CSV_DIR. Returns the path
     written, or None if the deposit dir isn't configured / doesn't exist /
-    the sheet has no data. Idempotent: overwrites existing file."""
+    the sheet has no data. Idempotent: re-deposits overwrite THIS sheet's
+    own file (R257 — recorded in sheets.factory_csv_name); a header edit
+    that changes operador/data renames the file instead of leaving a stale
+    duplicate behind."""
     if _FACTORY_CSV_DIR is None or not _FACTORY_CSV_DIR.exists():
         return None
     sheet = db.get_sheet(sheet_id)
     if sheet is None or not sheet.get("sheet_data"):
         return None
-    filename = _factory_csv_filename(sheet)
+    filename = _resolve_factory_csv_name(sheet)
     target = _FACTORY_CSV_DIR / filename
     csv_text = _to_3block_csv(Path(sheet["image_path"]).name, sheet["sheet_data"])
     target.write_text(csv_text, encoding="utf-8")
+    prev = sheet.get("factory_csv_name")
+    if prev and prev != filename:
+        # R257 — o nome mudou (edição de operador/data entre depósitos);
+        # sem isto o ficheiro antigo ficava para trás como duplicado stale.
+        old = _FACTORY_CSV_DIR / prev
+        if old.exists():
+            try:
+                old.unlink()
+            except OSError:
+                pass
+    if prev != filename:
+        db.set_factory_csv_name(sheet_id, filename)
     return target
 
 

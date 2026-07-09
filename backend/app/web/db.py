@@ -452,6 +452,13 @@ def init_db() -> None:
             c.execute("ALTER TABLE sheets ADD COLUMN shadow_scoring_json TEXT")
         if "shadow_scored_at" not in cols:
             c.execute("ALTER TABLE sheets ADD COLUMN shadow_scored_at TIMESTAMP")
+        # R257 — nome do CSV depositado na fábrica. Fonte de verdade para:
+        # overwrite idempotente no re-depósito do validate, resolução de
+        # colisões Operador_data (duas folhas do mesmo operador no mesmo dia
+        # clobber-avam-se) e delete EXATO (o glob antigo *stem* apagava o CSV
+        # da folha irmã "-1" sobrevivente).
+        if "factory_csv_name" not in cols:
+            c.execute("ALTER TABLE sheets ADD COLUMN factory_csv_name TEXT")
         # R253/F2 — triagem do soak: o critério "todas as divergências
         # triadas" do procedimento de flip só é auditável com carimbo.
         if "shadow_triaged_at" not in cols:
@@ -1600,6 +1607,44 @@ def set_image_rotation(sheet_id: int, rotation: int) -> int:
     return norm
 
 
+def factory_csv_filename(sheet: dict) -> str:
+    """R257 — nome canónico base do CSV da fábrica para uma folha.
+
+    Prefere operador+data do sheet_data (``JulioLima_2026.04.15.csv``) para
+    as linhas de log do validador ficarem legíveis; cai no stem da imagem.
+    (Era ``main._factory_csv_filename``; vive aqui para o delete_sheet poder
+    calcular o MESMO nome sem import circular.)
+    """
+    data = sheet.get("sheet_data") or {}
+    h = data.get("header", {}) or {}
+    operador = (h.get("operador") or "").strip().title().replace(" ", "")
+    data_str = (h.get("data") or "").strip()
+    if operador and data_str:
+        # 15-04-2026 → 2026.04.15
+        parts = data_str.split("-")
+        if len(parts) == 3:
+            iso = f"{parts[2]}.{parts[1]}.{parts[0]}"
+            return f"{operador}_{iso}.csv"
+    return f"{Path(sheet['image_path']).stem}.csv"
+
+
+def set_factory_csv_name(sheet_id: int, name: str) -> None:
+    """R257 — regista o nome do CSV depositado (ver migração em init_db)."""
+    with conn() as c:
+        c.execute("UPDATE sheets SET factory_csv_name = ? WHERE id = ?",
+                  (name, sheet_id))
+
+
+def get_factory_csv_claim(name: str) -> int | None:
+    """R257 — devolve o sheet_id que reclamou este nome de CSV, ou None."""
+    with conn() as c:
+        row = c.execute(
+            "SELECT id FROM sheets WHERE factory_csv_name = ? LIMIT 1",
+            (name,),
+        ).fetchone()
+        return row["id"] if row else None
+
+
 def delete_sheet(sheet_id: int) -> dict:
     """Round 34 — hard delete a sheet + cascade clean.
 
@@ -1654,7 +1699,7 @@ def delete_sheet(sheet_id: int) -> dict:
     except Exception:
         pass
 
-    # 5. Delete factory CSV (operador + date filename pattern)
+    # 5. Delete factory CSV
     # R118 — usar resolve_kanban_path para cair em repo-local quando o disco
     # C:\kanban\ não existe (laptop dev sem .env). Lazy import para evitar
     # ciclo se config.py vier a importar de db.
@@ -1664,18 +1709,29 @@ def delete_sheet(sheet_id: int) -> dict:
         r"C:\kanban\nifruka\02_Dados_Extraidos\csv",
         "kanban_refs/02_Dados_Extraidos/csv",
     )
-    if factory_csv_dir.exists() and image_rel:
-        # Best-effort: filename from sheet header (matches _factory_csv_filename
-        # in main.py logic). Actual filename pattern depends on header.operador
-        # + header.data — try a few patterns.
-        # Simpler: just unlink anything with the image stem.
-        stem = Path(image_rel).stem
-        for csv_path in list(factory_csv_dir.rglob(f"*{stem}*.csv")):
-            try:
-                csv_path.unlink()
-                removed["factory_csv"] = str(csv_path)
-            except OSError:
-                pass
+    if factory_csv_dir.exists():
+        # R257 — apagar pelo nome EXATO (registado no depósito; fallback ao
+        # nome calculado + stem para folhas pré-R257 sem registo). O glob
+        # antigo rglob(f"*{stem}*.csv") apanhava por substring o CSV da folha
+        # irmã sobrevivente (ex.: apagar ...04.15 levava o ...04.15-1.csv).
+        # O importador da fábrica move CSVs consumidos para imported/ —
+        # procurar lá também.
+        names = []
+        if sheet.get("factory_csv_name"):
+            names.append(sheet["factory_csv_name"])
+        else:
+            names.append(factory_csv_filename(sheet))
+            if image_rel:
+                names.append(f"{Path(image_rel).stem}.csv")
+        for name in dict.fromkeys(names):
+            for csv_path in (factory_csv_dir / name,
+                             factory_csv_dir / "imported" / name):
+                if csv_path.exists():
+                    try:
+                        csv_path.unlink()
+                        removed["factory_csv"] = str(csv_path)
+                    except OSError:
+                        pass
 
     return removed
 
