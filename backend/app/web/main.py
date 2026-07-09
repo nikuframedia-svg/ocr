@@ -3663,7 +3663,9 @@ def sheet_csv(sheet_id: int) -> Response:
     if sheet is None:
         raise HTTPException(404, f"sheet {sheet_id} not found")
     data = sheet.get("sheet_data") or {}
-    csv_text = _to_3block_csv(Path(sheet["image_path"]).name, data)
+    # R257 — download do utilizador: neutraliza gatilhos de fórmula Excel.
+    csv_text = _to_3block_csv(Path(sheet["image_path"]).name, data,
+                              neutralize=True)
     return Response(
         content=csv_text,
         media_type="text/csv; charset=utf-8",
@@ -4723,7 +4725,7 @@ def api_obras_refresh() -> JSONResponse:
 
 # ----- CSV builder (mirrors ocr6.write_csv but to string) -----
 
-def _to_3block_csv(filename: str, data: dict) -> str:
+def _to_3block_csv(filename: str, data: dict, *, neutralize: bool = False) -> str:
     """Produce CSV string in the Metalogalva 3-block format.
 
     Round 54 — template-aware. The block headers + column lists are
@@ -4738,9 +4740,16 @@ def _to_3block_csv(filename: str, data: dict) -> str:
     For BOBINE-FORMATO this produces byte-identical output to the prior
     R53 implementation so the factory validator (which knows only this
     schema) keeps parsing legacy + new bobine sheets identically.
+
+    R257 — ``neutralize=True`` (download do utilizador, GET /sheet/{id}/csv)
+    prefixa com apóstrofo valores começados por gatilhos de fórmula do
+    Excel (= + - @ tab CR). O depósito da FÁBRICA chama com False: o CSV
+    do contrato legado fica byte-idêntico.
     """
     import csv
     import io
+
+    from app.cell_sanitize import neutralize_csv
 
     # Lazy import — avoids circular if templates_registry ever imports main
     from app.templates_registry import (
@@ -4762,7 +4771,13 @@ def _to_3block_csv(filename: str, data: dict) -> str:
         )
 
     buf = io.StringIO()
-    w = csv.writer(buf, delimiter=";", lineterminator="\r\n")
+    _w = csv.writer(buf, delimiter=";", lineterminator="\r\n")
+
+    class _NeutralizingWriter:
+        def writerow(self, cells):
+            _w.writerow([neutralize_csv(c) for c in cells])
+
+    w = _NeutralizingWriter() if neutralize else _w
     h = data.get("header", {}) or {}
     f_ = data.get("footer", {}) or {}
     field_labels = template.field_labels or {}

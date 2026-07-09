@@ -22,6 +22,7 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+from app.cell_sanitize import neutralize_xlsx
 from app.production.weights import calculate_row_weights, find_plan_entry
 from app.templates_registry import detect_template
 
@@ -256,7 +257,7 @@ def _write_resumo(
     row_idx += 1
     for op in sorted(by_op, key=lambda x: -by_op[x]["qtd"]):
         d = by_op[op]
-        ws.cell(row=row_idx, column=1, value=op)
+        ws.cell(row=row_idx, column=1, value=neutralize_xlsx(op))
         ws.cell(row=row_idx, column=2, value=d["qtd"])
         ws.cell(row=row_idx, column=3, value=len(d["sheets"]))
         ws.cell(row=row_idx, column=4, value=len(d["ofs"]))
@@ -307,7 +308,7 @@ def _write_day_sheet(wb: openpyxl.Workbook, day_iso: str, day_rows: list[dict]) 
     row_idx = 4
     for op in sorted(by_op):
         # Operator header bar
-        ws.cell(row=row_idx, column=1, value=op).font = _FONT_BOLD
+        ws.cell(row=row_idx, column=1, value=neutralize_xlsx(op)).font = _FONT_BOLD
         ws.merge_cells(start_row=row_idx, start_column=1,
                        end_row=row_idx, end_column=len(ROW_COLUMNS))
         for ci in range(1, len(ROW_COLUMNS) + 1):
@@ -325,7 +326,10 @@ def _write_day_sheet(wb: openpyxl.Workbook, day_iso: str, day_rows: list[dict]) 
         for r in by_op[op]:
             for ci, (key, _) in enumerate(ROW_COLUMNS, start=1):
                 v = r.get(key)
-                cell = ws.cell(row=row_idx, column=ci, value=v if v is not None else "")
+                # R257 — valores OCR/editados: '=' inicial executaria como
+                # fórmula ao abrir o XLSX (openpyxl infere data_type='f').
+                cell = ws.cell(row=row_idx, column=ci,
+                               value=neutralize_xlsx(v if v is not None else ""))
                 _style_cell(cell)
             row_idx += 1
 
@@ -752,7 +756,8 @@ def build_cpis_workbook(
     for ri, cpis in enumerate(cpis_rows, start=2):
         for ci, (key, _) in enumerate(CPIS_COLUMNS, start=1):
             v = cpis.get(key)
-            cell = ws.cell(row=ri, column=ci, value=v)
+            # R257 — ver neutralize_xlsx (injeção de fórmulas).
+            cell = ws.cell(row=ri, column=ci, value=neutralize_xlsx(v))
             _style_cell(cell)
             if key == "data" and isinstance(v, dt.date):
                 cell.number_format = "DD-MM-YYYY"
