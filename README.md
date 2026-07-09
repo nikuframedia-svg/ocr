@@ -2,9 +2,10 @@
 
 OCR pipeline for Metalogalva industrial Kanban production sheets.
 
-**Status:** Production baseline (R117) — Ollama nativo Windows
-serving `qwen3.5:9b` com `OCR_NO_THINK=1`. Roadmap de 8 fases em
-`docs/MIGRATION.md` (R105 runbook) e `CLAUDE.md` (resumo).
+**Status:** Produção (série R25x; ver `git log` para o round atual) —
+Ollama nativo Windows serving `qwen3.5:9b` com `OCR_NO_THINK=1`.
+Roadmap de 8 fases em `docs/MIGRATION.md` (R105 runbook) e
+`CLAUDE.md` (resumo).
 
 ## Stack
 
@@ -97,13 +98,14 @@ Ver `backend/app/web/main.py` para detalhe. Rotas core: `/capture`,
 
 ### Storage
 
-- `data/app.db` — SQLite single-file, 12 tables (`sheets`, `edits`,
+- `data/app.db` — SQLite single-file, 14 tables (`sheets`, `edits`,
   `production_rows`, `learnings`, `learning_runs`, `shadow_runs`,
   `qwen_sessions`, `qwen_charts`, `proposals`, `policy_versions`,
-  `template_overlay`, `circuit_breaker_log`). Schema em
+  `template_overlay`, `circuit_breaker_log`, `unidades`,
+  `kanban_templates` — as duas últimas do Task C/R255). Schema em
   `backend/app/web/db.py`.
-- `data/images/` — fotos uploaded (gitignored)
-- `data/cross_sheet.json` — DQ Module persistent index
+- `data/images/` — fotos uploaded (gitignored desde R223)
+- `data/cross_sheet.json` — DQ Module persistent index (gitignored)
 
 ## Tests
 
@@ -120,7 +122,8 @@ Coverage threshold is enforced at 70% on `backend/app/`.
 backend/app/                 — library code (importable as `app.*`)
 backend/app/pipeline/        — extraction pipeline (vllm_client, schemas, csv_writer)
 scripts/                     — operator CLIs (annotate_cli, benchmark, check_vllm)
-inputs/originais/            — raw Kanban photos as received (gitignored: customer data)
+inputs/originais/            — raw Kanban photos as received (TRACKED desde
+                               R64 — repo privado, runtime portátil)
 ground_truth/                — manually-annotated JSON (committed, no images)
 reports/                     — baseline_v0.md and per-run diffs
 infra/docker/                — vLLM Dockerfile (only if customisation is needed)

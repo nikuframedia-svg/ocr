@@ -43,14 +43,12 @@ cd ocr
 
 ### 2. Cria virtualenv + instala dependências
 
+O repo não tem `requirements.txt` — instala do `pyproject.toml` (o
+`uv.lock` tracked desde o R257 crava as versões testadas se usares uv):
+
 ```powershell
 python -m venv .venv
 .venv\Scripts\pip install --upgrade pip
-.venv\Scripts\pip install -r requirements.txt
-```
-
-Se `requirements.txt` não existir, instala do `pyproject.toml`:
-```powershell
 .venv\Scripts\pip install -e .
 ```
 
