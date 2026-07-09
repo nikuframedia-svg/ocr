@@ -1025,7 +1025,12 @@ def _spawn_shadow_scoring(
     """
     def _run() -> None:
         try:
-            from app.pipeline.scoring_engine import shadow_score
+            from app.pipeline.scoring_engine import shadow_score, set_scoring_variant
+            # R250 — A/B real na fábrica: com CROSS_SHADOW_VARIANT=next, a
+            # sombra corre a matemática nova (só nesta thread — ContextVar);
+            # produção intocada, output em sheets.shadow_scoring_json.
+            if get_settings().cross_shadow_variant == "next":
+                set_scoring_variant("next")
             run_id = db.start_shadow_run(sheet_id)
             try:
                 scoring, total, snapped, confirmed, na, dur_ms = shadow_score(

@@ -21,9 +21,11 @@ Fluxo atual:
 from __future__ import annotations
 
 import math
+import os
 import time
 import unicodedata
 from bisect import bisect_left, bisect_right
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from functools import lru_cache
 import re
@@ -383,6 +385,54 @@ _FS_DIM_U_FLOOR = {
     "esp": 0.171, "dbase": 0.164, "dtopo": 0.182,
 }
 
+# R250 (variante "next") — identidade por COMBINAÇÃO: of/ov/cliente são ~UMA
+# variável latente ("encomenda") observada 3× — P(OF→OV)=99,8%,
+# P(OF→cliente)=99,4%, H(OF|OV)=1,4 bits vs H(OF)=12,5 (medido no plano).
+# Somar os três bits dupla/tripla-conta (exemplo real OF 262593: soma 23,7
+# vs valor conjunto 9,1 — inflação 2,6×), satura o p_top e deixa identidade
+# correlacionada atropelar contradições fortes. Fix = o MESMO mecanismo das
+# dims R236: u conjunto por interseção de conjuntos de entries. Só para
+# concordâncias EXATAS (sim>=1.0) — os tiers parciais/canal/vetos ficam
+# byte-idênticos (já amortecidos e transportam informação de canal que não
+# se fatoriza por co-ocorrência no plano). m̂_A MEDIDO (quant8: misreads
+# correlacionados entre campos — m̂(of+ov+cliente)=0,219 vs Πm=0,126).
+_FS_ID_JOINT_FIELDS = ("of", "ov", "cliente")
+# Cap coerente com o conteúdo máximo de uma identificação exata no plano
+# (log2(N)≈14,3; colisão exata medida ≈15,7 bits com margem).
+_FS_ID_JOINT_CAP = 15.0
+# Fallbacks dos parâmetros fitted (quant8 em cross_params.json).
+_FS_ID_M_FALLBACK = {
+    ("of",): 0.694, ("ov",): 0.469, ("cliente",): 0.387,
+    ("of", "ov"): 0.411, ("of", "cliente"): 0.276,
+    ("ov", "cliente"): 0.258, ("of", "ov", "cliente"): 0.219,
+}
+_FS_ID_U_FLOOR_FALLBACK = {"of": 0.0002, "ov": 0.00068, "cliente": 0.02264}
+
+
+def _fs_id_m_joint(fields: tuple[str, ...]) -> float:
+    """R250 — m̂_A = P(todos os campos de A escritos exatos | entry certa),
+    MEDIDO no app.db (quant8). Fallback = valores da medição de 08-07."""
+    mj = ((_load_cross_params().get("quant8_identity_joint") or {})
+          .get("m_joint") or {})
+    entry = mj.get("+".join(fields)) or {}
+    m = entry.get("m")
+    if m:
+        return float(m)
+    return _FS_ID_M_FALLBACK.get(fields, 0.2)
+
+
+def _fs_id_u_floor(fields: tuple[str, ...]) -> float:
+    """R250 — piso do u conjunto da identidade: produto das colisões exatas
+    médias por campo (análogo identidade do _FS_DIM_U_FLOOR)."""
+    uf = ((_load_cross_params().get("quant8_identity_joint") or {})
+          .get("u_floor") or {})
+    prod = 1.0
+    for f in fields:
+        v = uf.get(f)
+        prod *= float(v) if v else _FS_ID_U_FLOOR_FALLBACK.get(f, 0.001)
+    return prod
+
+
 # R247 — match do código-peça embebido após strip do sufixo A/B: quase-pleno
 # (0.97·w ≫ fuzzy do token-família ≈0.67·w), mas <1.0 de propósito — se um
 # irmão bater 1.0 PLENO (o sufixo era código, não decoração), ganha ele; e a
@@ -413,6 +463,47 @@ _MODEL_TOKEN_FUZZY_MIN = 0.70
 # token-família (Δsim≈0.11 × w_cap 14 ≈ 1.5 bits) e alinha com o cap dos
 # bias de contexto R242 (contexto/sorte nunca vencem evidência real).
 _FS_SIBLING_AMBIG_BITS = 2.0
+
+# R251 (variante "next") — LR de TOKEN no modelo: em vez de sim·w (que não é
+# um likelihood-ratio — um fuzzy 0.75 numa designação rara empatava um exato
+# numa repetida, hazard s2375), o ranking usa
+#   bits = log2( m_mod · K*(core|token) / û(core) )
+# com K = 2^(−custo_NW) (matriz fitted R241 = P(escrito|verdadeiro)) e
+# û(core) = (Σ_t K(core|t)·|entries(t)| + α)/N — a taxa de colisão REAL do
+# core no plano (medida: 0,21 tokens a d=0, 1,75 a d=1, 9,55 a d=2 →
+# conteúdo exato 15,7 / d<=1 12,5 / d<=2 9,9 bits). α é a pseudo-contagem
+# OOV fitted (fit_model_token_lr.py); sem ela o kernel cancelava no caso
+# d=1-único. O caminho `sim` (_efs_compute) NÃO muda — guardas R248/R249 e
+# cores continuam nos sims; os tetos R247 ficam lá.
+_MODEL_LR_OOV_ALPHA = 1.0        # fallback; fitted em cross_params
+_MODEL_LR_AB_EPS_BITS = 0.2      # custo do strip A/B (pode ser código real)
+# R251 — PISO de glifos confundíveis para o custo d=1 do LR: a matriz
+# fitted só tem contagens dos pares que os humanos JÁ corrigiram; pares
+# canónicos de OCR sem contagens (5↔S, 8↔B…) caíam no default 10 bits e o
+# LR morria em misreads que os sims v30 toleravam (perdas s2520/s2355 do
+# backtest). Mesma lista do prior bayesiano do refit R244 — os dados
+# dominam quando existem (min(fitted, piso)).
+_GLYPH_FLOOR_COST_BITS = 7.0
+_GLYPH_CONFUSABLE = frozenset(
+    frozenset(p) for p in (
+        ("0", "O"), ("1", "I"), ("1", "L"), ("1", "7"), ("3", "8"),
+        ("5", "S"), ("8", "B"), ("6", "G"), ("2", "Z"), ("7", "T"),
+        ("4", "A"), ("9", "G"), ("0", "D"), ("6", "5"), ("9", "4"),
+        ("3", "5"), ("2", "7"), ("1", "4"), ("M", "H"), ("E", "F"),
+    )
+)
+
+
+def _glyph_floor_cost(t: str, c: str, cost: float) -> float:
+    """R251 — se t→c é UMA substituição num par de glifos confundíveis,
+    o custo não passa do piso (a matriz fitted domina quando tem contagens
+    mais baratas)."""
+    if cost <= _GLYPH_FLOOR_COST_BITS or len(t) != len(c):
+        return cost
+    diff = [(a, b) for a, b in zip(t, c) if a != b]
+    if len(diff) == 1 and frozenset(diff[0]) in _GLYPH_CONFUSABLE:
+        return min(cost, _GLYPH_FLOOR_COST_BITS)
+    return cost
 
 # Thresholds de "muito diferente" — abaixo destes níveis, vermelho.
 _VERY_DIFF_STR_SIM = 50.0          # se sim < 50, é muito diferente
@@ -660,7 +751,56 @@ _STATUS_LABELS = {
 # (pós-strip A/B) na mesma folha a cair na MESMA designação do mesmo OF →
 # o membro NÃO-exato desce para revisão (decision_reason
 # "sibling_collision"); valores intocados (R219). Muda cores → BUMP.
+# R250-R252 — refundação matemática atrás da VARIANTE "next" (ContextVar
+# SCORING_VARIANT; produção fica "v30" até ao flip pós-soak — ver config
+# CROSS_SHADOW_VARIANT e scripts/diag/shadow_agreement.py):
+# R250 — identidade conjunta: of/ov/cliente são ~UMA variável ("encomenda",
+# P(OF→OV)=99,8%, H(OF|OV)=1,4 bits); a soma dupla/tripla-conta (~2,6×
+# medido). A correção (u conjunto por interseção, m̂_A quant8) aplica-se ao
+# POSTERIOR, NÃO ao ranking: o backtest provou (6 GOOD perdidos, todos OFs
+# ADJACENTES com OV+cliente partilhados) que o equilíbrio de ranking
+# R236-R243 é co-adaptado à escala somada — a discriminação entre vizinhas
+# vive no lado m do canal, que a formulação por conjuntos não captura.
+# Rebalancear o ranking = trabalho futuro (re-fit de TODAS as constantes).
+# R251 — modelo por LIKELIHOOD-RATIO de token: bits = log2(m·K/û) com
+# K=2^(−custo_NW) (matriz R241) e û = colisão real do core no plano
+# (fit_model_token_lr.py; α insensível ao ranking de irmãos — só escala).
+# Substitui sim·w no RANKING da variante next (o caminho sim e os tetos
+# R247 ficam — guardas R248/R249 e cores intactas). Separação exato-vs-d1
+# entre irmãos: ~1,3 → ~8 bits.
+# R252 — POSTERIOR softmax + H0 explícita (telemetria nas duas variantes;
+# consumidores só na next): P(e_i)∝2^{b_i_corr/T} sobre o pool + cauda +
+# H0 com π_H0(idade do plano — quant7 operacionalizado, antes descritivo).
+# Confiança POR CÉLULA = marginal por valor (_p_field): OF confiante com
+# modelo incerto sai naturalmente; substitui p_top×_sibling_p (R248) e o
+# p_top logístico de 1 rival (fica como telemetria). No flip: BUMP + gates
+# (GOOD 110/110, MODEL_SIB >=74%, reliability/abstenção OOD do harness).
 ENGINE_VERSION = "v30_R249"
+
+# R250 — VARIANTE de scoring (rollout da refundação matemática R250-R252).
+# ContextVar e não global de módulo: a sombra (_spawn_shadow_scoring) corre em
+# thread daemon em paralelo com o hot path — um global criaria corrida entre
+# produção e sombra. Valores: "v30" (atual) | "next" (identidade conjunta
+# R250 + LR de token R251 + posterior softmax/H0 R252). O flip de produção é
+# UM commit (default → "next" + BUMP de ENGINE_VERSION), só após o soak de
+# fábrica via CROSS_SHADOW_VARIANT=next. O env CROSS_SCORING_VARIANT define o
+# default do processo (uso: harness/backtest e diagnóstico — produção não o
+# define).
+SCORING_VARIANT: ContextVar[str] = ContextVar(
+    "scoring_variant", default=os.environ.get("CROSS_SCORING_VARIANT", "v30")
+)
+
+
+def set_scoring_variant(name: str):
+    """Define a variante do motor para o contexto atual (thread/task).
+
+    Devolve o token do ContextVar (para reset opcional). Usado pela thread de
+    sombra e pelo harness; produção fica no default."""
+    return SCORING_VARIANT.set(name)
+
+
+def scoring_variant() -> str:
+    return SCORING_VARIANT.get()
 
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
@@ -833,6 +973,10 @@ def _model_code_cores_cached(raw: str) -> tuple[tuple[str, ...], tuple[str, ...]
     t = re.sub(r"\(\s*-\s*\d\s*\)", " ", t)            # (-1), (-2)
     t = re.sub(r"(?<=\d)\s*-\s*\d\s*$", " ", t)        # '859-1' no fim
     t = re.sub(r"\b[12]\s*/\s*[1-4]\s*$", " ", t)      # fração final 1/2
+    # 'Nº' normaliza para 'NO' (º→o no NFKD) — o marcador antes de um código
+    # que começa por LETRA ('Nº CD24T 506' → 'NO CD24T 506') também é
+    # decoração; o strip pós-compacto abaixo só apanha N-antes-de-dígito.
+    t = re.sub(r"\bN[O0]\s+(?=[A-Z0-9]{3})", " ", t)
     core = re.sub(r"[^A-Z0-9]+", "", t)
     core = re.sub(r"^NO?(?=\d)", "", core)             # prefixo N/Nº/No colado
     plain = _model_compact(raw)
@@ -864,6 +1008,96 @@ def _model_core_matches(
         if len(v) >= 4
         for h in haystacks
     )
+
+
+def _token_neighbors(core: str, idx: dict) -> list[str]:
+    """R251 — tokens do plano na vizinhança do core (Δlen<=2 e prefixo OU
+    sufixo de 2 chars partilhado — o mesmo pré-filtro do canal)."""
+    buckets = idx.get("fs_token_buckets") or {}
+    out: set[str] = set()
+    for length in range(max(len(core) - 2, 4), len(core) + 3):
+        out.update(buckets.get(f"P:{length}:{core[:2]}", ()))
+        out.update(buckets.get(f"S:{length}:{core[-2:]}", ()))
+    return list(out)
+
+
+def _model_lr_params() -> tuple[float, float]:
+    """(alpha OOV, eps A/B) — fitted em cross_params['model_token_lr']."""
+    p = _load_cross_params().get("model_token_lr") or {}
+    return (
+        float(p.get("oov_alpha") or _MODEL_LR_OOV_ALPHA),
+        float(p.get("ab_eps_bits") or _MODEL_LR_AB_EPS_BITS),
+    )
+
+
+def _uhat_core(core: str, idx: dict) -> float:
+    """R251 — û(core): probabilidade de uma entry ALEATÓRIA do plano colidir
+    com o core sob o canal — Σ_t 2^(−custo(t→core))·|entries(t)|, com
+    pseudo-contagem α (OOV), sobre N. Cacheado no idx (1× por core distinto
+    por plano carregado)."""
+    cache = idx.setdefault("fs_uhat", {})
+    hit = cache.get(core)
+    if hit is not None:
+        return hit
+    counts = idx.get("fs_token_counts") or {}
+    alpha, _eps = _model_lr_params()
+    total = 0.0
+    for tok in _token_neighbors(core, idx):
+        cost = _glyph_floor_cost(
+            tok, core, _channel_align_cost_bits(tok, core, ""))
+        if cost <= _CHANNEL_G_L0:
+            total += (2.0 ** -cost) * counts.get(tok, 1)
+    u = (total + alpha) / max(int(idx.get("fs_n") or 0), _FS_U_MIN_CORPUS)
+    cache[core] = u
+    return u
+
+
+def _model_lr_bits(value: object, designacao: object, idx: dict) -> float | None:
+    """R251 — bits do modelo pelo LR de token (ver bloco de constantes).
+
+    None quando não aplicável (sem núcleos code-like escritos, designação sem
+    tokens, ou nada na vizinhança do canal) — o chamador cai no ladder v30
+    (necessário: 56% das designações não têm token-código — famílias OMEGA
+    etc. — e aí o fuzzy legado com os gates R247 continua a régua certa).
+    Depende só de (valor, designação, plano) — preserva o memo R225."""
+    tokens = _designacao_code_tokens_cached(str(designacao or ""))
+    if not tokens:
+        return None
+    alpha, eps_ab = _model_lr_params()
+    pure, ab = _model_code_cores_cached(str(value or ""))
+    plain = _model_compact(value)
+    alts: list[tuple[str, float]] = [(c, 0.0) for c in pure]
+    alts += [(c, eps_ab) for c in ab]
+    if len(plain) >= 4:
+        alts.append((plain, 0.0))
+    if not alts:
+        return None
+    best: tuple[float, str] | None = None  # (custo total, core)
+    # Fast-paths de containment (R247): custo 0 (puro) / eps (A/B).
+    if _model_matches_designacao(value, designacao):
+        core0 = (pure[0] if pure else plain) or plain
+        best = (0.0, core0)
+    elif _model_core_matches(value, designacao, strip_ab=True) and ab:
+        best = (eps_ab, ab[0])
+    if best is None:
+        for c, pen in alts:
+            if len(c) < 4:
+                continue
+            for t in tokens:
+                if abs(len(t) - len(c)) > 2:
+                    continue
+                if t[:2] != c[:2] and t[-2:] != c[-2:]:
+                    continue
+                cost = _glyph_floor_cost(
+                    t, c, _channel_align_cost_bits(t, c, "")) + pen
+                if cost <= _CHANNEL_G_L0 and (best is None or cost < best[0]):
+                    best = (cost, c)
+        if best is None:
+            return None
+    cost, core = best
+    u = _uhat_core(core, idx)
+    lr = math.log2(_FS_M["modelo"]) - cost - math.log2(u)
+    return max(min(lr, _FS_ID_JOINT_CAP), -abs(_FS_W_DISAGREE["modelo"]))
 
 
 def _model_channel_sim(value: object, designacao: object) -> float:
@@ -1258,6 +1492,38 @@ def _fs_row_context(row: dict, idx: dict, score_fields=None,
             if ft:
                 fams.add("F:" + ft)
         of_written_fams = frozenset(fams)
+    # R250 (variante "next") — conjuntos de entries que batem EXATO cada
+    # campo de identidade escrito (com variantes O/0 do lado escrito), para o
+    # u conjunto por interseção. None = campo vazio/ilegível ou valor fora
+    # dos índices (fica no caminho por-campo antigo). A variante é resolvida
+    # 1× por linha (ContextVar.get() em cada entry custaria ~7 ms/folha).
+    variant = scoring_variant()
+    id_sets: dict[str, frozenset[int] | None] = {}
+    if variant != "v30":
+        fs_sets = idx.get("fs_id_sets") or {}
+        for field in _FS_ID_JOINT_FIELDS:
+            if allowed is not None and field not in allowed:
+                id_sets[field] = None
+                continue
+            raw_v = row.get(field)
+            if _is_missing_ocr(raw_v):
+                id_sets[field] = None
+                continue
+            if field == "of":
+                keys = _o_zero_variants(
+                    normalize_of(_identifier_compact(raw_v, pad_of=True)))
+            elif field == "ov":
+                keys = _o_zero_variants(_identifier_compact(raw_v))
+            else:
+                keys = [_cliente_compact(raw_v)]
+            members: set[int] = set()
+            found = False
+            for k in keys:
+                s = (fs_sets.get(field) or {}).get(k)
+                if s:
+                    members |= s
+                    found = True
+            id_sets[field] = frozenset(members) if found else None
     return {
         "dims": dims,
         "sets": sets,
@@ -1265,6 +1531,10 @@ def _fs_row_context(row: dict, idx: dict, score_fields=None,
         "of_written": of_written,
         "of_written_fams": of_written_fams,
         "joint_memo": {},
+        # R250 — variante + identidade conjunta
+        "variant": variant,
+        "id_sets": id_sets,
+        "id_joint_memo": {},
         # R242 — bias de CONTEXTO (bits) por entry: prior de produção (D1:
         # {"of": {of_key: +bits}, "of_default": bits_inativa}) e coerência de
         # folha (D2: {"coh_of": {of_key: +bits}, "coh_cliente": {compact:
@@ -1296,6 +1566,15 @@ def _entry_bits_score(
     custa -3.3 bits (m(of|válida)=0.890 medido)."""
     allowed = set(score_fields) if score_fields is not None else None
     bits = 0.0
+    # R250 (variante "next") — campos de identidade EXATOS elegíveis para o
+    # u conjunto (a entry tem de pertencer ao conjunto do valor escrito —
+    # um cliente que bateu por ALIAS com compacto diferente fica no caminho
+    # por-campo, coerente com a régua compacta do m̂ quant8).
+    id_sets = ctx.get("id_sets") or {}
+    joint_eid = None
+    if id_sets:
+        joint_eid = (idx.get("fs_id_by_key") or {}).get(_entry_key(entry))
+    joint_fields: list[str] = []
     for field in ("of", "ov", "cliente", "modelo"):
         if allowed is not None and field not in allowed:
             continue
@@ -1303,6 +1582,15 @@ def _entry_bits_score(
         if sim is None:
             continue
         w = _fs_value_weight(field, entry, idx)
+        if (
+            sim >= 1.0
+            and field in _FS_ID_JOINT_FIELDS
+            and id_sets.get(field) is not None
+            and joint_eid is not None
+            and joint_eid in id_sets[field]
+        ):
+            joint_fields.append(field)
+            continue
         if field in ("of", "ov"):
             gch = 0.0
             if sim >= 1.0:
@@ -1342,12 +1630,61 @@ def _entry_bits_score(
                             veto = _fs_veto_relaxed_bits()
                     bits += veto
         else:
-            if sim >= 1.0:
+            # R251 (variante "next") — modelo pelo LR de token; None → ladder
+            # v30 (56% das designações não têm token-código — famílias OMEGA
+            # etc.; e núcleos fora da vizinhança do canal caem no disagree).
+            lr = None
+            if field == "modelo" and ctx.get("variant", "v30") != "v30":
+                ck = ("modelo_lr", str(entry.get("designacao") or ""))
+                if cache is not None and ck in cache:
+                    lr = cache[ck]
+                else:
+                    lr = _model_lr_bits(
+                        row.get("modelo"), entry.get("designacao"), idx)
+                    if cache is not None:
+                        cache[ck] = lr
+            if lr is not None:
+                bits += lr
+            elif sim >= 1.0:
                 bits += w
             elif sim >= _AGREE_THRESHOLD:
                 bits += sim * w
             elif sim <= 0.3:
                 bits += _FS_W_DISAGREE[field]
+
+    # R250 — identidade conjunta: a correção da dupla contagem aplica-se ao
+    # POSTERIOR, não ao RANKING. O backtest provou (6 perdas GOOD, todas
+    # OFs ADJACENTES da mesma encomenda-mãe com OV+cliente partilhados) que
+    # o equilíbrio de ranking R236-R243 é CO-ADAPTADO à escala somada: a
+    # discriminação entre OFs vizinhas vive no lado m do canal (P(escrita
+    # exata|certa)/P(exata|vizinha)≈7 bits), que a formulação por conjuntos
+    # (u-side) não captura — deflacionar só o agreement parte o GOOD. O
+    # ranking mantém as somas v30; a INFLAÇÃO medida (Σ singles − joint,
+    # ex. real: 23,7−9,1=14,6 bits) fica em ctx["id_infl"][eid] e é
+    # subtraída aos bits APENAS no posterior softmax (p_of/p_h0/p_field
+    # honestos — era aí que a inflação fazia dano: p_top saturado a 0,99 e
+    # H0 esmagada). Rebalancear o próprio ranking = trabalho futuro que
+    # exige re-fitar TODAS as constantes contra verdade humana.
+    if joint_fields:
+        singles = [_fs_value_weight(f, entry, idx) for f in joint_fields]
+        bits += sum(singles)  # ranking: byte-idêntico ao v30
+        if len(joint_fields) >= 2 and joint_eid is not None:
+            jkey = tuple(joint_fields)
+            jmemo = ctx["id_joint_memo"]
+            n_joint = jmemo.get(jkey)
+            if n_joint is None:
+                jinter: frozenset[int] | set[int] = id_sets[jkey[0]]
+                for f in jkey[1:]:
+                    jinter = jinter & id_sets[f]
+                n_joint = max(len(jinter), 1)
+                jmemo[jkey] = n_joint
+            u_joint_id = max(n_joint / ctx["n"], _fs_id_u_floor(jkey))
+            joint_bits = math.log2(_fs_id_m_joint(jkey)) - math.log2(u_joint_id)
+            corrected = max(min(joint_bits, _FS_ID_JOINT_CAP),
+                            max(singles), _FS_W_MIN)
+            infl = max(sum(singles) - corrected, 0.0)
+            if infl > 0.0:
+                ctx.setdefault("id_infl", {})[joint_eid] = infl
 
     dim_sets: dict[str, frozenset[int]] = ctx["sets"]
     if dim_sets:
@@ -1474,6 +1811,12 @@ def _get_indices(refs: dict) -> dict:
     fs_dim_values: dict[str, list[tuple[float, int]]] = {
         f: [] for f in _FS_DIM_FIELDS
     }
+    # R250 — valor de identidade → set de entry-ids (para o u conjunto).
+    fs_id_sets: dict[str, dict[str, set[int]]] = {
+        "of": {}, "ov": {}, "cliente": {},
+    }
+    # R251 — token-código → nº de entries que o contêm.
+    fs_token_counts: dict[str, int] = {}
     fs_n = 0
 
     for of_key, entries in of_to_entries.items():
@@ -1503,15 +1846,26 @@ def _get_indices(refs: dict) -> dict:
             fs_n += 1
             fs_id_by_key.setdefault(_entry_key(stamped), eid)
             fs_freq["of"][of_key] = fs_freq["of"].get(of_key, 0) + 1
+            # R250 — conjuntos de entries por VALOR de identidade (mesmas
+            # chaves do fs_freq): permitem o u CONJUNTO da identidade por
+            # interseção, como as dims fazem desde R236.
+            fs_id_sets["of"].setdefault(of_key, set()).add(eid)
             ov_c = _identifier_compact(ov_val)
             if ov_c:
                 fs_freq["ov"][ov_c] = fs_freq["ov"].get(ov_c, 0) + 1
+                fs_id_sets["ov"].setdefault(ov_c, set()).add(eid)
             cli_c = _cliente_compact(cli_val)
             if cli_c:
                 fs_freq["cliente"][cli_c] = fs_freq["cliente"].get(cli_c, 0) + 1
+                fs_id_sets["cliente"].setdefault(cli_c, set()).add(eid)
             des_c = _model_compact(des)
             if des_c:
                 fs_freq["modelo"][des_c] = fs_freq["modelo"].get(des_c, 0) + 1
+            # R251 — tokens-código → nº de entries (denominador û do LR de
+            # token) + buckets de vizinhança (o mesmo pré-filtro do canal:
+            # Δlen<=2 e prefixo OU sufixo de 2 chars partilhado).
+            for tok in _designacao_code_tokens_cached(des):
+                fs_token_counts[tok] = fs_token_counts.get(tok, 0) + 1
             for field in _FS_DIM_FIELDS:
                 v = _num(e.get(_PLAN_ATTR_BY_FIELD[field]))
                 if v is not None:
@@ -1523,6 +1877,15 @@ def _get_indices(refs: dict) -> dict:
         f: ([v for v, _ in pairs], [i for _, i in pairs])
         for f, pairs in fs_dim_values.items()
     }
+
+    # R251 — buckets de vizinhança dos tokens: um core candidato só compara
+    # com tokens de comprimento próximo que partilham prefixo OU sufixo de 2
+    # chars (o pré-filtro do canal, agora indexado — ~100-500 candidatos em
+    # vez dos ~11k tokens).
+    fs_token_buckets: dict[str, list[str]] = {}
+    for tok in fs_token_counts:
+        fs_token_buckets.setdefault(f"P:{len(tok)}:{tok[:2]}", []).append(tok)
+        fs_token_buckets.setdefault(f"S:{len(tok)}:{tok[-2:]}", []).append(tok)
 
     indices = {
         "loaded_at": loaded_at,
@@ -1542,6 +1905,13 @@ def _get_indices(refs: dict) -> dict:
         "fs_freq": fs_freq,
         "fs_id_by_key": fs_id_by_key,
         "fs_dim_sorted": fs_dim_sorted,
+        # R250 — identidade conjunta
+        "fs_id_sets": fs_id_sets,
+        # R251 — LR de token do modelo (û cacheado por core no próprio idx:
+        # invalidação grátis quando o plano recarrega via _INDEX_CACHE).
+        "fs_token_counts": fs_token_counts,
+        "fs_token_buckets": fs_token_buckets,
+        "fs_uhat": {},
     }
     if loaded_at:
         _INDEX_CACHE[key] = indices
@@ -1966,6 +2336,79 @@ def _best_scored_entry(
     )
     if rivals:
         winner["_rivals"] = rivals
+
+    # R252 — POSTERIOR softmax + H0 explícito (TELEMETRIA até ao flip R252b;
+    # não decide nada). P(e_i|obs) ∝ 2^{b_i/T} sobre TODO o pool avaliado +
+    # H0 com odds π_H0(idade do plano — quant7 operacionalizado) + cauda do
+    # plano fora do pool a b_floor. Marginais por VALOR de campo (top-K): a
+    # confiança POR CÉLULA nasce aqui — a logística de 1 rival do R243
+    # mentia nas bandas 0.3-0.7 (gap 0.16-0.34 medido) e abstinha 0% no OOD.
+    # A massa além do top-K entra em Z mas não nas marginais (conservador).
+    t_cal, b_h0, b_floor = _posterior_params()
+    eb_ctx = fs_ctx.get("extra_bias") or {}
+    pi = _pi_h0(eb_ctx.get("plan_age_days"))
+    odds_h0 = pi / max(1.0 - pi, 1e-9)
+    # R250 — o posterior usa os bits CORRIGIDOS da dupla contagem da
+    # identidade (bits − inflação por entry; o ranking fica nas somas v30).
+    id_infl: dict[int, float] = fs_ctx.get("id_infl") or {}
+    fs_ids = idx.get("fs_id_by_key") or {}
+    if id_infl:
+        corr_list = [
+            float(cand[15]) - id_infl.get(
+                fs_ids.get(_entry_key(cand[7] or {})), 0.0)
+            for cand in eligible
+        ]
+        b_max = max(corr_list)
+    else:
+        corr_list = None
+        b_max = best_bits
+    z = 0.0
+    top_probs: list[float] = []
+    by_of_w: dict[str, float] = {}
+    by_ov_w: dict[str, float] = {}
+    by_cli_w: dict[str, float] = {}
+    by_des_w: dict[str, float] = {}
+    for pos, cand in enumerate(eligible):
+        b_i = corr_list[pos] if corr_list is not None else float(cand[15])
+        wgt = 2.0 ** ((b_i - b_max) / t_cal)
+        z += wgt
+        if pos < _TRACE_TOP_K:
+            top_probs.append(wgt)
+            e = cand[7] or {}
+            of_k = str(e.get("_of") or e.get("of") or "").strip()
+            if of_k:
+                by_of_w[of_k] = by_of_w.get(of_k, 0.0) + wgt
+            ov_k = _identifier_compact(e.get("ov"))
+            if ov_k:
+                by_ov_w[ov_k] = by_ov_w.get(ov_k, 0.0) + wgt
+            cli_k = _cliente_compact(e.get("cliente"))
+            if cli_k:
+                by_cli_w[cli_k] = by_cli_w.get(cli_k, 0.0) + wgt
+            des_k = str(e.get("designacao") or "").strip().upper()
+            if des_k:
+                by_des_w[des_k] = by_des_w.get(des_k, 0.0) + wgt
+    w_h0 = odds_h0 * (2.0 ** ((b_h0 - b_max) / t_cal))
+    n_rest = max(int((idx or {}).get("fs_n") or 0) - len(eligible), 0)
+    w_rest = n_rest * (2.0 ** ((b_floor - b_max) / t_cal))
+    z += w_h0 + w_rest
+    b_top_corr = corr_list[0] if corr_list is not None else best_bits
+    winner["_p_entry"] = round((2.0 ** ((b_top_corr - b_max) / t_cal)) / z, 4)
+    winner["_p_of"] = round(by_of_w.get(winner_of_key, 0.0) / z, 4)
+    winner["_p_h0"] = round(w_h0 / z, 4)
+    winner["_p_field"] = {
+        "of": round(by_of_w.get(winner_of_key, 0.0) / z, 4),
+        "ov": round(by_ov_w.get(_identifier_compact(winner.get("ov")), 0.0) / z, 4),
+        "cliente": round(
+            by_cli_w.get(_cliente_compact(winner.get("cliente")), 0.0) / z, 4),
+        "modelo": round(by_des_w.get(winner_des, 0.0) / z, 4),
+    }
+    tail = max(z - sum(top_probs) - w_h0 - w_rest, 0.0)
+    ent = 0.0
+    for wv in (*top_probs, tail, w_h0, w_rest):
+        p = wv / z
+        if p > 1e-12:
+            ent -= p * math.log2(p)
+    winner["_posterior_entropy_bits"] = round(ent, 3)
     return winner
 
 
@@ -2159,6 +2602,42 @@ def _posterior_p_top(bits_top: float, margin_bits: float | None) -> float:
         float(bits_top) - s_ood,
     )
     return 1.0 / (1.0 + 2.0 ** (-margin_eff / t))
+
+
+def _posterior_params() -> tuple[float, float, float]:
+    """R252 — (T, b_H0, b_floor) do posterior softmax multi-via.
+
+    T=1.0 e NÃO a temperatura logística do R243: os bits corrigidos (R250)
+    JÁ são log-likelihood-ratios honestos — o T≈2,0-2,5 fitted do R243 era,
+    empiricamente, o antídoto da dupla contagem da identidade (fator ~2,6×
+    medido); aplicá-lo ao softmax sobre ~20k entries engorda a cauda até a
+    dominar (medido: brier 0,64). b_floor = custo típico de uma entry que
+    discorda de tudo (Σ disagrees ≈ −10); b_H0 ≈ evidência típica de uma
+    linha OOD (s_ood do R243). Os três são re-fitted no flip
+    (backtest --calibrate, chaves posterior_*)."""
+    cal = (_load_cross_params().get("calibration") or {})
+    t = max(0.25, float(cal.get("posterior_temperature_bits") or 1.0))
+    b_h0 = float(cal.get("b_h0_bits") or cal.get("s_ood_bits") or 10.0)
+    b_floor = float(cal.get("b_floor_bits") or -10.0)
+    return t, b_h0, b_floor
+
+
+def _pi_h0(age_days: float | None) -> float:
+    """R252 — prior da hipótese nula (a linha NÃO está no plano) por idade
+    do plano: quant7 MEDIDO (0-3d: 10,7% → >30d: 33,6%), buckets crus com
+    clamp [0.05, 0.50] — a série não é monótona, não forçamos."""
+    buckets = ((_load_cross_params().get("quant7_ood_by_age") or {})
+               .get("buckets") or {})
+    if age_days is None:
+        p = (buckets.get("0-3") or {}).get("p_ood")
+        return min(max(float(p or 0.107), 0.05), 0.50)
+    a = max(float(age_days), 0.0)
+    name = ("0-3" if a <= 3 else "4-7" if a <= 7 else "8-14" if a <= 14
+            else "15-30" if a <= 30 else ">30")
+    p = (buckets.get(name) or {}).get("p_ood")
+    if not p:
+        return 0.107 if a <= 3 else 0.25
+    return min(max(float(p), 0.05), 0.50)
 
 
 def _sibling_p(margin_bits: float) -> float:
@@ -2508,6 +2987,13 @@ def _find_winner_entry(
         winner["_p_top"] = round(
             _posterior_p_top(float(winner.get("_bits") or 0.0),
                              winner.get("_margin_bits")), 3)
+        # R252 (variante "next") — p_top passa a ser a MARGINAL da OF no
+        # posterior softmax (mesma semântica OF-level do R243, agora com
+        # irmãos/empates/H0 no denominador); a logística de 1 rival fica
+        # como telemetria de transição.
+        if scoring_variant() != "v30" and winner.get("_p_of") is not None:
+            winner["_p_top_logistic"] = winner["_p_top"]
+            winner["_p_top"] = winner["_p_of"]
         # R241/C2 — o winner contradiz uma OF escrita e VÁLIDA: marcar a
         # natureza provável do erro (visão vs transcrição humana) para a UI.
         of_written = str((row or {}).get("of") or "").strip()
@@ -2664,8 +3150,20 @@ def _mark_winner_cell(cell: dict, winner: dict | None) -> dict:
         out["winner_mode"] = mode
     # R243 — confiança calibrada do winner na célula (decisão de gravação
     # por perda esperada + prioridade da fila de revisão).
+    # R252 (variante "next") — confiança POR CÉLULA: a marginal do posterior
+    # sobre as entries que concordam no VALOR deste campo (`_p_field`,
+    # calculada em _best_scored_entry). A célula OF pode ser confiante com o
+    # modelo incerto — substitui o p_top OF-level uniforme do R243.
     if winner.get("_p_top") is not None:
-        out.setdefault("decision_confidence", winner.get("_p_top"))
+        conf = winner.get("_p_top")
+        if scoring_variant() != "v30":
+            pf = winner.get("_p_field") or {}
+            af = winner.get("_active_field")
+            if af in pf:
+                conf = pf[af]
+            elif winner.get("_p_of") is not None:
+                conf = winner.get("_p_of")
+        out.setdefault("decision_confidence", conf)
     if winner.get("_score_reasons"):
         out["score_reasons"] = winner.get("_score_reasons")
     match_kind = _winner_match_kind(winner)
@@ -3124,6 +3622,10 @@ def _apply_winner_to_field(
 ) -> dict:
     if field in _NO_REF_FIELDS:
         return _score_no_ref_row_cell(field, ocr_value)
+    # R252 — campo ativo para a confiança por célula (_mark_winner_cell lê
+    # winner["_active_field"]; mutação serial por linha — sem corrida).
+    if winner is not None:
+        winner["_active_field"] = field
 
     # --- Campos validados directamente contra o StockSAP (R123) ---------
     # O lote e a largura vivem no StockSAP, não na entry do plan_colunas.
@@ -3300,10 +3802,18 @@ def _apply_winner_to_field(
     ):
         proposed_fmt = _format_value(field, proposed)
         p_top = float(winner.get("_p_top") or 0.0)
-        conf = round(
-            p_top * _sibling_p(float(winner.get("_sibling_margin_bits", 0.0))),
-            3,
-        )
+        # R252 (variante "next") — a marginal do posterior sobre a designação
+        # JÁ desconta os irmãos (é a soma só das entries com este valor);
+        # substitui a aproximação p_top × _sibling_p do R248.
+        pf_modelo = (winner.get("_p_field") or {}).get("modelo")
+        if scoring_variant() != "v30" and pf_modelo is not None:
+            conf = round(float(pf_modelo), 3)
+        else:
+            conf = round(
+                p_top * _sibling_p(
+                    float(winner.get("_sibling_margin_bits", 0.0))),
+                3,
+            )
         return _mark_winner_cell(
             _make_cell(
                 proposed_fmt, "very_different", "plan",
@@ -3598,6 +4108,14 @@ def _score_row(
             (winner or {}).get("_sibling_margin_bits") if winner else None
         ),
         "winner_p_top": (winner or {}).get("_p_top") if winner else None,
+        # R252 — posterior softmax (telemetria até ao flip): marginal da OF,
+        # P(H0) e marginais por campo do winner.
+        "winner_p_of": (winner or {}).get("_p_of") if winner else None,
+        "winner_p_h0": (winner or {}).get("_p_h0") if winner else None,
+        "winner_p_field": (winner or {}).get("_p_field") if winner else None,
+        "winner_posterior_entropy_bits": (
+            (winner or {}).get("_posterior_entropy_bits") if winner else None
+        ),
         "winner_score_reasons": (winner or {}).get("_score_reasons") if winner else None,
         "winner_mode": (winner or {}).get("_winner_mode") if winner else None,
         "identity_conflict": False,
@@ -4072,6 +4590,17 @@ def shadow_score(
     if _op:
         prod_bias = dict(prod_bias or {})
         prod_bias["operator"] = _op
+    # R252 — idade do plano (dias) para o prior π_H0 da hipótese nula do
+    # posterior (quant7). Do mtime do xlsx carregado; sem plano → None
+    # (fallback do bucket fresco).
+    try:
+        pm = float(refs.get("plan_mtime") or 0.0)
+        if pm > 0:
+            age_days = max((time.time() - pm) / 86400.0, 0.0)
+            prod_bias = dict(prod_bias or {})
+            prod_bias["plan_age_days"] = age_days
+    except Exception:  # noqa: BLE001 — telemetria é opcional por construção
+        pass
 
     out_rows = []
     row_tallies: list[tuple[int, int, int, int]] = []

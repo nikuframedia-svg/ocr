@@ -139,6 +139,20 @@ class Settings(BaseSettings):
         ),
     )
 
+    cross_shadow_variant: str = Field(
+        default="current",
+        description=(
+            "R250 — variante do motor usada pela THREAD DE SOMBRA "
+            "(_spawn_shadow_scoring): 'current' = a mesma da produção "
+            "(auditoria clássica); 'next' = a matemática nova "
+            "(R250-R252) em A/B real por folha — produção intocada, o "
+            "output fica em sheets.shadow_scoring_json para triagem via "
+            "/sheet/<id>/shadow-view e scripts/diag/shadow_agreement.py. "
+            "Env: CROSS_SHADOW_VARIANT=next durante o soak (>=300 folhas) "
+            "que antecede cada flip."
+        ),
+    )
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
