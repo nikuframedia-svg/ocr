@@ -2063,6 +2063,14 @@ def admin_reload_refs() -> JSONResponse:
         obras_inv()
     except Exception:  # noqa: BLE001
         pass
+    # Fix double counting — plano novo muda o cutoff dos kanbans: o cache
+    # do consumo tem de refrescar já (o cutoff também é chave do cache,
+    # isto é cinto-e-suspensórios para o TTL).
+    try:
+        from app.pipeline.of_consumption import invalidate_cache as cons_inv
+        cons_inv()
+    except Exception:  # noqa: BLE001
+        pass
     revalidation_started = _start_revalidation()
     return JSONResponse({
         "ok": True,
@@ -2769,7 +2777,13 @@ def sheet_of_lookup(
             "remaining": e.get("_remaining"),
             "quanttrp": e.get("_quanttrp"),
             "done": e.get("_done", False),
+            # Decomposição do remaining (fix do double counting): o
+            # operador vê de onde vêm os números e ganha confiança.
+            "produced_erp": e.get("_produced_erp"),
+            "kanban_qty": e.get("_kanban_qty"),
         })
+    from app.pipeline.of_consumption import _plan_cutoff_iso
+
     return JSONResponse({
         "found": True,
         "mode": mode,
@@ -2779,6 +2793,7 @@ def sheet_of_lookup(
         "n_entries": len(out_entries),
         "n_total": n_total_pre_filter,
         "truncated": truncated,
+        "plan_date": _plan_cutoff_iso(),  # corte dos kanbans pós-plano
     })
 
 

@@ -25,6 +25,7 @@ from typing import Any
 from app.cross_check.ref_watcher import get_watcher
 from app.pipeline.of_consumption import (
     _to_num,
+    annotate_remaining,
     get_consumption,
     remaining,
 )
@@ -161,7 +162,13 @@ def aggregate_ov(
     open_entries = 0
     closed_entries = 0
 
-    for e in entries:
+    # Waterfall entre entries IRMÃS da mesma (of, designação) — o agregado
+    # de kanbans deixou de ser subtraído por inteiro a cada irmã (smear que
+    # fechava todas; ver of_consumption.annotate_remaining). O grupo de
+    # irmãs está completo no âmbito da OV (partilham OF→OV).
+    rems = annotate_remaining(entries, consumption)
+
+    for e, rem in zip(entries, rems):
         cliente = cliente or (e.get("cliente") or "")
         if e.get("_of"):
             ofs.add(str(e["_of"]))
@@ -174,7 +181,6 @@ def aggregate_ov(
         # Use the same downstream/phase-aware remaining semantics as
         # of_consumption. This avoids marking Acabamento as complete just
         # because an upstream phase over-produced.
-        rem = remaining(e, consumption)
         produced_entry = _produced_from_remaining(q, rem)
         planned += q
         produced += produced_entry
@@ -182,7 +188,9 @@ def aggregate_ov(
             fase_totals[k] += _to_num((e.get("fases") or {}).get(k)) or 0.0
 
         rem_out = None if rem == float("inf") else rem
-        done = _entry_done(e, consumption)
+        # done pelo rem do waterfall (annotate_remaining já devolve 0.0
+        # para entries com flag `fechado` do plano).
+        done = rem <= 0
         if done:
             closed_entries += 1
         else:

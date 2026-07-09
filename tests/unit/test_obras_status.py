@@ -74,6 +74,24 @@ class TestAggregateOv:
         assert agg["last_kanban"] is None
         assert len(agg["entries"]) == 1
 
+    def test_sister_entries_share_consumption_waterfall(self):
+        # Fix do smear: 2 irmãs (mesma of+designação, 10+10) com pool de
+        # kanbans = 10 — antes o agregado era subtraído por inteiro a CADA
+        # irmã e ambas fechavam; agora só a 1ª fecha (waterfall) e a OV
+        # mostra produced sem duplicação.
+        entries = [
+            {**_e("100", "ACME", "OV1", "PEÇA X", 10), "_of": "100"},
+            {**_e("100", "ACME", "OV1", "PEÇA X", 10), "_of": "100"},
+        ]
+        agg = obras_status.aggregate_ov(
+            "OV1", entries, kanbans=[],
+            consumption={("100", "PEÇA X"): 10.0})
+        assert agg["planned"] == 20
+        assert agg["produced"] == 10  # sem dupla contagem (antes: 20)
+        assert agg["n_open"] == 1
+        assert agg["n_closed"] == 1
+        assert agg["all_closed"] is False
+
     def test_multiple_ofs_and_modelos(self):
         entries = [
             {**_e("100", "ACME", "OV1", "MOD-A", 5,

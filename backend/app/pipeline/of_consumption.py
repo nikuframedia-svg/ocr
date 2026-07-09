@@ -23,7 +23,34 @@ from app.web import db
 _CACHE_TTL_S = 30.0
 _cache: dict[tuple[str, str], float] | None = None
 _cache_at: float = 0.0
+_cache_cutoff: str | None = None
 _lock = threading.Lock()
+
+
+def _plan_cutoff_iso() -> str | None:
+    """Data (ISO) do snapshot do plano carregado — o corte temporal do
+    consumo de kanbans.
+
+    FIX do double counting da wizard: as fases bf/c/q/s/r/a/exp do plano
+    são a produção JÁ registada no ERP até ao snapshot, e este próprio
+    sistema alimenta o CPIS — subtrair TODAS as kanbans validadas contava
+    a mesma produção 2× e marcava obras abertas como fechadas. Regra:
+    "o ERP sabe tudo até ao snapshot; o local sabe o que aconteceu
+    depois" → só contam kanbans com sheet_iso_date >= data do plano
+    (INCLUSIVO: assume export matinal; errar para 'ainda aberta' é
+    benigno, errar para 'fechada' é o bug). Sem plano/mtime → None
+    (sem corte, comportamento antigo)."""
+    try:
+        from app.cross_check.ref_watcher import get_watcher  # lazy — sem ciclo
+
+        pm = float((get_watcher().get_refs() or {}).get("plan_mtime") or 0.0)
+        if pm <= 0:
+            return None
+        import datetime as _dt
+
+        return _dt.date.fromtimestamp(pm).isoformat()
+    except Exception:  # noqa: BLE001 — corte é proteção, nunca bloqueia
+        return None
 
 
 def _to_num(v: Any) -> float | None:
@@ -70,41 +97,55 @@ def _produced(fases: dict | None, phase: str | None) -> float:
     - Sem `phase` (setor sem mapeamento) → cai na fase mais a JUSANTE
       (último valor de `fases`, tipicamente `exp`/expedição), que é a
       medida conservadora de "já saiu da fábrica".
+    - Valores NEGATIVOS (estornos/acertos do ERP — vistos exp=-5 no plano
+      real) são clamped a 0 no PONTO DE USO: produção negativa não existe;
+      sem o clamp, exp=-5 daria remaining = quanttrp+5. O valor cru
+      continua visível em /obras como sinal de dados ERP anómalos.
     """
     if not fases:
         return 0.0
     if phase and phase in fases:
         v = _to_num(fases.get(phase))
-        return v if v is not None else 0.0
+        return max(v, 0.0) if v is not None else 0.0
     # Fallback: fase mais a jusante (último valor; `fases` vem em ordem de
     # folha, esquerda→direita, por isso o último é o mais avançado).
     vals = list(fases.values())
     for v in reversed(vals):
         n = _to_num(v)
         if n is not None:
-            return n
+            return max(n, 0.0)
     return 0.0
 
 
-def _kanban_consumption() -> dict[tuple[str, str], float]:
+def _kanban_consumption(cutoff_iso: str | None = None) -> dict[tuple[str, str], float]:
     """SQL: qtd consumida por (of, modelo upper) nas folhas validated.
 
     Só conta folhas validadas — folhas em extracted (à espera de
     revisão) NÃO contam ainda. Mantém conservador: só produção
     confirmada pelo operador.
+
+    `cutoff_iso` (data do snapshot do plano): só contam linhas com
+    sheet_iso_date >= cutoff — as anteriores JÁ estão nas fases do ERP
+    (ver _plan_cutoff_iso). Usa a data de PRODUÇÃO (sheet_iso_date, com
+    fallback para captura na ingestão) e não validated_at: validar hoje
+    uma semana de kanbans atrasadas não pode reintroduzir a dupla
+    contagem de produção que o ERP já conhece.
     """
     out: dict[tuple[str, str], float] = {}
+    sql = """SELECT pr.of, UPPER(pr.modelo) AS m, SUM(pr.qtd) AS q
+             FROM production_rows pr
+             JOIN sheets s ON s.id = pr.sheet_id
+             WHERE s.status = 'validated'
+               AND pr.of IS NOT NULL AND pr.modelo IS NOT NULL
+               AND pr.qtd IS NOT NULL"""
+    args: tuple = ()
+    if cutoff_iso:
+        sql += " AND pr.sheet_iso_date >= ?"
+        args = (cutoff_iso,)
+    sql += " GROUP BY pr.of, UPPER(pr.modelo)"
     try:
         with db.conn() as c:
-            rows = c.execute(
-                """SELECT pr.of, UPPER(pr.modelo) AS m, SUM(pr.qtd) AS q
-                   FROM production_rows pr
-                   JOIN sheets s ON s.id = pr.sheet_id
-                   WHERE s.status = 'validated'
-                     AND pr.of IS NOT NULL AND pr.modelo IS NOT NULL
-                     AND pr.qtd IS NOT NULL
-                   GROUP BY pr.of, UPPER(pr.modelo)"""
-            ).fetchall()
+            rows = c.execute(sql, args).fetchall()
         for r in rows:
             out[(str(r["of"]), str(r["m"]))] = float(r["q"] or 0)
     except Exception:  # noqa: BLE001
@@ -113,19 +154,26 @@ def _kanban_consumption() -> dict[tuple[str, str], float]:
 
 
 def get_consumption() -> dict[tuple[str, str], float]:
-    """Devolve o consumption dict, cacheado 30s."""
-    global _cache, _cache_at
+    """Devolve o consumption dict, cacheado 30s (refresh imediato quando
+    o snapshot do plano muda — o cutoff faz parte da chave do cache)."""
+    global _cache, _cache_at, _cache_cutoff
+    cutoff = _plan_cutoff_iso()
     with _lock:
         now = time.time()
-        if _cache is None or (now - _cache_at) > _CACHE_TTL_S:
-            _cache = _kanban_consumption()
+        if (
+            _cache is None
+            or (now - _cache_at) > _CACHE_TTL_S
+            or cutoff != _cache_cutoff
+        ):
+            _cache = _kanban_consumption(cutoff)
             _cache_at = now
+            _cache_cutoff = cutoff
         return _cache
 
 
 def invalidate_cache() -> None:
     """Forçar refresh no próximo `get_consumption()`. Chamar após
-    apply-of-entry ou sheet validate."""
+    apply-of-entry, sheet validate ou reload das refs."""
     global _cache, _cache_at
     with _lock:
         _cache = None
@@ -207,6 +255,60 @@ def remaining(
     return float(quanttrp) - produced - kanban_qty
 
 
+def _entry_key(entry: dict) -> tuple[str, str]:
+    return (
+        str(entry.get("_of") or entry.get("of") or "").strip(),
+        str(entry.get("designacao") or "").strip().upper(),
+    )
+
+
+def annotate_remaining(
+    entries: list[dict],
+    consumption: dict | None = None,
+    phase: str | None = None,
+) -> list[float]:
+    """Remaining por entry com repartição WATERFALL do consumo entre
+    entries IRMÃS (mesma chave (of, designação)).
+
+    FIX do smear: o consumo agregado por chave era subtraído POR INTEIRO
+    a CADA irmã — 3 entries de 10 com 12 produzidas fechavam TODAS
+    (faltando 18). Waterfall pela ordem de input (= ordem do plano):
+    cada irmã absorve min(o que lhe falta, pool restante); a SOBRA final
+    vai à última (preserva a semântica "remaining pode ser negativo" e
+    conserva o total). Grupo de 1 ≡ `remaining()`.
+    """
+    if consumption is None:
+        consumption = get_consumption()
+    # pool restante por chave (só das chaves presentes)
+    pools: dict[tuple[str, str], float] = {}
+    counts: dict[tuple[str, str], int] = {}
+    for e in entries:
+        k = _entry_key(e)
+        if k not in pools:
+            pools[k] = float(consumption.get(k, 0.0))
+        counts[k] = counts.get(k, 0) + 1
+    seen: dict[tuple[str, str], int] = {}
+    out: list[float] = []
+    for e in entries:
+        if str(e.get("fechado") or "0") in ("1", "True", "true"):
+            out.append(0.0)
+            continue
+        quanttrp = _to_num(e.get("quanttrp"))
+        if quanttrp is None or quanttrp <= 0:
+            out.append(float("inf"))
+            continue
+        k = _entry_key(e)
+        seen[k] = seen.get(k, 0) + 1
+        need = float(quanttrp) - _produced(e.get("fases"), phase)
+        if seen[k] >= counts[k]:
+            alloc = pools[k]                       # última irmã leva a sobra
+        else:
+            alloc = min(max(need, 0.0), pools[k])
+        pools[k] -= alloc
+        out.append(need - alloc)
+    return out
+
+
 def sort_entries_by_remaining(
     entries: list[dict],
     include_done: bool = False,
@@ -220,15 +322,19 @@ def sort_entries_by_remaining(
 
     R138 — `phase` (etapa do kanban) torna o "done" consciente do setor:
     uma linha só está concluída quando a fase desse setor atingiu quanttrp.
+    Consumo repartido por waterfall entre irmãs (ver annotate_remaining).
     """
     consumption = get_consumption()
+    rems = annotate_remaining(entries, consumption, phase)
     enriched: list[dict] = []
-    for e in entries:
-        rem = remaining(e, consumption, phase)
+    for e, rem in zip(entries, rems):
         e2 = dict(e)
         e2["_remaining"] = None if rem == float("inf") else rem
         e2["_quanttrp"] = _to_num(e.get("quanttrp"))
         e2["_done"] = rem <= 0
+        # decomposição para o tooltip da wizard (confiança do operador)
+        e2["_produced_erp"] = _produced(e.get("fases"), phase)
+        e2["_kanban_qty"] = consumption.get(_entry_key(e), 0.0)
         if not include_done and rem <= 0:
             continue
         enriched.append(e2)
@@ -241,6 +347,7 @@ def sort_entries_by_remaining(
 
 __all__ = [
     "remaining",
+    "annotate_remaining",
     "sort_entries_by_remaining",
     "get_consumption",
     "invalidate_cache",

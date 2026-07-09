@@ -418,6 +418,8 @@
                 linha(s).
                 <span x-show="lookupResult.truncated" class="pill warn"
                       style="font-size:9px;">truncado a 50 — refina a pesquisa</span>
+                <span class="tiny muted" x-show="lookupResult.plan_date"
+                      x-text="'· plano de ' + lookupResult.plan_date"></span>
               </span>
               <label style="display:inline-flex; gap:4px; align-items:center;">
                 <input type="checkbox" x-model="includeDone" @change="lookup()">
@@ -438,6 +440,10 @@
                       <template x-if="e.remaining != null && e.quanttrp != null">
                         <span class="of-remaining-badge"
                               :class="e.done ? 'done' : (e.remaining < 5 ? 'urgent' : '')"
+                              :title="'ERP (fase do setor): ' + (e.produced_erp ?? '—')
+                                + ' · kanbans pós-plano'
+                                + (lookupResult.plan_date ? ' (desde ' + lookupResult.plan_date + ')' : '')
+                                + ': ' + (e.kanban_qty ?? 0)"
                               x-text="e.done
                                 ? 'fechada ('+e.quanttrp+'/'+e.quanttrp+')'
                                 : 'faltam '+e.remaining+' de '+e.quanttrp"></span>
