@@ -32,13 +32,12 @@ import queue
 import threading
 import time
 from collections.abc import Callable
-from typing import Optional
 
 # Job = (kind, id): kind ∈ {"sheet", "discovery"}.
 _ocr_queue: queue.Queue[tuple[str, int]] = queue.Queue()
-_worker_thread: Optional[threading.Thread] = None
-_processor_fn: Optional[Callable[[int], None]] = None
-_discovery_fn: Optional[Callable[[int], None]] = None
+_worker_thread: threading.Thread | None = None
+_processor_fn: Callable[[int], None] | None = None
+_discovery_fn: Callable[[int], None] | None = None
 
 
 def enqueue(sheet_id: int) -> int:
@@ -78,7 +77,7 @@ def _worker_loop() -> None:
                     _discovery_fn(item_id)
             elif _processor_fn is not None:
                 _processor_fn(item_id)
-        except Exception:  # noqa: BLE001 — last-ditch catch-all
+        except Exception:
             # Callbacks are expected to handle errors themselves (set
             # status='error'). This catch is a safety net.
             pass
@@ -141,8 +140,8 @@ __all__ = [
     "enqueue",
     "enqueue_discovery",
     "queue_size",
-    "worker_alive",
-    "start_worker",
     "recover_pending",
     "shutdown",
+    "start_worker",
+    "worker_alive",
 ]

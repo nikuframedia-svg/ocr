@@ -22,7 +22,7 @@ from __future__ import annotations
 import ast
 from collections.abc import Iterable, Mapping
 
-__all__ = ["KpiExprError", "validate_expr", "eval_expr", "MAX_CHARS"]
+__all__ = ["MAX_CHARS", "KpiExprError", "eval_expr", "validate_expr"]
 
 MAX_CHARS = 200
 _MAX_NODES = 60

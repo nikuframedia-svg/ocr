@@ -50,6 +50,23 @@ validação cruzada · 4 vLLM grammars (llguidance) · 5 HITL · 6 TrOCR
 fine-tune por operador · 7 LiLT (opcional). Hoje: Fase 0.5 + R104-R106
 (refs uploads + fine-tuning scaffolding R105).
 
+## Administração (Task C — unidades, registo de kanbans, KPIs)
+- `/admin` com separadores Referências | Kanbans | Unidades | KPIs;
+  o corpo do `/refs` vive em `_refs_content.html` (URL /refs mantém-se)
+- **Unidades fabris**: tabela `unidades` (seed 'Trofa' = sede);
+  `sheets.unidade_id` NULL = Trofa; filtro por unidade em /queue e /kanbans
+- **Registo de kanbans**: wizard na tab Kanbans → `kanban_templates`
+  (spec_json espelha TemplateSpec; prefixo `u{unidade_id}_`); descoberta de
+  campos partilha a fila FIFO do OCR; ativação SEMPRE humana;
+  `template_store.reload_registry()` instala os ativos no registry em
+  runtime (processo único uvicorn — multi-worker precisaria de sinal)
+- **KPIs editáveis**: fórmulas em `data/kpi_params.json` (gitignored, como
+  todos os dados runtime); defaults em código (`kpi_params.DEFAULT_KPIS`)
+  byte-idênticos às fórmulas históricas; avaliador `kpi_expr.py` é um
+  walker AST com whitelist — NUNCA trocar por eval
+- `ADMIN_TOKEN` (env, opcional): protege /admin* e /refs*; sem env → aberto
+  como sempre
+
 ## Convenções
 - Comentários `R##` referenciam o round/commit que introduziu a regra — manter
 - Prompts versionados em `prompts/ocr6_v*.txt`; v3 é canónico

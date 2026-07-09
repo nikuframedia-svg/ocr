@@ -31,13 +31,13 @@ from app.web import db
 __all__ = [
     "CROSSABLE_FIELDS",
     "KNOWN_ROW_FIELDS",
-    "spec_to_dict",
-    "spec_from_dict",
-    "validate_spec_payload",
-    "reload_registry",
-    "unidade_for_template",
     "map_label_to_field",
+    "reload_registry",
+    "spec_from_dict",
+    "spec_to_dict",
     "suggest_spec_from_discovery",
+    "unidade_for_template",
+    "validate_spec_payload",
 ]
 
 # Campos de linha validáveis contra o plano/StockSAP (subconjunto canónico
@@ -169,7 +169,7 @@ def reload_registry() -> dict:
     bad: list[str] = []
     try:
         rows = db.list_kanban_templates(status="ativo")
-    except Exception as exc:  # noqa: BLE001 — arranque com DB nova/limpa
+    except Exception as exc:
         print(f"[template_store] lista de templates falhou: {exc}",
               file=sys.stderr)
         rows = []

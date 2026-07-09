@@ -30,10 +30,17 @@ from pathlib import Path
 from app.web.kpi_expr import KpiExprError, eval_expr, validate_expr
 
 __all__ = [
-    "DEFAULT_KPIS", "SCOPE_VARIABLES", "KpiVersionConflict",
-    "get_kpis", "load_state", "save_kpis", "revert_kpis",
-    "compute_scope_kpis", "validate_kpi_def", "invalidate_cache",
+    "DEFAULT_KPIS",
+    "SCOPE_VARIABLES",
+    "KpiVersionConflict",
+    "compute_scope_kpis",
+    "get_kpis",
+    "invalidate_cache",
+    "load_state",
     "params_path",
+    "revert_kpis",
+    "save_kpis",
+    "validate_kpi_def",
 ]
 
 _PARAMS_PATH = Path(__file__).resolve().parents[3] / "data" / "kpi_params.json"
@@ -295,7 +302,7 @@ def _emit_changed(action: str, version: int) -> None:
     try:
         from app import kernel
         kernel.emit_event("kpi_params_changed", {"action": action, "version": version})
-    except Exception:  # noqa: BLE001 — telemetria nunca bloqueia a gravação
+    except Exception:
         pass
 
 

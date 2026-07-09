@@ -333,6 +333,36 @@ def _is_mobile_request(request: Request) -> bool:
 
 
 @app.middleware("http")
+async def _admin_token_gate(request: Request, call_next):
+    """Task C F7 — gate OPCIONAL das páginas de administração.
+
+    Sem ADMIN_TOKEN no ambiente (default) não muda NADA — a app continua
+    aberta na LAN como sempre (não parte a fábrica). Com ADMIN_TOKEN
+    definido, /admin* e /refs* exigem o token via cookie, header
+    X-Admin-Token ou ?token= (o query param fixa o cookie para a
+    navegação seguinte).
+    """
+    token = os.environ.get("ADMIN_TOKEN", "").strip()
+    path = request.url.path
+    if token and (path.startswith("/admin") or path.startswith("/refs")):
+        supplied = (
+            request.headers.get("x-admin-token")
+            or request.query_params.get("token")
+            or request.cookies.get("admin_token")
+            or ""
+        )
+        if not secrets.compare_digest(supplied, token):
+            return JSONResponse(
+                {"detail": "token de administração inválido"}, status_code=401)
+        response = await call_next(request)
+        if request.query_params.get("token"):
+            response.set_cookie(
+                "admin_token", token, httponly=True, samesite="lax")
+        return response
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def _attach_watermark(request: Request, call_next):
     """Inject a monotonic sheet watermark into every HTML response so
     the client banner ("X new sheets") can detect new uploads across
