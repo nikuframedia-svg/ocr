@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import json
 import re
-import sqlite3
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
+
+from app.web import db
 
 # Time string patterns we accept
 _HHMM_RE = re.compile(r"^\s*(\d{1,2})[:hH](\d{1,2})\s*$")          # 09:30 or 09H30
@@ -121,8 +122,6 @@ def list_downtime_sheets(db_path: Path) -> list[dict]:
     Each entry has: sheet_id, captured_at, operador, sheet_date,
     sheet_iso_date, status, rows[].
     """
-    c = sqlite3.connect(db_path)
-    c.row_factory = sqlite3.Row
     # rev00 — filtro dirigido pelo registry: qualquer template com
     # has_production_rows=False (paragens genérico, maq_fustes_paragens, …).
     paragens_names = _paragens_template_names()
@@ -142,8 +141,10 @@ def list_downtime_sheets(db_path: Path) -> list[dict]:
            )
          ORDER BY captured_at DESC
     """
-    raw_rows = c.execute(sql, paragens_names).fetchall()
-    c.close()
+    # R256 — conn_at em vez de sqlite3.connect direto: busy_timeout + close
+    # garantido em exceção (a conexão antiga vazava se o execute levantasse).
+    with db.conn_at(db_path) as c:
+        raw_rows = c.execute(sql, paragens_names).fetchall()
 
     out: list[dict] = []
     for r in raw_rows:

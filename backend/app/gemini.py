@@ -19,13 +19,12 @@ from __future__ import annotations
 
 import json
 import re
-import sqlite3
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 from app.downtime import compute_duration_minutes
-
+from app.web import db
 
 _M2_RE = re.compile(r"^\s*(-?\d+(?:[.,]\d+)?)\s*(?:m[2²]?)?\s*$", re.IGNORECASE)
 
@@ -77,9 +76,6 @@ def list_gemini_sheets(db_path: Path) -> list[dict]:
     for legacy sheets. Each entry has machine_name (operator-facing
     label), aggregated row info with parsed m² + duration.
     """
-    c = sqlite3.connect(db_path)
-    c.row_factory = sqlite3.Row
-
     # Build the WHERE clause: template_name match OR legacy setor match
     tname_placeholders = ",".join("?" * len(_GEMINI_TEMPLATES))
     setor_placeholders = ",".join("?" * len(_GEMINI_SETOR_ALIASES))
@@ -98,8 +94,10 @@ def list_gemini_sheets(db_path: Path) -> list[dict]:
          ORDER BY captured_at DESC
     """
     params = (*_GEMINI_TEMPLATES, *_GEMINI_SETOR_ALIASES)
-    raw_rows = c.execute(sql, params).fetchall()
-    c.close()
+    # R256 — conn_at em vez de sqlite3.connect direto: busy_timeout + close
+    # garantido em exceção (a conexão antiga vazava se o execute levantasse).
+    with db.conn_at(db_path) as c:
+        raw_rows = c.execute(sql, params).fetchall()
 
     out: list[dict] = []
     for r in raw_rows:

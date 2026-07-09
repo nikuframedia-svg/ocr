@@ -10,6 +10,7 @@ stored as TEXT and serialised via :mod:`json`.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import logging
 import re
@@ -24,6 +25,42 @@ from app.dq.ferramenta import canonical_ferramenta_or_raw
 logger = logging.getLogger(__name__)
 
 _DB_PATH = Path(__file__).resolve().parents[3] / "data" / "app.db"
+
+
+# R256 — o Python 3.12 deprecou os adapters/converters DEFAULT do sqlite3
+# (usados via detect_types=PARSE_DECLTYPES nas colunas TIMESTAMP). Sem isto,
+# cada fetch emitia um DeprecationWarning (~6.4k por corrida da suite) e a
+# remoção futura dos defaults mudaria o tipo devolvido para str. Registamos
+# réplicas byte-a-byte dos defaults do CPython: comportamento IDÊNTICO
+# (datetime nas colunas TIMESTAMP), zero warnings, à prova de remoção.
+def _adapt_date(val: _dt.date) -> str:
+    return val.isoformat()
+
+
+def _adapt_datetime(val: _dt.datetime) -> str:
+    return val.isoformat(" ")
+
+
+def _convert_date(val: bytes) -> _dt.date:
+    return _dt.date(*map(int, val.split(b"-")))
+
+
+def _convert_timestamp(val: bytes) -> _dt.datetime:
+    datepart, timepart = val.split(b" ")
+    year, month, day = map(int, datepart.split(b"-"))
+    timepart_full = timepart.split(b".")
+    hours, minutes, seconds = map(int, timepart_full[0].split(b":"))
+    if len(timepart_full) == 2:
+        microseconds = int(f"{timepart_full[1].decode():0<6.6}")
+    else:
+        microseconds = 0
+    return _dt.datetime(year, month, day, hours, minutes, seconds, microseconds)
+
+
+sqlite3.register_adapter(_dt.date, _adapt_date)
+sqlite3.register_adapter(_dt.datetime, _adapt_datetime)
+sqlite3.register_converter("date", _convert_date)
+sqlite3.register_converter("timestamp", _convert_timestamp)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sheets (
@@ -314,6 +351,23 @@ def conn() -> Iterator[sqlite3.Connection]:
     c.execute("PRAGMA foreign_keys = ON")
     # Wait up to 5s on lock conflicts before raising "database is locked".
     # Default is 0 (immediate raise), too aggressive for concurrent writes.
+    c.execute("PRAGMA busy_timeout = 5000")
+    try:
+        yield c
+        c.commit()
+    finally:
+        c.close()
+
+
+@contextmanager
+def conn_at(path: Path | str) -> Iterator[sqlite3.Connection]:
+    """R256 — como :func:`conn` mas para um ``db_path`` arbitrário (dashboards
+    downtime/gemini recebem o path por parâmetro). Substitui os
+    ``sqlite3.connect`` diretos que não tinham busy_timeout nem close
+    garantido em exceção. Leituras não fazem commit — é inócuo."""
+    c = sqlite3.connect(path, detect_types=sqlite3.PARSE_DECLTYPES, timeout=10.0)
+    c.row_factory = sqlite3.Row
+    c.execute("PRAGMA foreign_keys = ON")
     c.execute("PRAGMA busy_timeout = 5000")
     try:
         yield c
