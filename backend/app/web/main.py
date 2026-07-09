@@ -733,7 +733,10 @@ def _maybe_apply_snap(
             from app.pipeline.scoring_engine import write_confidence_threshold
 
             field_name = field_path.rsplit(".", 1)[-1]
-            if float(conf) < write_confidence_threshold(field_name):
+            # R253/F3 — com irmão plausível (<2 bits) o limiar sobe um tier
+            # para TODOS os campos da decisão (Sadinle/reject-option).
+            if float(conf) < write_confidence_threshold(
+                    field_name, cell.get("sibling_margin_bits")):
                 return False
         elif cell.get("winner_mode") == "weak_guess":
             return False
@@ -2116,6 +2119,74 @@ def qwen_tools_test() -> JSONResponse:
         })
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/sheet/{sheet_id}/shadow-view", response_class=HTMLResponse)
+def sheet_shadow_view(request: Request, sheet_id: int) -> Response:
+    """R253/F2 — triagem do soak (passo 2 do procedimento de flip,
+    docs/CROSS_EVALUATION_PROTOCOL.md): SÓ as divergências produção-vs-
+    sombra (a mesma régua do shadow_agreement.py), identidade primeiro,
+    com a telemetria do posterior da sombra e o carimbo de triagem."""
+    from app.cross_check.shadow_diff import diff_prod_vs_shadow
+    from app.cross_check.storage import load_sheet_cross_check
+
+    sheet = db.get_sheet(sheet_id)
+    if sheet is None:
+        raise HTTPException(404, f"sheet {sheet_id} not found")
+    if not sheet.get("shadow_scoring_json"):
+        raise HTTPException(404, f"sheet {sheet_id} não tem sombra")
+    try:
+        shadow = json.loads(sheet["shadow_scoring_json"])
+    except (TypeError, ValueError):
+        shadow = {}
+    # A produção NÃO vive em sheets.cross_check (coluna não existe) — vive
+    # no storage por ficheiros (kanban_refs/03_Cross_Check + índice).
+    prod = load_sheet_cross_check(sheet_id, include_stale=True) or {}
+    diff = diff_prod_vs_shadow(prod, shadow)
+    telemetry = [
+        {"row": i,
+         "p_of": (r or {}).get("winner_p_of"),
+         "p_h0": (r or {}).get("winner_p_h0"),
+         "entropy": (r or {}).get("winner_posterior_entropy_bits"),
+         "p_field": (r or {}).get("winner_p_field")}
+        for i, r in enumerate(shadow.get("rows") or [])
+        if (r or {}).get("winner_p_of") is not None
+    ]
+    run = None
+    with db.conn() as c:
+        row = c.execute(
+            "SELECT status, error_message, duration_ms FROM shadow_runs "
+            "WHERE sheet_id = ? ORDER BY id DESC LIMIT 1", (sheet_id,),
+        ).fetchone()
+        if row is not None:
+            run = dict(row)
+    return templates.TemplateResponse(request, "shadow_view.html", {
+        "sheet_id": sheet_id,
+        "diff": diff,
+        "telemetry": telemetry,
+        "run": run,
+        "shadow_scored_at": sheet.get("shadow_scored_at"),
+        "shadow_triaged_at": sheet.get("shadow_triaged_at"),
+        "shadow_triage_note": sheet.get("shadow_triage_note"),
+    })
+
+
+@app.post("/sheet/{sheet_id}/shadow-triage")
+def sheet_shadow_triage(sheet_id: int, note: str = Form("")) -> Response:
+    """R253/F2 — carimbo de triagem humana (auditável no soak)."""
+    sheet = db.get_sheet(sheet_id)
+    if sheet is None or not sheet.get("shadow_scoring_json"):
+        raise HTTPException(404)
+    db.mark_shadow_triaged(sheet_id, note)
+    return RedirectResponse(f"/sheet/{sheet_id}/shadow-view", status_code=303)
+
+
+@app.get("/shadow-queue", response_class=HTMLResponse)
+def shadow_queue_page(request: Request) -> Response:
+    """R253/F2 — folhas com sombra por triar (ordenadas por mais recente)."""
+    return templates.TemplateResponse(request, "shadow_queue.html", {
+        "sheets": db.shadow_queue(),
+    })
 
 
 @app.get("/sheet/{sheet_id}/status")

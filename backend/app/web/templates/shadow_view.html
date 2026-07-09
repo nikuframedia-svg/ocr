@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Sombra #{{ sheet_id }} — Metalogalva OCR{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Triagem da sombra — folha #{{ sheet_id }}</h1>
+  <div style="display:flex; gap:8px; align-items:center;">
+    <a class="btn" href="/sheet/{{ sheet_id }}">← Folha</a>
+    <a class="btn" href="/shadow-queue">Fila de triagem</a>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:16px;">
+  <div style="display:flex; gap:24px; flex-wrap:wrap; font-size:13px;">
+    <div><strong>Sombra corrida:</strong> {{ shadow_scored_at or "—" }}</div>
+    <div><strong>Duração:</strong>
+      {% if run and run.duration_ms %}{{ run.duration_ms }} ms{% else %}—{% endif %}
+    </div>
+    <div><strong>Estado do run:</strong>
+      {% if run %}{{ run.status }}{% if run.error_message %} — {{ run.error_message }}{% endif %}{% else %}—{% endif %}
+    </div>
+    <div><strong>Células comparadas:</strong> {{ diff.n_cells }}</div>
+    <div><strong>Divergências:</strong> {{ diff.diffs | length }}</div>
+    <div><strong>Triada:</strong>
+      {% if shadow_triaged_at %}✅ {{ shadow_triaged_at }}{% else %}por triar{% endif %}
+    </div>
+  </div>
+</div>
+
+{% if diff.diffs %}
+<div class="card" style="margin-bottom:16px;">
+  <h2 style="margin-top:0;">Divergências de valor (produção vs sombra)</h2>
+  <p style="font-size:12px; color:var(--muted,#888);">
+    Só as células que diferem — identidade primeiro (consequência de
+    auditoria), depois dimensões.
+  </p>
+  <div style="overflow-x:auto;">
+  <table class="table" style="font-size:13px;">
+    <thead>
+      <tr><th>Linha</th><th>Campo</th><th>Produção (v30)</th>
+          <th>Sombra (next)</th><th>Status prod.</th><th>Status sombra</th>
+          <th>Confiança sombra</th><th>Razão</th></tr>
+    </thead>
+    <tbody>
+      {% for d in diff.diffs %}
+      <tr style="{% if d.severity == 'identidade' %}background:rgba(220,53,69,.10);{% elif d.severity == 'dimensao' %}background:rgba(255,153,0,.10);{% endif %}">
+        <td>{{ d.row }}</td>
+        <td><strong>{{ d.field }}</strong></td>
+        <td>{{ d.producao or "—" }}</td>
+        <td>{{ d.sombra or "—" }}</td>
+        <td>{{ d.status_prod }}</td>
+        <td>{{ d.status_sombra }}</td>
+        <td>{% if d.sombra_conf is not none %}{{ "%.3f" | format(d.sombra_conf) }}{% else %}—{% endif %}</td>
+        <td style="max-width:220px; overflow:hidden; text-overflow:ellipsis;">{{ d.sombra_reason }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% else %}
+<div class="card" style="margin-bottom:16px;">
+  <h2 style="margin-top:0;">Sem divergências de valor ✅</h2>
+  <p style="font-size:13px;">Produção e sombra concordam em todas as
+    {{ diff.n_cells }} células cruzáveis.</p>
+</div>
+{% endif %}
+
+{% if diff.status_flips %}
+<div class="card" style="margin-bottom:16px;">
+  <h2 style="margin-top:0;">Flips de status (valor igual)</h2>
+  <div style="overflow-x:auto;">
+  <table class="table" style="font-size:13px;">
+    <thead><tr><th>Linha</th><th>Campo</th><th>Produção</th><th>Sombra</th></tr></thead>
+    <tbody>
+      {% for f in diff.status_flips %}
+      <tr><td>{{ f.row }}</td><td>{{ f.field }}</td><td>{{ f.de }}</td><td>{{ f.para }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+
+{% if telemetry %}
+<div class="card" style="margin-bottom:16px;">
+  <h2 style="margin-top:0;">Telemetria do posterior (sombra)</h2>
+  <div style="overflow-x:auto;">
+  <table class="table" style="font-size:13px;">
+    <thead><tr><th>Linha</th><th>p_of</th><th>p_H0</th><th>entropia (bits)</th>
+               <th>p_field</th></tr></thead>
+    <tbody>
+      {% for t in telemetry %}
+      <tr>
+        <td>{{ t.row }}</td>
+        <td>{{ t.p_of if t.p_of is not none else "—" }}</td>
+        <td>{{ t.p_h0 if t.p_h0 is not none else "—" }}</td>
+        <td>{{ t.entropy if t.entropy is not none else "—" }}</td>
+        <td style="font-family:monospace; font-size:12px;">{{ t.p_field or "—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2 style="margin-top:0;">Confirmar triagem</h2>
+  <form method="post" action="/sheet/{{ sheet_id }}/shadow-triage">
+    <textarea name="note" rows="2" style="width:100%; max-width:640px;"
+      placeholder="Nota opcional (ex.: divergência esperada — irmão ambíguo, vermelho)">{{ shadow_triage_note or "" }}</textarea>
+    <div style="margin-top:8px;">
+      <button class="btn btn-primary" type="submit">
+        {% if shadow_triaged_at %}Atualizar triagem{% else %}Marcar como triada{% endif %}
+      </button>
+    </div>
+  </form>
+</div>
+{% endblock %}

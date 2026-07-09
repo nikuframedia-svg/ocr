@@ -208,6 +208,25 @@ class TestRowConditionalPosteriorParams:
         assert h0_a == h0_b == 10.0  # sem fit, N não entra (byte-idêntico)
 
 
+class TestSiblingAwareWriteThreshold:
+    """R253/F3 — o limiar de gravação sobe um tier com irmão plausível
+    (<2 bits), para TODOS os campos da decisão (Sadinle/reject-option)."""
+
+    def test_threshold_rises_under_ambiguity(self):
+        from app.pipeline.scoring_engine import write_confidence_threshold
+        assert write_confidence_threshold("of") == 0.95
+        assert write_confidence_threshold("of", sibling_margin_bits=1.0) == 0.98
+        assert write_confidence_threshold("esp", sibling_margin_bits=0.5) == 0.99
+        assert write_confidence_threshold("larg_mm",
+                                          sibling_margin_bits=0.0) == 0.95
+
+    def test_threshold_unchanged_with_clear_margin(self):
+        from app.pipeline.scoring_engine import write_confidence_threshold
+        assert write_confidence_threshold("of", sibling_margin_bits=8.0) == 0.95
+        assert write_confidence_threshold("modelo",
+                                          sibling_margin_bits=99.0) == 0.95
+
+
 class TestTelemetryGate:
     """R253.7 — CROSS_POSTERIOR_TELEMETRY=0 desliga o bloco do posterior em
     v30 (recuperação de runtime) sem tocar em decisões; na next corre sempre."""

@@ -368,8 +368,8 @@ def main() -> None:
     cal_samples: list[tuple[float, float, float]] = []
     model_rel_samples: list[tuple[float, float]] = []  # R247 — (p_top, acerto)
     post_samples: list[tuple[float, float]] = []  # R252 — (p_of posterior, acerto)
-    # R253.5 — (stats suficientes, acerto) p/ o grid 3D do posterior.
-    post_stats_samples: list[tuple[dict, float]] = []
+    # R253.5 — (stats suficientes, acerto, é_OOD) p/ o grid do posterior.
+    post_stats_samples: list[tuple[dict, float, bool]] = []
     # R253.6 — (p_field, acerto) POR CAMPO, verdade da linha final.
     field_rel_samples: dict[str, list[tuple[float, float]]] = {
         "of": [], "ov": [], "cliente": [], "modelo": []}
@@ -453,10 +453,12 @@ def main() -> None:
                     if c_of and _p_of_v2 is not None:
                         post_samples.append((float(_p_of_v2), 1.0 if C else 0.0))
                     # R253.5 — estatísticas suficientes p/ o grid 3D (OOD
-                    # incluído: y=0 por construção — c_of nunca == t_of).
+                    # incluído: y=0 por construção — c_of nunca == t_of; a
+                    # flag OOD alimenta a âncora do b_H0 e a abstenção).
                     _pst = (c_w or {}).get("_posterior_stats")
                     if _pst is not None:
-                        post_stats_samples.append((_pst, 1.0 if C else 0.0))
+                        post_stats_samples.append(
+                            (_pst, 1.0 if C else 0.0, name == "OOD"))
                     # R253.6 — verdade POR CAMPO da linha final validada.
                     fin_row = (rec[5] if name in ("CORR", "GOOD", "ENG")
                                and len(rec) > 5 else None)
@@ -720,73 +722,116 @@ def main() -> None:
         for r in post_rel:
             print(f"  {r['bucket']}: n={r['n']:4d} conf={r['conf']:.2f} acc={r['acc']:.2f} gap={r['gap']:.2f}")
 
-        # R253.5 — grid 3D (T, b_h0_raw, a_floor) sobre as estatísticas
-        # suficientes do sweep, minimizando Brier com a MESMA fórmula do
-        # motor (p_of recomputado em forma fechada; H0 com N explícito).
+        # R253.5 — fit do posterior sobre as estatísticas suficientes do
+        # sweep, com a MESMA fórmula do motor. O b_H0 é ANCORADO na
+        # evidência OOD real (quantil do b_max das linhas cuja verdade está
+        # fora do plano, por bucket de campos escritos) — um grid livre de
+        # Brier empurrava b_h0 para a borda (−16) e matava a abstenção (o
+        # Brier de p_of não vê P(H0)). Seleção em DOIS estágios: candidatos
+        # com Brier <= mínimo+0.002 (ruído) → o de MAIOR abstenção OOD.
         posterior_fit: dict | None = None
         if post_stats_samples:
             t_grid = sorted(
                 float(k) for k in post_stats_samples[0][0]["by_t"])
+            n_plan_fit = max(
+                int(post_stats_samples[0][0].get("n_plan") or 0), 1)
 
-            def _p_from_stats(st: dict, t: float, b_raw: float,
-                              a_floor: float) -> float:
+            def _bucket_of(st: dict) -> str:
+                nw = int(st.get("n_written") or 0)
+                return ("0-2" if nw <= 2 else "3-4" if nw <= 4
+                        else "5-6" if nw <= 6 else "7+")
+
+            def _pq(vals: list[float], q: float) -> float:
+                v = sorted(vals)
+                return v[min(int(q * len(v)), len(v) - 1)]
+
+            ood_bmax_by_bucket: dict[str, list[float]] = defaultdict(list)
+            for st, _y, is_ood in post_stats_samples:
+                if is_ood:
+                    ood_bmax_by_bucket[_bucket_of(st)].append(
+                        float(st["b_max"]))
+            ood_bmax_all = [v for vs in ood_bmax_by_bucket.values()
+                            for v in vs]
+
+            def _p_h0_pair(st: dict, t: float, eff_by_bucket: dict,
+                           eff_flat: float, a_floor: float
+                           ) -> tuple[float, float]:
+                """(p_of, p_h0) com b_h0_eff por bucket (âncora OOD)."""
                 zp, wof = st["by_t"][f"{t:g}"]
-                w_h0 = (st["odds_h0"] * max(st["n_plan"], 1)
-                        * 2.0 ** ((b_raw - st["b_max"]) / t))
+                eff = eff_by_bucket.get(_bucket_of(st), eff_flat)
+                w_h0 = st["odds_h0"] * 2.0 ** ((eff - st["b_max"]) / t)
                 fb = st["floor_base"]
                 b_fl = (fb + a_floor) if fb is not None else -10.0
                 w_rest = st["n_rest"] * 2.0 ** ((b_fl - st["b_max"]) / t)
                 zz = zp + w_h0 + w_rest
-                return wof / zz if zz > 0 else 0.0
+                if zz <= 0:
+                    return 0.0, 0.0
+                return wof / zz, w_h0 / zz
 
-            best3 = None
+            candidates: list[tuple[float, float, dict]] = []
             for t3 in t_grid:
-                for braw in range(-16, 6):
-                    for afl in range(-5, 6):
-                        se_ = sum(
-                            (_p_from_stats(st, t3, float(braw), float(afl))
-                             - y) ** 2
-                            for st, y in post_stats_samples)
-                        br3 = se_ / len(post_stats_samples)
-                        if best3 is None or br3 < best3[0]:
-                            best3 = (br3, t3, float(braw), float(afl))
-            brier3, t_post, braw_post, afl_post = best3
-            # b_h0_raw POR BUCKET de nº de campos escritos (R253.3) — refina
-            # o flat com T/a_floor fixos; só buckets com amostra >=30.
-            by_bucket: dict[str, list[tuple[dict, float]]] = defaultdict(list)
-            for st, y in post_stats_samples:
-                nw = int(st.get("n_written") or 0)
-                bk = ("0-2" if nw <= 2 else "3-4" if nw <= 4
-                      else "5-6" if nw <= 6 else "7+")
-                by_bucket[bk].append((st, y))
-            braw_by_bucket: dict[str, float] = {}
-            for bk, samp in sorted(by_bucket.items()):
-                if len(samp) < 30:
-                    continue
-                bb = min(
-                    ((sum((_p_from_stats(st, t_post, float(braw), afl_post)
-                           - y) ** 2 for st, y in samp) / len(samp),
-                      float(braw)) for braw in range(-16, 6)),
-                )
-                braw_by_bucket[bk] = bb[1]
+                for q in (0.5, 0.75, 0.9):
+                    for dlt in (0.0, 2.0, 4.0):
+                        eff_by_bucket = {
+                            bk: _pq(vs, q) + dlt
+                            for bk, vs in ood_bmax_by_bucket.items()
+                            if len(vs) >= 15
+                        }
+                        eff_flat = (_pq(ood_bmax_all, q) + dlt
+                                    if ood_bmax_all else 10.0)
+                        for afl in range(-5, 6):
+                            se_ = 0.0
+                            abst = 0
+                            n_ood = 0
+                            for st, y, is_ood in post_stats_samples:
+                                p_of3, p_h03 = _p_h0_pair(
+                                    st, t3, eff_by_bucket, eff_flat,
+                                    float(afl))
+                                se_ += (p_of3 - y) ** 2
+                                if is_ood:
+                                    n_ood += 1
+                                    abst += p_h03 > p_of3
+                            candidates.append((
+                                se_ / len(post_stats_samples),
+                                (abst / n_ood) if n_ood else 0.0,
+                                {"t": t3, "q": q, "delta": dlt,
+                                 "a_floor": float(afl),
+                                 "eff_by_bucket": eff_by_bucket,
+                                 "eff_flat": eff_flat},
+                            ))
+            brier_min = min(c[0] for c in candidates)
+            viable = [c for c in candidates if c[0] <= brier_min + 0.002]
+            viable.sort(key=lambda c: (-c[1], c[0], abs(c[2]["a_floor"])))
+            brier3, abst_rate, cfg = viable[0]
+            t_post = cfg["t"]
+            afl_post = cfg["a_floor"]
+            # persistência na forma que o MOTOR consome: raw = eff −
+            # T·log2(N_fit) — em runtime eff cresce ~log2(N) com o plano
+            # (extremo de N amostras), que é o comportamento desejado.
+            lgn = t_post * _m.log2(n_plan_fit)
+            braw_post = round(cfg["eff_flat"] - lgn, 2)
+            braw_by_bucket = {
+                bk: round(eff - lgn, 2)
+                for bk, eff in cfg["eff_by_bucket"].items()
+            }
 
             def _p_fitted(st: dict) -> float:
-                nw = int(st.get("n_written") or 0)
-                bk = ("0-2" if nw <= 2 else "3-4" if nw <= 4
-                      else "5-6" if nw <= 6 else "7+")
-                return _p_from_stats(
-                    st, t_post, braw_by_bucket.get(bk, braw_post), afl_post)
+                return _p_h0_pair(st, t_post, cfg["eff_by_bucket"],
+                                  cfg["eff_flat"], afl_post)[0]
 
-            fitted_pairs = [(_p_fitted(st), y) for st, y in post_stats_samples]
-            brier_fit = sum((p - y) ** 2 for p, y in fitted_pairs) / len(fitted_pairs)
+            fitted_pairs = [(_p_fitted(st), y)
+                            for st, y, _o in post_stats_samples]
+            brier_fit = sum(
+                (p - y) ** 2 for p, y in fitted_pairs) / len(fitted_pairs)
             best_platt3 = None
             for a10 in range(2, 31, 2):
                 for b10 in range(-40, 41, 4):
                     a3, b3 = a10 / 10.0, b10 / 10.0
                     ll3 = 0.0
                     for p, y in fitted_pairs:
-                        q = min(max(_sig(a3 * _logit(p) + b3), 1e-6), 1 - 1e-6)
-                        ll3 -= y * _m.log(q) + (1 - y) * _m.log(1 - q)
+                        q3 = min(max(_sig(a3 * _logit(p) + b3), 1e-6),
+                                 1 - 1e-6)
+                        ll3 -= y * _m.log(q3) + (1 - y) * _m.log(1 - q3)
                     if best_platt3 is None or ll3 < best_platt3[0]:
                         best_platt3 = (ll3, a3, b3)
             _ll3, pa3, pb3 = best_platt3
@@ -799,15 +844,25 @@ def main() -> None:
                 "b_h0_raw_bits": braw_post,
                 "b_h0_raw_by_n_fields": braw_by_bucket,
                 "posterior_floor_a_bits": afl_post,
-                "posterior_platt_a": pa3, "posterior_platt_b": pb3,
                 "posterior_brier": round(brier_fit, 4),
-                "posterior_brier_calibrado": round(brier_fit_cal, 4),
-                "posterior_brier_grid": round(brier3, 4),
+                "posterior_ood_abstain_rate": round(abst_rate, 3),
+                "posterior_fit_objective": (
+                    f"brier<=min+0.002 → max abstenção OOD (q={cfg['q']}, "
+                    f"delta={cfg['delta']}, n_plan_fit={n_plan_fit})"),
             }
+            # Platt só persiste se NÃO piorar o Brier (o grid otimiza
+            # log-loss; nas caudas pode degradar a métrica de decisão).
+            if brier_fit_cal <= brier_fit + 1e-4:
+                posterior_fit["posterior_platt_a"] = pa3
+                posterior_fit["posterior_platt_b"] = pb3
+                posterior_fit["posterior_brier_calibrado"] = round(
+                    brier_fit_cal, 4)
             summary["posterior_fit"] = posterior_fit
-            print(f"fit POSTERIOR (grid 3D): T={t_post} b_h0_raw={braw_post} "
-                  f"a_floor={afl_post} brier={brier_fit:.4f} "
-                  f"(Platt a={pa3} b={pb3} → {brier_fit_cal:.4f}) "
+            print(f"fit POSTERIOR (âncora OOD): T={t_post} "
+                  f"b_h0_raw={braw_post} a_floor={afl_post} "
+                  f"brier={brier_fit:.4f} abstenção OOD={abst_rate:.1%} "
+                  f"(Platt a={pa3} b={pb3} → {brier_fit_cal:.4f}"
+                  f"{'' if brier_fit_cal <= brier_fit + 1e-4 else ' — descartado'}) "
                   f"buckets={braw_by_bucket}")
 
         # R253.6 — reliability + Platt POR CAMPO (verdade da linha final).
@@ -834,9 +889,12 @@ def main() -> None:
                 br_f_cal = sum(
                     (_sig(paf * _logit(p) + pbf) - y) ** 2 for p, y in samp
                 ) / len(samp)
-                field_platt[f] = [paf, pbf]
-                entry.update({"platt_a": paf, "platt_b": pbf,
-                              "brier_calibrado": round(br_f_cal, 4)})
+                # só persiste se MELHORAR o Brier do campo (o grid otimiza
+                # log-loss; 'ov' p.ex. piorava ligeiramente).
+                if br_f_cal < br_f - 1e-4:
+                    field_platt[f] = [paf, pbf]
+                    entry.update({"platt_a": paf, "platt_b": pbf,
+                                  "brier_calibrado": round(br_f_cal, 4)})
             field_rel_summary[f] = entry
         if field_rel_summary:
             summary["field_reliability"] = field_rel_summary
@@ -852,11 +910,22 @@ def main() -> None:
             params = _json.loads(cp.read_text(encoding="utf-8")) if cp.exists() else {}
             cal_prev = dict(params.get("calibration") or {})
             new_cal = dict(cal_prev)  # UPDATE, nunca substituir (R253.5)
-            new_cal.update({
-                "fitted_at_run": str(args.out_dir),
-                "temperature_bits": t_fit, "s_ood_bits": s_fit,
-                "brier": round(brier, 4), "n_samples": len(cal_samples),
-            })
+            new_cal["fitted_at_run"] = str(args.out_dir)
+            # A calibração LOGÍSTICA do R243 foi escolhida À MÃO na região
+            # de decisão (chosen_by) CONTRA o Brier-mínimo — o fit novo não
+            # a sobrescreve; fica como sugestão *_brier_min para leitura.
+            if cal_prev.get("chosen_by"):
+                new_cal.update({
+                    "temperature_bits_brier_min": t_fit,
+                    "s_ood_bits_brier_min": s_fit,
+                    "brier_brier_min": round(brier, 4),
+                })
+            else:
+                new_cal.update({
+                    "temperature_bits": t_fit, "s_ood_bits": s_fit,
+                    "brier": round(brier, 4),
+                    "n_samples": len(cal_samples),
+                })
             # Governança R244: piso de amostra p/ o posterior; backup do
             # dict anterior; proveniência do run.
             if posterior_fit and posterior_fit["n_samples"] >= 300:

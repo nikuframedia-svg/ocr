@@ -398,6 +398,12 @@ def init_db() -> None:
             c.execute("ALTER TABLE sheets ADD COLUMN shadow_scoring_json TEXT")
         if "shadow_scored_at" not in cols:
             c.execute("ALTER TABLE sheets ADD COLUMN shadow_scored_at TIMESTAMP")
+        # R253/F2 — triagem do soak: o critério "todas as divergências
+        # triadas" do procedimento de flip só é auditável com carimbo.
+        if "shadow_triaged_at" not in cols:
+            c.execute("ALTER TABLE sheets ADD COLUMN shadow_triaged_at TIMESTAMP")
+        if "shadow_triage_note" not in cols:
+            c.execute("ALTER TABLE sheets ADD COLUMN shadow_triage_note TEXT")
         shadow_cols = {r["name"] for r in c.execute("PRAGMA table_info(shadow_runs)").fetchall()}
         if "cells_very_different" not in shadow_cols:
             c.execute("ALTER TABLE shadow_runs ADD COLUMN cells_very_different INTEGER")
@@ -546,6 +552,36 @@ def fail_shadow_run(run_id: int, error_message: str) -> None:
                WHERE id = ?""",
             (error_message[:2000], run_id),
         )
+
+
+def mark_shadow_triaged(sheet_id: int, note: str | None = None) -> None:
+    """R253/F2 — carimbo de triagem humana do soak (auditável)."""
+    with conn() as c:
+        c.execute(
+            """UPDATE sheets
+               SET shadow_triaged_at = CURRENT_TIMESTAMP,
+                   shadow_triage_note = ?
+               WHERE id = ?""",
+            ((note or "").strip()[:2000] or None, sheet_id),
+        )
+
+
+def shadow_queue(limit: int = 500) -> list[dict]:
+    """R253/F2 — folhas com sombra por triar (para /shadow-queue)."""
+    with conn() as c:
+        return [dict(r) for r in c.execute(
+            """SELECT id, captured_at, status,
+                      COALESCE(json_extract(sheet_data, '$.template_name'),
+                               json_extract(raw_extraction,
+                                            '$.template_name'))
+                          AS template_name,
+                      shadow_scored_at, shadow_triaged_at
+               FROM sheets
+               WHERE shadow_scoring_json IS NOT NULL
+                 AND shadow_triaged_at IS NULL
+               ORDER BY id DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()]
 
 
 # R110 — Qwen agent session persistence ------------------------------------

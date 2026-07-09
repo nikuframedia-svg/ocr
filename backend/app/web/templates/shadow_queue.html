@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Fila de triagem da sombra — Metalogalva OCR{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Soak — folhas com sombra por triar</h1>
+</div>
+<div class="card">
+  <p style="font-size:13px; color:var(--muted,#888);">
+    Passo 2 do procedimento de flip: cada folha com sombra tem de ser triada
+    via a vista de divergências. Ordenado por mais recente; divergências de
+    identidade destacam-se na própria vista.
+  </p>
+  {% if sheets %}
+  <div style="overflow-x:auto;">
+  <table class="table" style="font-size:13px;">
+    <thead><tr><th>#</th><th>Capturada</th><th>Template</th><th>Estado</th>
+               <th>Sombra corrida</th><th></th></tr></thead>
+    <tbody>
+      {% for s in sheets %}
+      <tr>
+        <td>{{ s.id }}</td>
+        <td>{{ s.captured_at }}</td>
+        <td>{{ s.template_name or "—" }}</td>
+        <td>{{ s.status }}</td>
+        <td>{{ s.shadow_scored_at }}</td>
+        <td><a class="btn" href="/sheet/{{ s.id }}/shadow-view">Triar →</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p>✅ Sem folhas por triar.</p>
+  {% endif %}
+</div>
+{% endblock %}

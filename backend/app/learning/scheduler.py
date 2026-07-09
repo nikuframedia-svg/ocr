@@ -85,6 +85,15 @@ def run_learning_cycle() -> int | None:
             cross_refit.refit_from_db()
         except Exception:
             logger.exception("cross_refit falhou — ciclo continua")
+        # R253/F3 — monitor de calibração (staleness + CUSUM das células
+        # auto-escritas). ADITIVO: deteta e emite evento kernel; nunca
+        # reverte — a ação (re-fit ou git revert do flip) é humana.
+        try:
+            from app.learning import calibration_monitor
+
+            calibration_monitor.run_monitor()
+        except Exception:
+            logger.exception("calibration monitor falhou — ciclo continua")
         store.finish_run(
             run_id,
             status="done",

@@ -141,6 +141,46 @@ def _set_file_meta(refs: dict[str, Any], prefix: str, path: Path | str | None) -
     refs[f"{prefix}_mtime"] = st.st_mtime
     refs[f"{prefix}_size"] = st.st_size
     refs[f"{prefix}_sha256"] = file_sha256(p)
+    if prefix == "plan":
+        # R253/F2 — idade REAL do plano por CONTEÚDO: re-copiar o mesmo
+        # xlsx renova o mtime e o π_H0 (quant7) subestimava a idade →
+        # sobreconfiança com plano velho. first-seen por sha256 persistido.
+        refs["plan_content_mtime"] = _plan_first_seen(
+            refs["plan_sha256"], st.st_mtime)
+
+
+_PLAN_PROVENANCE_PATH = _REPO_ROOT / "data" / "plan_provenance.json"
+
+
+def _plan_first_seen(sha: str, mtime: float) -> float:
+    """Primeira vez que este CONTEÚDO de plano foi visto (persistente em
+    data/plan_provenance.json — runtime, gitignored como data/*). Escrita
+    atómica; qualquer falha degrada para o mtime (comportamento antigo)."""
+    if not sha:
+        return mtime
+    try:
+        data = json.loads(_PLAN_PROVENANCE_PATH.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, ValueError):
+        data = {}
+    if sha in data:
+        try:
+            return float(data[sha])
+        except (TypeError, ValueError):
+            return mtime
+    data[sha] = mtime
+    if len(data) > 20:  # aparar histórico — 20 planos distintos chegam
+        for k in sorted(data, key=lambda kk: float(data[kk] or 0))[:-20]:
+            data.pop(k, None)
+    try:
+        _PLAN_PROVENANCE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _PLAN_PROVENANCE_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
+        tmp.replace(_PLAN_PROVENANCE_PATH)
+    except OSError:
+        pass
+    return mtime
 
 
 def _snapshot_file(

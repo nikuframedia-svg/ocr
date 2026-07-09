@@ -19,11 +19,20 @@ import argparse
 import csv
 import json
 import sqlite3
+import sys
 from collections import Counter
 from pathlib import Path
 
-_CROSSABLE = ("of", "ov", "cliente", "modelo", "lote",
-              "comp_mm", "larg_mm", "lbase", "ltopo", "esp", "dbase", "dtopo")
+_REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_REPO / "backend"))
+
+# R253/F2 — a régua do diff é PARTILHADA com /sheet/<id>/shadow-view: a
+# mesma decisão de "diverge" no CSV offline e no ecrã de triagem.
+from app.cross_check.shadow_diff import diff_prod_vs_shadow  # noqa: E402
+# R253/F2 — a produção NÃO vive em sheets.cross_check (a coluna nunca
+# existiu — o SELECT antigo rebentava na primeira corrida real); vive no
+# storage por ficheiros (kanban_refs/03_Cross_Check + índice).
+from app.cross_check.storage import load_sheet_cross_check  # noqa: E402
 
 
 def main() -> None:
@@ -42,43 +51,32 @@ def main() -> None:
     status_flips: Counter = Counter()
     rows_out: list[list] = []
     for s in con.execute(
-        "SELECT id, cross_check, shadow_scoring_json FROM sheets "
-        "WHERE id >= ? AND shadow_scoring_json IS NOT NULL "
-        "AND cross_check IS NOT NULL ORDER BY id",
+        "SELECT id, shadow_scoring_json FROM sheets "
+        "WHERE id >= ? AND shadow_scoring_json IS NOT NULL ORDER BY id",
         (args.since_id,),
     ):
         try:
-            prod = json.loads(s["cross_check"] or "{}")
             shad = json.loads(s["shadow_scoring_json"] or "{}")
         except (TypeError, ValueError):
             continue
-        p_rows = prod.get("rows") or []
-        s_rows = shad.get("rows") or []
-        if not s_rows:
+        prod = load_sheet_cross_check(int(s["id"]), include_stale=True)
+        if not prod:
+            continue
+        if not (shad.get("rows") or []):
             continue
         n_sheets += 1
-        for i in range(min(len(p_rows), len(s_rows))):
-            pf = (p_rows[i] or {}).get("fields") or {}
-            sf = (s_rows[i] or {}).get("fields") or {}
-            for field in _CROSSABLE:
-                pc, sc = pf.get(field) or {}, sf.get(field) or {}
-                pv = str(pc.get("value") or pc.get("ref") or "").strip()
-                sv = str(sc.get("value") or "").strip()
-                if not pv and not sv:
-                    continue
-                n_cells += 1
-                ps = str(pc.get("status") or "")
-                ss = str(sc.get("status") or "")
-                if pv.upper() != sv.upper():
-                    n_diff += 1
-                    diff_by_field[field] += 1
-                    rows_out.append([
-                        s["id"], i, field, pv[:40], sv[:40], ps, ss,
-                        sc.get("decision_confidence"),
-                        sc.get("decision_reason") or "",
-                    ])
-                elif ps != ss:
-                    status_flips[(ps, ss)] += 1
+        d = diff_prod_vs_shadow(prod, shad)
+        n_cells += d["n_cells"]
+        n_diff += len(d["diffs"])
+        for dd in d["diffs"]:
+            diff_by_field[dd["field"]] += 1
+            rows_out.append([
+                s["id"], dd["row"], dd["field"], dd["producao"][:40],
+                dd["sombra"][:40], dd["status_prod"], dd["status_sombra"],
+                dd["sombra_conf"], dd["sombra_reason"],
+            ])
+        for fl in d["status_flips"]:
+            status_flips[(fl["de"], fl["para"])] += 1
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("w", newline="", encoding="utf-8") as fh:

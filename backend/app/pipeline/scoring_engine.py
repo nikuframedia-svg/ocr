@@ -2864,8 +2864,25 @@ _REVIEW_CRITICALITY = {
 }
 
 
-def write_confidence_threshold(field: str) -> float:
-    """P(top) mínimo para auto-gravar `field` (perda esperada, R243)."""
+# R253/F3 — com IRMÃOS PLAUSÍVEIS (sibling_margin < 2 bits) o limiar SOBE
+# um tier (Sadinle 2017: a região de rejeição alarga com múltiplos
+# candidatos plausíveis — a evidência: bucket 0.9-1.0 do MODEL_SIB com
+# conf 0.993 vs acc 0.776). Antes só o campo `modelo` descontava
+# ambiguidade; of/ov/cliente/lote da MESMA decisão de winner não.
+_WRITE_P_THRESHOLD_AMBIG = {
+    "esp": 0.99, "comp_mm": 0.99,
+    "of": 0.98, "ov": 0.98, "cliente": 0.98, "modelo": 0.98, "lote": 0.98,
+}
+
+
+def write_confidence_threshold(
+    field: str, sibling_margin_bits: float | None = None
+) -> float:
+    """P(top) mínimo para auto-gravar `field` (perda esperada, R243).
+    R253/F3 — sobe um tier quando há um irmão a <2 bits (ver acima)."""
+    if (sibling_margin_bits is not None
+            and float(sibling_margin_bits) < _FS_SIBLING_AMBIG_BITS):
+        return _WRITE_P_THRESHOLD_AMBIG.get(field, 0.95)
     return _WRITE_P_THRESHOLD.get(field, 0.90)
 
 
@@ -3332,6 +3349,12 @@ def _mark_winner_cell(cell: dict, winner: dict | None) -> dict:
             elif winner.get("_p_of") is not None:
                 conf = _platt_calibrate(winner.get("_p_of"), "of")
         out.setdefault("decision_confidence", conf)
+    # R253/F3 — a margem de irmãos viaja na célula: o gate de gravação sobe
+    # o limiar um tier quando há um irmão plausível (<2 bits) — para TODOS
+    # os campos da decisão, não só `modelo` (Sadinle/reject-option).
+    if winner.get("_sibling_margin_bits") is not None:
+        out.setdefault("sibling_margin_bits",
+                       winner.get("_sibling_margin_bits"))
     if winner.get("_score_reasons"):
         out["score_reasons"] = winner.get("_score_reasons")
     match_kind = _winner_match_kind(winner)
@@ -4760,10 +4783,13 @@ def shadow_score(
         prod_bias = dict(prod_bias or {})
         prod_bias["operator"] = _op
     # R252 — idade do plano (dias) para o prior π_H0 da hipótese nula do
-    # posterior (quant7). Do mtime do xlsx carregado; sem plano → None
-    # (fallback do bucket fresco).
+    # posterior (quant7). Sem plano → None (fallback do bucket fresco).
+    # R253/F2 — preferir a idade por CONTEÚDO (plan_content_mtime, primeira
+    # vez que este sha256 foi visto — ref_watcher): re-copiar o mesmo xlsx
+    # renova o mtime e o π_H0 subestimava (sobreconfiança com plano velho).
     try:
-        pm = float(refs.get("plan_mtime") or 0.0)
+        pm = float(refs.get("plan_content_mtime")
+                   or refs.get("plan_mtime") or 0.0)
         if pm > 0:
             age_days = max((time.time() - pm) / 86400.0, 0.0)
             prod_bias = dict(prod_bias or {})
