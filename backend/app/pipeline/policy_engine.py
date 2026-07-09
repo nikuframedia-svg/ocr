@@ -16,7 +16,6 @@ from __future__ import annotations
 import copy
 import json
 import logging
-from typing import Any
 
 from app.web import db
 
@@ -184,7 +183,7 @@ def promote_policy_from_proposal(
                     payload=payload,
                     proposal_id=proposal_id,
                 )
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("falha ao gravar template_overlay")
 
     return version_id
@@ -385,7 +384,7 @@ def _load_validated_sheets_for_eval(window: int) -> list[dict]:
                    ORDER BY validated_at DESC LIMIT ?""",
                 (window,),
             ).fetchall()
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception("R117 eval gate: falha a ler sheets validadas")
         return []
 
@@ -443,7 +442,7 @@ def run_eval_gate(
         from app.pipeline.scoring_engine import shadow_score
         from app.cross_check.ref_watcher import get_watcher
         refs = get_watcher().get_refs()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.exception("R117 eval gate: falha a carregar shadow_score/refs")
         return {
             "decision": "passed_dry_run",
@@ -468,7 +467,7 @@ def run_eval_gate(
         try:
             scoring_b, *_ = shadow_score(s["sheet_data"], s["dq_audit"], refs)
             baseline_attn.append(_cells_need_attention(scoring_b))
-        except Exception:  # noqa: BLE001
+        except Exception:
             failed_sheets += 1
             continue
         if simulable:
@@ -483,7 +482,7 @@ def run_eval_gate(
                     proposal_refs,
                 )
                 with_attn.append(_cells_need_attention(scoring_w))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 # Se a proposta rebenta o motor numa folha, conta como piora
                 # severa — pre-warning para o reviewer humano.
                 with_attn.append(_cells_need_attention(scoring_b) + 1)
@@ -607,7 +606,7 @@ def check_circuit_breaker(
             "recommendation": ("rollback ultima versao activa" if triggered
                                else "nenhuma accao necessaria"),
         }
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return {"status": "error", "error": str(e)}
 
 

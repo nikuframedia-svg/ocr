@@ -27,24 +27,24 @@ from pathlib import Path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT / "backend"))
 
-import httpx  # noqa: E402
-from app.config import Settings, get_settings  # noqa: E402
-from app.evaluation.metrics import (  # noqa: E402
+import httpx
+from app.config import Settings, get_settings
+from app.evaluation.metrics import (
     BaselineMetrics,
     FieldComparison,
     compare_extractions,
     compute_metrics,
     worst_errors,
 )
-from app.observability.logger import configure_logging, get_logger  # noqa: E402
-from app.pipeline.inference.schemas import KanbanExtraction  # noqa: E402
-from app.pipeline.inference.vllm_client import (  # noqa: E402
+from app.observability.logger import configure_logging, get_logger
+from app.pipeline.inference.schemas import KanbanExtraction
+from app.pipeline.inference.vllm_client import (
     ExtractionParseError,
     extract,
 )
-from jinja2 import Template  # noqa: E402
-from pydantic import ValidationError  # noqa: E402
-from rich.console import Console  # noqa: E402
+from jinja2 import Template
+from pydantic import ValidationError
+from rich.console import Console
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}
 _TEMPLATE_PATH = Path(__file__).parent / "templates" / "baseline.md.j2"

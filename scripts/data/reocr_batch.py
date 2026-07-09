@@ -23,7 +23,7 @@ _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
 sys.path.insert(0, str(_REPO / "backend"))
 
-from app.web.ocr_runner import rerun_pipeline_for_template  # noqa: E402
+from app.web.ocr_runner import rerun_pipeline_for_template
 
 
 def list_non_bobine_sheets(db_path: Path) -> list[dict]:

@@ -117,7 +117,7 @@ def _kanbans_by_ov() -> dict[str, list[dict]]:
                 "sheet_iso_date": r["sheet_iso_date"],
                 "setor_maquina": r["setor_maquina"],
             })
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     return out
 

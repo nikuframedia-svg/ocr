@@ -57,7 +57,7 @@ sys.path.insert(0, str(_REPO / "backend"))
 # temperatura) para o grid 3D do --calibrate recomputar p_of em forma fechada.
 # Tem de estar setado ANTES de importar app.pipeline.scoring_engine (a flag é
 # lida no import). O baseline é desligado em _load_engine_from_ref.
-import os  # noqa: E402
+import os
 
 os.environ.setdefault("CROSS_POSTERIOR_SWEEP", "1")
 
@@ -408,7 +408,7 @@ def main() -> None:
                         base, row, refs, idx_b, tpl, extra_bias=prod_bias)
                     c_of, mg, cb, c_w = _winner_of(
                         cand, row, refs, idx_c, tpl, extra_bias=prod_bias)
-                except Exception as exc:  # noqa: BLE001 — não parar o batch
+                except Exception as exc:
                     errs += 1
                     print(f"  ERRO s{sid} r{i}: {exc}", file=sys.stderr)
                     continue
@@ -611,7 +611,6 @@ def main() -> None:
     # R243 — calibração (T, s_ood) por grid-search a minimizar o Brier e
     # relatório de reliability (|confiança − acerto| por bucket).
     if cal_samples:
-        import math as _math
 
         def _p(bits, margin, t, s_ood):
             eff = min(margin, bits - s_ood)

@@ -299,7 +299,7 @@ def _fewshot_block(template_name: str) -> str:
             "vocabulary — but read THIS image, do not copy their values:\n"
             f"{worked}\n"
         )
-    except Exception:  # noqa: BLE001 — few-shot is best-effort, never break OCR
+    except Exception:
         logger.exception("few-shot block build failed for %s", template_name)
         return ""
 

@@ -160,7 +160,7 @@ def run_monitor(p0: float = 0.95) -> dict:
         daily = collect_writeback_outcomes()
         report["n_outcomes"] = len(daily)
         report["cusum"] = cusum(daily, p0) if daily else None
-    except Exception:  # noqa: BLE001 — monitor nunca parte o ciclo
+    except Exception:
         logger.exception("calibration monitor: recolha falhou")
         report["cusum"] = None
     alarms: list[str] = []
@@ -179,6 +179,6 @@ def run_monitor(p0: float = 0.95) -> dict:
                 "staleness": report["staleness"],
                 "cusum_s": (report.get("cusum") or {}).get("s_final"),
             })
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     return report

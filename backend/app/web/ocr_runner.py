@@ -32,15 +32,15 @@ import json  # R132 — parse Pass-1.5 side-detect response
 import sys  # R132 — side-detect failure log
 from typing import Final  # R132
 
-import ocr6  # type: ignore  # noqa: E402
+import ocr6  # type: ignore
 
-from app.dq.alignment import check_and_fix_alignment  # noqa: E402
-from app.pipeline.prompt_builder import (  # noqa: E402
+from app.dq.alignment import check_and_fix_alignment
+from app.pipeline.prompt_builder import (
     build_discovery_prompt,
     build_prompt,
     build_side_detect_prompt,
 )
-from app.templates_registry import (  # noqa: E402
+from app.templates_registry import (
     DEFAULT_TEMPLATE,
     TEMPLATES,
     detect_template_with_reason,
@@ -188,7 +188,7 @@ def run_discovery(image_path: Path) -> dict:
             finally:
                 ocr6.PROMPT, ocr6.PROMPT_HASH = prev
         raw = getattr(result, "raw_response", "") or ""
-    except Exception as exc:  # noqa: BLE001 — Ollama down, imagem ilegível…
+    except Exception as exc:
         print(f"[discovery] {image_path.name}: {type(exc).__name__}: {exc}",
               file=sys.stderr)
         return parse_discovery_response("")
@@ -563,7 +563,7 @@ def run_pipeline(image_path: Path, page_hint: str | None = None) -> dict:
             t = time.perf_counter()
             try:
                 detected = _detect_side(image_path)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 print(
                     f"[side_detect] {image_path.name}: {type(exc).__name__}: {exc}"
                     " — indeterminado, marcado para revisão",

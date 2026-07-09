@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import templates_registry as reg
-from app.web import db, main, ocr_queue, template_store
+from app.web import db, main, template_store
 
 _DESKTOP = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
 _MOBILE = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)"}

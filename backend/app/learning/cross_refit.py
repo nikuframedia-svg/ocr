@@ -254,7 +254,7 @@ def refit_from_db() -> dict | None:
         from app.pipeline import scoring_engine
 
         scoring_engine._load_cross_params.cache_clear()
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     logger.info("cross_refit: parâmetros atualizados (%s)", list(changed))
     return {"updated": list(changed)}

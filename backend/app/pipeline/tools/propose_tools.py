@@ -137,7 +137,7 @@ def propose_rule(
             risk_class=risk,
             qwen_confidence=float(qwen_confidence),
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return {"status": "error", "error": f"Falhou ao gravar: {e}"}
 
     # R117 — emit kernel event para a UI / cron / kernel reagirem
@@ -243,7 +243,7 @@ def propose_template_change(
             risk_class="review",
             qwen_confidence=float(qwen_confidence),
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return {"status": "error", "error": f"Falhou ao gravar: {e}"}
 
     # R117 — emit kernel event
@@ -301,7 +301,7 @@ def propose_cpis_change(
             risk_class="review",
             qwen_confidence=float(qwen_confidence),
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return {"status": "error", "error": f"Falhou ao gravar: {e}"}
 
     # R117 — emit kernel event

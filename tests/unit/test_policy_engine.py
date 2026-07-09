@@ -8,7 +8,6 @@ import pytest
 
 from app.pipeline import policy_engine
 from app.pipeline.tools import (
-    propose_cpis_change,
     propose_rule,
     propose_template_change,
     reset_session_buffers,
@@ -334,8 +333,6 @@ class TestEvalGateShadow:
                 return {"loaded_at": "2026-05-21T00:00:00", "clientes_plan": frozenset()}
 
         # baseline: 4 atenções; with_proposal: 3 atenções (melhora)
-        call_state = {"i": 0}
-
         def _fake_shadow_score(_sd, _da, refs):
             # Alterna baseline/proposal pela presença do sufixo "+prop" em loaded_at
             attn = 3 if "+prop" in str(refs.get("loaded_at", "")) else 4

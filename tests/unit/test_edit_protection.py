@@ -541,7 +541,7 @@ class TestEditPersistsEndToEnd:
             "footer": {},
             "rows": [{
                 "cliente": "ELECNOR", "ov": "2410001", "of": "262107",
-                "modelo": "OMEGA 12OO H",  # OCR com O→0 — será alinhado  # noqa: RUF001
+                "modelo": "OMEGA 12OO H",  # OCR com O→0 — será alinhado
                 "comp_mm": "1200",
             }],
         }

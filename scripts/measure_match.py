@@ -70,7 +70,10 @@ def _section_snapshot(counter: Counter) -> dict:
 def measure(label: str = "current", *, include_stale: bool = False) -> dict:
     sheets = storage.iter_sheet_cross_checks(include_stale=include_stale)
     summary = storage.load_summary()
-    total = 0; match = 0; no_match = 0; na = 0
+    total = 0
+    match = 0
+    no_match = 0
+    na = 0
     by_field: Counter = Counter()
     no_match_by_field: Counter = Counter()
     by_section: dict[str, Counter] = defaultdict(Counter)

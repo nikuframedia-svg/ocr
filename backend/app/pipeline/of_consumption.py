@@ -49,7 +49,7 @@ def _plan_cutoff_iso() -> str | None:
         import datetime as _dt
 
         return _dt.date.fromtimestamp(pm).isoformat()
-    except Exception:  # noqa: BLE001 — corte é proteção, nunca bloqueia
+    except Exception:
         return None
 
 
@@ -148,7 +148,7 @@ def _kanban_consumption(cutoff_iso: str | None = None) -> dict[tuple[str, str], 
             rows = c.execute(sql, args).fetchall()
         for r in rows:
             out[(str(r["of"]), str(r["m"]))] = float(r["q"] or 0)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     return out
 
@@ -221,7 +221,7 @@ def recent_active_ofs(
             s = "".join(ch for ch in str(r["of"]) if ch.isdigit())
             if s:
                 out.add(s.zfill(6) if len(s) <= 6 else s)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return frozenset()
     result = frozenset(out)
     with _lock:

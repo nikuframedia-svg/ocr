@@ -35,20 +35,20 @@ sys.path.insert(0, str(_REPO))
 # Ensure backend app importable
 sys.path.insert(0, str(_REPO / "backend"))
 
-from app import kernel  # noqa: E402  — R110.E event log (R117: hoisted for hot-path emits)
-from app.config import get_settings  # noqa: E402  — R236: gate de gravação marginal
-from app.web import attractors, db, export, kpi_params, kpis, llm_assistant, ocr_queue, ocr_runner, pdf_ingest, template_store  # noqa: E402
-from app.cross_check import (  # noqa: E402
+from app import kernel
+from app.config import get_settings
+from app.web import attractors, db, export, kpi_params, kpis, llm_assistant, ocr_queue, ocr_runner, pdf_ingest, template_store
+from app.cross_check import (
     cross_check_sheet,
     get_watcher,
     load_summary,
     load_to_analisar,
     store_cross_check,
 )
-from app.cross_check import ref_importer  # noqa: E402
-from app.dq.machines import resolve_machine_from_setor  # noqa: E402
-from app.dq.operador_snap import snap_operador  # noqa: E402
-from app.learning import (  # noqa: E402
+from app.cross_check import ref_importer
+from app.dq.machines import resolve_machine_from_setor
+from app.dq.operador_snap import snap_operador
+from app.learning import (
     materialize as learning_materialize,
     metrics as learning_metrics,
     scheduler as learning_scheduler,
@@ -92,7 +92,7 @@ def _get_operadores() -> tuple[str, ...]:
         snames = tuple(s for s in snames if s)
         if snames:
             return snames
-    except Exception:  # noqa: BLE001 — boot order: get_watcher pode falhar
+    except Exception:
         pass
     return _OPERADORES_FALLBACK
 
@@ -136,7 +136,7 @@ templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 # R69 — production sectors available as a Jinja global so the export
 # modal can iterate them without importing kpis in templates.
-from app.web.kpis import PRODUCTION_SECTORS  # noqa: E402
+from app.web.kpis import PRODUCTION_SECTORS
 templates.env.globals["production_sectors"] = PRODUCTION_SECTORS  # type: ignore[assignment]
 
 # R136 — filtro Jinja: o date-picker do cabeçalho (célula header.data) é a
@@ -185,7 +185,7 @@ def _process_sheet_ocr(sheet_id: int) -> None:
                 db.set_needs_review(sheet_id, result.get("review_reason") or "side_review")
             else:
                 db.clear_needs_review(sheet_id)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         try:
             _run_and_store_cross_check(
@@ -194,7 +194,7 @@ def _process_sheet_ocr(sheet_id: int) -> None:
                 ocr_timing=result.get("timing"),
                 ocr_metrics=result.get("metrics"),
             )
-        except Exception as cc_err:  # noqa: BLE001
+        except Exception as cc_err:
             print(f"[worker cross-check] sheet {sheet_id}: {cc_err}", file=sys.stderr)
             traceback.print_exc()
         # rev00 — só deposita CSV se a folha NÃO estiver marcada p/ revisão
@@ -203,7 +203,7 @@ def _process_sheet_ocr(sheet_id: int) -> None:
         try:
             if not result.get("needs_review"):
                 _deposit_csv_to_factory(sheet_id)
-        except Exception as dep_err:  # noqa: BLE001
+        except Exception as dep_err:
             print(f"[worker deposit] sheet {sheet_id}: {dep_err}", file=sys.stderr)
         # Task C E4 — carimba a unidade fabril da folha a partir do template
         # detetado (builtins → NULL = Trofa). Best-effort: nunca falha o OCR.
@@ -211,12 +211,12 @@ def _process_sheet_ocr(sheet_id: int) -> None:
             tpl_name = (result.get("raw") or {}).get("template_name")
             db.set_sheet_unidade(
                 sheet_id, template_store.unidade_for_template(tpl_name))
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         try:
             db.update_error(sheet_id, f"{type(e).__name__}: {e}")
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         traceback.print_exc()
 
@@ -266,14 +266,14 @@ def _process_discovery(template_id: int) -> None:
                 "field_map": suggestion["field_map"],
                 "warnings": suggestion["warnings"],
             }, ensure_ascii=False))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         try:
             db.set_kanban_template_status(
                 template_id, "analisado",
                 discovery_json=json.dumps(
                     {"parse_ok": False, "error": f"{type(e).__name__}: {e}"},
                     ensure_ascii=False))
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         traceback.print_exc()
 
@@ -288,7 +288,7 @@ def _startup() -> None:
         if loaded.get("loaded"):
             print(f"[templates] runtime: {', '.join(loaded['loaded'])}",
                   file=sys.stderr)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         print(f"[templates startup] {e}", file=sys.stderr)
     # R71 — boot background OCR worker + recover any sheets stuck in
     # status='pending' from a previous process. The 10s window skips
@@ -306,7 +306,7 @@ def _startup() -> None:
             ocr_queue.enqueue_discovery(tpl["id"])
             print(f"[templates startup] re-enqueued discovery #{tpl['id']}",
                   file=sys.stderr)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         print(f"[templates discovery startup] {e}", file=sys.stderr)
     try:
         if ref_importer.start_background_importer():
@@ -316,7 +316,7 @@ def _startup() -> None:
                 f"{st.get('source_dir')} every {st.get('interval_seconds')}s",
                 file=sys.stderr,
             )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         print(f"[refs-import startup] {e}", file=sys.stderr)
 
 
@@ -411,7 +411,7 @@ def _git_short_sha() -> str:
         )
         if out.returncode == 0 and out.stdout.strip():
             sha = out.stdout.strip()
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     _GIT_SHA_CACHE = sha
     return sha
@@ -474,7 +474,7 @@ def _register_image_sheet(
     # R117 — kernel event: folha aceite pelo servidor (pré-OCR).
     try:
         kernel.emit_event("sheet_uploaded", {"sheet_id": sheet_id, "image_path": rel_path})
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     if run_autocrop:
         # Round 46 — auto-crop kanban paper from photo (background removed,
@@ -482,7 +482,7 @@ def _register_image_sheet(
         try:
             from .image_crop import auto_crop
             auto_crop(page_path)
-        except Exception as crop_err:  # noqa: BLE001
+        except Exception as crop_err:
             print(f"[auto-crop] sheet upload {page_path.name}: {crop_err}", file=sys.stderr)
     # R71 — enqueue for background OCR (worker drains FIFO serially, matching
     # Ollama's single-inference GPU constraint).
@@ -615,7 +615,7 @@ def _human_edited_paths(sheet_id: int) -> frozenset[str]:
                 "WHERE sheet_id = ? ORDER BY id ASC",
                 (sheet_id,),
             ).fetchall()
-    except Exception:  # noqa: BLE001 — sem edits / DB indisponível: nada protegido
+    except Exception:
         return frozenset()
     last: dict[str, str] = {}
     for r in rows:
@@ -632,7 +632,7 @@ def _last_human_field_edits(sheet_id: int) -> dict[str, str]:
                 "WHERE sheet_id = ? ORDER BY id ASC",
                 (sheet_id,),
             ).fetchall()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return {}
     last: dict[str, tuple[str, str]] = {}
     for r in rows:
@@ -655,7 +655,7 @@ def _has_human_row_structure_edits(sheet_id: int) -> bool:
                 "SELECT field_path, source FROM edits WHERE sheet_id = ?",
                 (sheet_id,),
             ).fetchall()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
     for r in rows:
         path = str(r["field_path"] or "")
@@ -676,7 +676,7 @@ def _rebuild_sheet_data_from_raw(sheet_id: int, sheet: dict) -> bool:
     for path, value in _last_human_field_edits(sheet_id).items():
         try:
             db._set_by_path(rebuilt, path, value)
-        except Exception:  # noqa: BLE001
+        except Exception:
             continue
     if rebuilt == current:
         return False
@@ -766,7 +766,7 @@ def _maybe_apply_snap(
     try:
         db.apply_edit(sheet_id, field_path, canonical, source="system")
         return True
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
@@ -860,7 +860,7 @@ def _apply_operador_snap(
         try:
             db.apply_edit(sheet_id, "header.pernr", sr.pernr, source="system")
             n_applied += 1
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     # Snap name when changed (R133 — salta se o operador editou à mão)
@@ -869,7 +869,7 @@ def _apply_operador_snap(
         try:
             db.apply_edit(sheet_id, "header.operador", sr.snapped_name, source="system")
             n_applied += 1
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     # Snap cod when changed (Condition C — Lev-1; R133 — salta se editado à mão)
@@ -878,7 +878,7 @@ def _apply_operador_snap(
         try:
             db.apply_edit(sheet_id, "header.n_operador", sr.snapped_cod, source="system")
             n_applied += 1
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     return n_applied
@@ -919,7 +919,7 @@ def _apply_codmaq_fill(
     try:
         db.apply_edit(sheet_id, "header.cod_maquina", canonical, source="system")
         return 1
-    except Exception:  # noqa: BLE001
+    except Exception:
         return 0
 
 
@@ -943,7 +943,7 @@ def _write_profile(record: dict) -> None:
         try:
             if _PROFILE_LOG.exists() and _PROFILE_LOG.stat().st_size > _PROFILE_MAX_BYTES:
                 _PROFILE_LOG.replace(_PROFILE_LOG.with_suffix(".jsonl.1"))
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         with open(_PROFILE_LOG, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
@@ -953,9 +953,9 @@ def _write_profile(record: dict) -> None:
                 "trigger": record.get("trigger"),
                 "timing": record.get("timing"),
             })
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
 
@@ -1082,7 +1082,7 @@ def _run_and_store_cross_check(
                     })
             if rereads:
                 result["active_rereads"] = rereads
-    except Exception:  # noqa: BLE001 — sensing ativo nunca parte o hot path
+    except Exception:
         pass
 
     header = sheet["sheet_data"].get("header", {}) or {}
@@ -1171,7 +1171,7 @@ def _spawn_shadow_scoring(
                         "na": na,
                         "duration_ms": dur_ms,
                     })
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
             except Exception as exc:
                 db.fail_shadow_run(run_id, f"{type(exc).__name__}: {exc}")
@@ -1352,7 +1352,7 @@ def _build_cc_maps(sheet_id: int, *, allow_regen: bool = True) -> tuple[
                 profile_trigger="view_regen",
             )
             cc = load_sheet_cross_check(sheet_id)
-        except Exception:  # noqa: BLE001
+        except Exception:
             # R223 — NÃO engolir em silêncio. Esta regeneração on-demand é o que
             # aplica um motor novo às folhas antigas ao abri-las; se falhava
             # (refs indisponíveis, db, cross_check_sheet a rebentar), a folha
@@ -1437,7 +1437,7 @@ def _apply_lightweight_edit_snaps(sheet_id: int, field_path: str, sheet: dict) -
         return sheet
     try:
         refs = get_watcher().get_refs()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return sheet
     if not refs.get("available"):
         return sheet
@@ -1560,7 +1560,7 @@ async def sheet_edit(
     if field_path in ("header.operador", "header.n_operador"):
         try:
             _maybe_record_operador_alias(sheet_id)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             print(f"[alias] sheet {sheet_id}: {e}", file=sys.stderr)
     sheet = _apply_lightweight_edit_snaps(sheet_id, field_path, sheet)
     # R123 — devolver o valor REAL persistido. O cross-check pesado corre em
@@ -1568,7 +1568,7 @@ async def sheet_edit(
     sheet = db.get_sheet(sheet_id) or sheet
     try:
         real_value = db._get_by_path(sheet.get("sheet_data") or {}, field_path)
-    except Exception:  # noqa: BLE001
+    except Exception:
         real_value = new
     if real_value is None:
         real_value = new
@@ -1714,12 +1714,12 @@ async def sheet_validate(
         if (header.get("data") or "").strip() != data_pt:
             try:
                 db.apply_edit(sheet_id, "header.data", data_pt)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
         if (header.get("n_operador") or "").strip() != n_op_clean:
             try:
                 db.apply_edit(sheet_id, "header.n_operador", n_op_clean)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
     else:
         operador_final = (header.get("operador") or "").strip()
@@ -1744,7 +1744,7 @@ async def sheet_validate(
     # R117 — kernel event: folha validada (lock confirmado pelo operador).
     try:
         kernel.emit_event("sheet_validated", {"sheet_id": sheet_id, "operador": operador_final})
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     # R113 — folha acabada de validar entra no cálculo de consumption.
     # Invalida cache para o /of-lookup seguinte ver os números actualizados.
@@ -1754,14 +1754,14 @@ async def sheet_validate(
         invalidate_cache()
         from app.pipeline.obras_status import invalidate_cache as obras_inv
         obras_inv()
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     # Closed loop: drop CSV in the factory CSV dir so the next run of
     # ``kanban_csv2excel_novo_layout.py`` picks it up. Failure is silent —
     # the user can still pull the CSV via the /sheet/{id}/csv endpoint.
     try:
         _deposit_csv_to_factory(sheet_id)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         traceback.print_exc()
         print(f"[factory deposit] sheet {sheet_id}: {e}", file=sys.stderr)
     # Update cross-check status in background (sheet just got validated).
@@ -1771,7 +1771,7 @@ async def sheet_validate(
     try:
         from app.learning.scheduler import maybe_trigger_learning
         maybe_trigger_learning()
-    except Exception as le:  # noqa: BLE001
+    except Exception as le:
         print(f"[learning] sheet {sheet_id} trigger: {le}", file=sys.stderr)
     return RedirectResponse("/queue", status_code=303)
 
@@ -1814,7 +1814,7 @@ def mobile_qtds(ids: str) -> JSONResponse:
         template_name = db.get_sheet_template_name(sheet)
         try:
             tpl = get_template(template_name)
-        except Exception:  # noqa: BLE001
+        except Exception:
             tpl = None
         # rev00 — o ecrã de QTDs é só para folhas de produção; um verso de
         # paragens não tem qtd → saltá-lo (senão mostrava uma tabela partida).
@@ -1864,7 +1864,7 @@ def _run_sheet_cross_checks(
             if rebuild_from_raw:
                 kwargs["rebuild_from_raw"] = True
             _run_and_store_cross_check(sid, **kwargs)
-        except Exception:  # noqa: BLE001
+        except Exception:
             traceback.print_exc()
 
 
@@ -2117,7 +2117,7 @@ def qwen_tools_test() -> JSONResponse:
             "tool_calls_in_response": tool_calls,
             "content_preview": (msg.get("content") or "")[:200],
         })
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
@@ -2245,7 +2245,7 @@ def admin_reload_refs() -> JSONResponse:
     try:
         from app.pipeline.obras_status import invalidate_cache as obras_inv
         obras_inv()
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     # Fix double counting — plano novo muda o cutoff dos kanbans: o cache
     # do consumo tem de refrescar já (o cutoff também é chave do cache,
@@ -2253,7 +2253,7 @@ def admin_reload_refs() -> JSONResponse:
     try:
         from app.pipeline.of_consumption import invalidate_cache as cons_inv
         cons_inv()
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     revalidation_started = _start_revalidation()
     return JSONResponse({
@@ -2330,7 +2330,7 @@ def _revalidate_all_sheets_bg() -> None:
         for s in sheets:
             try:
                 _run_and_store_cross_check(s["id"], rebuild_from_raw=True)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 traceback.print_exc()
             with _revalidation_lock:
                 _revalidation_state["done"] += 1
@@ -2589,7 +2589,7 @@ async def refs_upload(
             backup = target.with_name(f"{target.stem}.prevbak{target.suffix}")
             try:
                 shutil.copy2(target, backup)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 backup = None
 
         # os.replace falha se o ficheiro vivo estiver aberto (ex.: Excel) — tenta
@@ -2615,7 +2615,7 @@ async def refs_upload(
                 try:
                     os.replace(backup, target)
                     watcher.force_reload()
-                except Exception:  # noqa: BLE001
+                except Exception:
                     traceback.print_exc()
             return _refs_redirect("err", msg, back=back)
 
@@ -2639,12 +2639,12 @@ async def refs_upload(
         try:
             from app.pipeline.obras_status import invalidate_cache as obras_inv
             obras_inv()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         try:
             from app.pipeline.of_consumption import invalidate_cache as of_inv
             of_inv()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         stats = refs.get("stats", {})
         n_rows = _refs_upload_count(kind, refs, upload_info)
@@ -2661,7 +2661,7 @@ async def refs_upload(
                 n_ovs=n_ovs if kind == "plan" else None,
                 size=target.stat().st_size,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             traceback.print_exc()
         if kind == "plan":
             ok_msg = (
@@ -2678,7 +2678,7 @@ async def refs_upload(
                 f"hash {active_sha[:8]}"
             )
         return _refs_redirect("ok", ok_msg, back=back)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         # R118 — captura qualquer exceção não tratada e devolve mensagem
         # útil ao operador (antes: silêncio / página em branco).
         traceback.print_exc()
@@ -2897,7 +2897,7 @@ async def admin_kpis_revert(request: Request) -> JSONResponse:
         raise HTTPException(403, "Edição de KPIs só em desktop")
     try:
         body = await request.json()
-    except Exception:  # noqa: BLE001 — POST sem corpo = defaults
+    except Exception:
         body = {}
     to = body.get("to", "defaults")
     try:
@@ -3436,7 +3436,7 @@ async def sheet_apply_of_entry(sheet_id: int, request: Request) -> JSONResponse:
         raise HTTPException(409, "Folha já validada — edits bloqueados")
     try:
         body = await request.json()
-    except Exception:  # noqa: BLE001
+    except Exception:
         raise HTTPException(400, "Body JSON inválido")
     try:
         row_index = int(body.get("row_index", -1))
@@ -3484,7 +3484,7 @@ async def sheet_apply_of_entry(sheet_id: int, request: Request) -> JSONResponse:
             ]
         except ValueError:
             skipped.extend(field for field, _path, _value in edits_to_apply)
-        except Exception:  # noqa: BLE001
+        except Exception:
             skipped.extend(field for field, _path, _value in edits_to_apply)
     if applied:
         _start_sheet_cross_check({sheet_id}, profile_trigger="apply_of_entry")
@@ -3493,7 +3493,7 @@ async def sheet_apply_of_entry(sheet_id: int, request: Request) -> JSONResponse:
     try:
         from app.pipeline.of_consumption import invalidate_cache
         invalidate_cache()
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     return JSONResponse({
         "ok": True,
@@ -3545,7 +3545,7 @@ async def sheet_remove_row(sheet_id: int, request: Request) -> JSONResponse:
         raise HTTPException(409, "Folha já validada — edits bloqueados")
     try:
         body = await request.json()
-    except Exception:  # noqa: BLE001
+    except Exception:
         raise HTTPException(400, "Body JSON inválido")
     try:
         row_index = int(body.get("row_index", -1))
@@ -3560,7 +3560,7 @@ async def sheet_remove_row(sheet_id: int, request: Request) -> JSONResponse:
     try:
         from app.pipeline.of_consumption import invalidate_cache
         invalidate_cache()
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     return JSONResponse({"ok": True})
 
@@ -4303,7 +4303,7 @@ def _refresh_overlay() -> None:
     try:
         learning_materialize.materialize_overlay()
         learning_scheduler.reload_pipeline()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         print(f"[learning] overlay refresh failed: {e}", file=sys.stderr)
 
 
@@ -4404,7 +4404,7 @@ async def learnings_rule_create(request: Request) -> JSONResponse:
     Separador 1' button. Lands in quarantine awaiting human approval."""
     try:
         body = await request.json()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return JSONResponse({"ok": False, "error": "JSON inválido"}, status_code=400)
     kind = (body.get("kind") or "").strip()
     payload = body.get("payload")
@@ -4431,7 +4431,7 @@ def learning_run(
     """Force a learning cycle now (the 'Minerar agora' button)."""
     try:
         learning_scheduler.run_learning_cycle()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         print(f"[learning] manual run failed: {e}", file=sys.stderr)
     rules = learning_store.list_proposals(status=status or None, kind=kind or None)
     return templates.TemplateResponse(
@@ -4458,7 +4458,7 @@ async def learnings_llm_chat(request: Request) -> JSONResponse:
     envelope {reply, charts, proposed_rules}."""
     try:
         body = await request.json()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return JSONResponse(
             {"reply": "Pedido inválido.", "charts": [], "proposed_rules": []},
             status_code=400,
@@ -4476,7 +4476,7 @@ async def learnings_llm_chat(request: Request) -> JSONResponse:
 
 
 # ----- R110.C — Agent proposals + policies (endpoints REST) -----
-from fastapi.encoders import jsonable_encoder  # noqa: E402
+from fastapi.encoders import jsonable_encoder
 
 # R117: `kernel` import foi promovido para o topo do ficheiro.
 

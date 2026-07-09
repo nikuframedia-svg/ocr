@@ -46,7 +46,7 @@ sys.path.insert(0, str(_REPO / "backend"))
 
 # A produção vive no storage por ficheiros (kanban_refs/03_Cross_Check),
 # NÃO numa coluna sheets.cross_check — mesma régua do shadow_agreement.
-from app.cross_check.storage import load_sheet_cross_check  # noqa: E402
+from app.cross_check.storage import load_sheet_cross_check
 
 _CROSSABLE = ("of", "ov", "cliente", "modelo", "lote",
               "comp_mm", "larg_mm", "lbase", "ltopo", "esp", "dbase", "dtopo")

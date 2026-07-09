@@ -167,7 +167,7 @@ def inspect_refs_xlsx(path: Path, kind: str) -> tuple[str | None, dict[str, Any]
     }
     try:
         wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return f"não consegui abrir o Excel ({e})", info
     try:
         if kind == "plan":
@@ -437,7 +437,7 @@ def _restore_imports(imported: list[_ImportedRef]) -> None:
                 os.replace(item.backup, item.target)
             elif not item.target_existed:
                 item.target.unlink(missing_ok=True)
-        except Exception:  # noqa: BLE001
+        except Exception:
             traceback.print_exc()
 
 
@@ -451,12 +451,12 @@ def _invalidate_refs_dependents() -> None:
     try:
         from app.pipeline.obras_status import invalidate_cache as obras_inv
         obras_inv()
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     try:
         from app.pipeline.of_consumption import invalidate_cache as of_inv
         of_inv()
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
 
@@ -485,7 +485,7 @@ def _record_imports(imported: list[_ImportedRef], refs: dict[str, Any]) -> None:
                 ),
                 size=item.target.stat().st_size,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             traceback.print_exc()
 
 
@@ -595,7 +595,7 @@ def import_refs_from_dir(
         for cand, target in to_import:
             try:
                 imported.append(_copy_into_target(cand, target))
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 errors.append({
                     "kind": cand.kind,
                     "file": str(cand.path),
@@ -658,7 +658,7 @@ def _run_loop(source_dir: Path, interval_seconds: int) -> None:
     while True:
         try:
             result = import_refs_from_dir(source_dir)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             traceback.print_exc()
             result = {
                 "ok": False,

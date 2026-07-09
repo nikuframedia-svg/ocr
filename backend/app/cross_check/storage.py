@@ -24,7 +24,6 @@ import threading
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 # R118 — fallback inteligente igual ao de ref_watcher. Sem este fix, em
 # laptop dev sem `.env`, o JSON de cross-check ia parar a C:\kanban\... e
@@ -37,7 +36,7 @@ _lock = threading.Lock()
 def _current_engine_version() -> str:
     try:
         from app.pipeline.scoring_engine import ENGINE_VERSION
-    except Exception:  # noqa: BLE001
+    except Exception:
         return ""
     return ENGINE_VERSION
 

@@ -29,29 +29,29 @@ from pathlib import Path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT / "backend"))
 
-import httpx  # noqa: E402
-from app.config import Settings, get_settings  # noqa: E402
-from app.evaluation.metrics import (  # noqa: E402
+import httpx
+from app.config import Settings, get_settings
+from app.evaluation.metrics import (
     FieldComparison,
     character_error_rate,
     compare_extractions,
     compute_metrics,
     worst_errors,
 )
-from app.observability.logger import configure_logging, get_logger  # noqa: E402
-from app.pipeline.inference.csv_writer import write_csv  # noqa: E402
-from app.pipeline.inference.schemas import (  # noqa: E402
+from app.observability.logger import configure_logging, get_logger
+from app.pipeline.inference.csv_writer import write_csv
+from app.pipeline.inference.schemas import (
     ROW_FIELDS,
     KanbanExtraction,
 )
-from app.pipeline.inference.vllm_client import (  # noqa: E402
+from app.pipeline.inference.vllm_client import (
     ExtractionParseError,
     ExtractionResult,
     extract,
     extract_with_crops,
 )
-from pydantic import ValidationError  # noqa: E402
-from rich.console import Console  # noqa: E402
+from pydantic import ValidationError
+from rich.console import Console
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}
 

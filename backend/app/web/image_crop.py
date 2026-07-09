@@ -204,7 +204,7 @@ def auto_crop(src_path: Path, out_path: Path | None = None) -> Path | None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(out_path), enhanced, [cv2.IMWRITE_JPEG_QUALITY, 90])
         return out_path
-    except Exception:  # noqa: BLE001
+    except Exception:
         # Defensive: any OpenCV/PIL/IO error → fall back to original
         return None
 

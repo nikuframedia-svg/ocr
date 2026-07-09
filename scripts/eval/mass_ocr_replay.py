@@ -40,7 +40,7 @@ DEFAULT_MODEL = "qwen3.5:9b"
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 CRITICAL_SHEET_IDS = (1838, 1839, 1840, 1843, 1851)
 REPORTS_BASE = REPO / "reports" / "mass_ocr_runs"
-UTC = timezone.utc  # noqa: UP017 - keep script runnable with the local Python 3.9 CLI
+UTC = timezone.utc
 
 CONCRETE_SOURCES = {"plan", "sap", "ferramenta", "maquinas", "colaboradores", "lexicon"}
 CONCRETE_REF_SOURCES = {"plan", "sap", "maquinas", "colaboradores"}
@@ -315,13 +315,13 @@ def load_runtime(*, include_ocr: bool = True) -> SimpleNamespace:
     sys.path.insert(0, str(REPO))
     sys.path.insert(0, str(REPO / "backend"))
 
-    from app.cross_check import get_watcher  # noqa: PLC0415
-    from app.cross_check.ref_watcher import refs_snapshot  # noqa: PLC0415
-    from app.dq.machines import resolve_machine_from_setor  # noqa: PLC0415
-    from app.dq.operador_snap import snap_operador  # noqa: PLC0415
-    from app.pipeline.scoring_engine import ENGINE_VERSION, cross_check_sheet  # noqa: PLC0415
+    from app.cross_check import get_watcher
+    from app.cross_check.ref_watcher import refs_snapshot
+    from app.dq.machines import resolve_machine_from_setor
+    from app.dq.operador_snap import snap_operador
+    from app.pipeline.scoring_engine import ENGINE_VERSION, cross_check_sheet
     if include_ocr:
-        from app.web import ocr_runner  # noqa: PLC0415
+        from app.web import ocr_runner
     else:
         ocr_runner = None
 

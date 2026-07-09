@@ -35,7 +35,6 @@ import shutil  # R117 — copia para .gz em chunks
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 
 logger = logging.getLogger(__name__)
@@ -204,7 +203,7 @@ def _rotate_event_log_if_needed() -> None:
             shutil.copyfileobj(src, dst)
         os.remove(_EVENT_LOG)
         logger.info("kernel: events.jsonl rodado para %s", rotated.name)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         # Rotação é best-effort — nunca pode bloquear o emit.
         logger.warning("kernel: falha a rodar events.jsonl: %s", e)
 

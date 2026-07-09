@@ -8,7 +8,7 @@ to_chartjs_envelope().
 """
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -66,7 +66,7 @@ def validate_chart(spec: dict) -> dict:
         raise ChartValidationError("Chart spec tem de ser um objecto JSON.")
     try:
         model = ChartSpec.model_validate(spec)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         raise ChartValidationError(str(e)) from e
 
     # Verificar que cada dataset tem nº de pontos consistente com labels

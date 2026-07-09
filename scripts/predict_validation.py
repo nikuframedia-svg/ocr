@@ -18,7 +18,6 @@ Key validator semantics (verbatim from the factory):
 from __future__ import annotations
 
 import json
-import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -142,7 +141,6 @@ def consolidate_no_larg(st_sap, st_plan, notas_sap, notas_plan):
     """Predict outcome IF the LARG-vs-lbase check were dropped (it compares
     different physical dimensions). Re-derive status from the remaining notes.
     """
-    has_div = ("DIVERGÊNCIA" in (st_sap, st_plan)) or ("OF INVÁLIDO" in (st_sap, st_plan)) or ("LOTE NÃO ENCONTRADO" in (st_sap, st_plan))
     # If only divergence reason was LARG: drop it
     if st_plan == "DIVERGÊNCIA" and len(notas_plan) == 1 and notas_plan[0].startswith("LARG"):
         st_plan = "AVISO"  # demote to aviso

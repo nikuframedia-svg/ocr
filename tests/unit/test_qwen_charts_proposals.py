@@ -13,7 +13,6 @@ from app.pipeline.chart_renderer import (
 from app.pipeline.tools import (
     ALL_TOOLS,
     get_session_charts,
-    get_session_proposals,
     propose_chart,
     propose_cpis_change,
     propose_rule,

@@ -22,9 +22,9 @@ from pathlib import Path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT / "backend"))
 
-import httpx  # noqa: E402
-from app.config import get_settings  # noqa: E402
-from app.observability.logger import configure_logging, get_logger  # noqa: E402
+import httpx
+from app.config import get_settings
+from app.observability.logger import configure_logging, get_logger
 
 
 def main() -> int:

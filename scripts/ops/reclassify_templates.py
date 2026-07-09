@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Backfill bobine_formato sheets that audit as Acabamento candidates."""
-# ruff: noqa: E402,I001
 from __future__ import annotations
 
 import argparse

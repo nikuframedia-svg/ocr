@@ -36,17 +36,17 @@ from pathlib import Path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT / "backend"))
 
-from app.observability.logger import configure_logging, get_logger  # noqa: E402
-from app.pipeline.inference.schemas import (  # noqa: E402
+from app.observability.logger import configure_logging, get_logger
+from app.pipeline.inference.schemas import (
     FOOTER_FIELDS,
     HEADER_FIELDS,
     ROW_FIELDS,
     KanbanExtraction,
 )
-from pydantic import ValidationError  # noqa: E402
-from rich.console import Console  # noqa: E402
-from rich.panel import Panel  # noqa: E402
-from rich.prompt import Confirm, Prompt  # noqa: E402
+from pydantic import ValidationError
+from rich.console import Console
+from rich.panel import Panel
+from rich.prompt import Confirm, Prompt
 
 # Regex tuned against the 19 sample sheets from Metalogalva (Apr 2026).
 # MODELO and CLIENTE are intentionally NOT validated by regex: real values

@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import hashlib
 import threading
@@ -804,7 +803,7 @@ class RefWatcher:
                 self.sap_path, self.plan_path, self.colab_path, self.maq_path,
                 self.repo_root,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             self._failed_mtimes = self._current_mtimes()
             logger.exception(
                 "ref reload falhou — a manter refs anteriores (%s)", self.plan_path
@@ -829,7 +828,7 @@ class RefWatcher:
         try:
             from app.pipeline import scoring_engine
             scoring_engine.invalidate_index_cache()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     def get_refs(self) -> dict[str, Any]:

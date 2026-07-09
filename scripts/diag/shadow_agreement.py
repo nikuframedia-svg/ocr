@@ -28,11 +28,11 @@ sys.path.insert(0, str(_REPO / "backend"))
 
 # R253/F2 — a régua do diff é PARTILHADA com /sheet/<id>/shadow-view: a
 # mesma decisão de "diverge" no CSV offline e no ecrã de triagem.
-from app.cross_check.shadow_diff import diff_prod_vs_shadow  # noqa: E402
+from app.cross_check.shadow_diff import diff_prod_vs_shadow
 # R253/F2 — a produção NÃO vive em sheets.cross_check (a coluna nunca
 # existiu — o SELECT antigo rebentava na primeira corrida real); vive no
 # storage por ficheiros (kanban_refs/03_Cross_Check + índice).
-from app.cross_check.storage import load_sheet_cross_check  # noqa: E402
+from app.cross_check.storage import load_sheet_cross_check
 
 
 def main() -> None:

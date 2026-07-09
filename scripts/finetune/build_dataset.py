@@ -34,7 +34,7 @@ _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
 sys.path.insert(0, str(_REPO / "backend"))
 
-import ocr6  # noqa: E402  — fonte unica das constantes de resize
+import ocr6
 
 _DB_PATH = _REPO / "data" / "app.db"
 _IMAGES_DIR = _REPO / "data" / "images"
@@ -94,7 +94,7 @@ def _load_prompt_for(template_name: str) -> str:
         from app.pipeline.prompt_builder import build_prompt
         from app.templates_registry import get_template
         return build_prompt(get_template(template_name))
-    except Exception as e:  # noqa: BLE001 — fallback gracioso
+    except Exception as e:
         print(f"  aviso: prompt_builder falhou para '{template_name}' "
               f"({e}); uso o prompt bobine.")
         return bobine

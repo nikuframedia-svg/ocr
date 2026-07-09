@@ -1058,7 +1058,7 @@ def _sync_production_rows(c: sqlite3.Connection, sheet_id: int, sheet_data: dict
     # circular). Preferimos ``sheet_data.template_name`` quando presente
     # (R54+); para folhas legadas, ``detect_template`` infere via
     # ``header.setor_maquina``.
-    from app.templates_registry import (  # noqa: PLC0415 — lazy intencional
+    from app.templates_registry import (
         detect_template,
         get_template,
     )
@@ -1597,7 +1597,7 @@ def delete_sheet(sheet_id: int) -> dict:
         from app.cross_check.storage import remove_sheet_cross_check
         remove_sheet_cross_check(sheet_id)
         removed["cross_check"] = "ok"
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     # 5. Delete factory CSV (operador + date filename pattern)

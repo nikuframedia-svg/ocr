@@ -104,7 +104,7 @@ def discriminative_reread(
             answer=answer, raw_response=str(text or "")[:200],
             duration_ms=int((time.perf_counter() - started) * 1000),
         )
-    except Exception:  # noqa: BLE001 — sensing ativo é sempre opcional
+    except Exception:
         logger.exception("active reread falhou (%s row=%s %s)",
                          path.name, row_index, field)
         return None

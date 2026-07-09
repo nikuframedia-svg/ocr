@@ -25,8 +25,8 @@ _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO / "backend") not in sys.path:
     sys.path.insert(0, str(_REPO / "backend"))
 
-from app.cross_check.ref_watcher import get_watcher  # noqa: E402
-from app.pipeline.scoring_engine import (  # noqa: E402
+from app.cross_check.ref_watcher import get_watcher
+from app.pipeline.scoring_engine import (
     ENGINE_VERSION,
     _cliente_tokens,
     _format_value,

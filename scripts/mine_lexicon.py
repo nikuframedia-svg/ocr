@@ -20,7 +20,7 @@ from pathlib import Path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT / "backend"))
 
-from app.pipeline.inference.schemas import KanbanExtraction  # noqa: E402
+from app.pipeline.inference.schemas import KanbanExtraction
 
 _OUT = (
     _PROJECT_ROOT / "backend" / "app" / "pipeline" / "inference" / "lexicons" / "observed.json"

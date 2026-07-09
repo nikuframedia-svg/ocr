@@ -21,7 +21,6 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any
 
 import httpx
 
@@ -114,7 +113,7 @@ def _execute_tool(name: str, arguments: dict) -> dict:
     except TypeError as e:
         return {"status": "error",
                 "error": f"Argumentos inválidos para {name}: {e}"}
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return {"status": "error",
                 "error": f"Falhou ao executar {name}: {e}"}
 
@@ -294,7 +293,7 @@ def chat(
                 "error": str(e),
             },
         }
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.exception("Qwen agent unexpected error")
         return {
             "reply": f"Erro inesperado no agente: {e}",

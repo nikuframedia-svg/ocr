@@ -1,7 +1,6 @@
 """R110.E — Tests do kernel event log + state + replay."""
 from __future__ import annotations
 
-import json
 
 import pytest
 

@@ -5,7 +5,6 @@ Read-only by default: this script never mutates the database. It scans sheets
 whose persisted extraction says ``template_name == "bobine_formato"`` and
 re-evaluates the OCR header/row structure with the current detector.
 """
-# ruff: noqa: E402
 from __future__ import annotations
 
 import argparse

@@ -349,7 +349,7 @@ def chat(user_message: str, history: list[dict] | None = None) -> dict:
                 # data dossier pré-agregado — produz resposta com dados reais.
                 envelope = None
                 used_path = "fallback_no_tools_used"
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("qwen_agent.chat failed; falling back to legacy")
             envelope = None
             used_path = "fallback_after_exception"
@@ -375,7 +375,7 @@ def chat(user_message: str, history: list[dict] | None = None) -> dict:
     session_id: int | None = None
     try:
         session_id = db.save_qwen_session(user_message, envelope, trigger="manual")
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception("save_qwen_session failed")
 
     # R117 — persistir charts propostos pelo agente (chart_tools.propose_chart
@@ -391,7 +391,7 @@ def chat(user_message: str, history: list[dict] | None = None) -> dict:
                     narrative=chart.get("narrative", "") or "",
                     session_id=session_id,
                 )
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception("save_qwen_chart failed")
 
         # R117 — emitir evento qwen_session no kernel (best-effort)
@@ -407,7 +407,7 @@ def chat(user_message: str, history: list[dict] | None = None) -> dict:
                     "path": meta.get("path", "unknown"),
                 },
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("kernel.emit_event(qwen_session) failed")
 
     return envelope

@@ -24,8 +24,8 @@ from pathlib import Path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT / "backend"))
 
-from app.observability.logger import configure_logging  # noqa: E402
-from app.pipeline.inference.schemas import KanbanExtraction  # noqa: E402
+from app.observability.logger import configure_logging
+from app.pipeline.inference.schemas import KanbanExtraction
 
 # Fields we consider "should be the same for the same OF".
 # (PRI / QTD / LOTE / CONI / ESP / LBASE / LTOPO can legitimately vary

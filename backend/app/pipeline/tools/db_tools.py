@@ -59,7 +59,7 @@ def query_db(sql: str) -> dict:
                 "n_rows": len(rows),
                 "columns": cols,
             }
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return {
             "status": "error",
             "error": f"Falhou ao executar a query: {e}",
@@ -103,7 +103,7 @@ def get_sheet(sheet_id: int) -> dict:
             "rows": (sd.get("rows") if isinstance(sd, dict) else None),
             "footer": (sd.get("footer") if isinstance(sd, dict) else None),
         }
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return {"status": "error", "error": f"Falhou ao ler folha: {e}"}
 
 
@@ -141,7 +141,7 @@ def list_recent_edits(n_days: int = 7, source: str = "human") -> dict:
             cols = [d[0] for d in cur.description]
             rows = [dict(zip(cols, r)) for r in cur.fetchall()]
             return {"status": "ok", "n_rows": len(rows), "rows": rows}
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return {"status": "error", "error": str(e), "rows": [], "n_rows": 0}
 
 
@@ -153,7 +153,7 @@ def list_templates() -> dict:
     por secção (header / row / footer).
     """
     try:
-        from app.templates_registry import TEMPLATES  # noqa: E402
+        from app.templates_registry import TEMPLATES
         out = []
         for name, spec in TEMPLATES.items():
             out.append({
@@ -164,7 +164,7 @@ def list_templates() -> dict:
                 "footer_fields": list(getattr(spec, "footer_fields", []) or []),
             })
         return {"status": "ok", "templates": out}
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return {"status": "error", "error": str(e), "templates": []}
 
 
@@ -177,7 +177,7 @@ def get_refs_summary() -> dict:
     de quando foram carregados — não devolve os dados em si.
     """
     try:
-        from app.cross_check.ref_watcher import get_watcher  # noqa: E402
+        from app.cross_check.ref_watcher import get_watcher
         refs = get_watcher().get_refs() or {}
         stats = refs.get("stats") or {}
         return {
@@ -191,7 +191,7 @@ def get_refs_summary() -> dict:
             "n_plan_rows": stats.get("n_plan_rows", 0),
             "n_modelos": stats.get("n_modelos_fts", 0),
         }
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return {"status": "error", "error": str(e)}
 
 
@@ -239,7 +239,7 @@ def query_learnings(status: str = "", kind: str = "", limit: int = 30) -> dict:
                         pass
                 rows.append(d)
             return {"status": "ok", "n_rows": len(rows), "rows": rows}
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return {"status": "error", "error": str(e), "rows": [], "n_rows": 0}
 
 
