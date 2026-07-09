@@ -80,7 +80,6 @@ python -m venv .venv
 OLLAMA_URL=http://localhost:11434
 OCR_MODEL=qwen3.5:9b
 OCR_NO_THINK=1
-CC_STUB_VARIANT=w13
 KANBAN_DOC_DIR=C:\ocr\kanban_refs\04_Documentacao
 CROSS_CHECK_DIR=C:\ocr\data\_cross_check
 ```
@@ -109,7 +108,6 @@ cola (o `OLLAMA_URL` aponta para o IP da Metalogalva — a 5090):
 OLLAMA_URL=http://<IP-DA-OLLAMA>:11434
 OCR_MODEL=qwen3.5:9b
 OCR_NO_THINK=1
-CC_STUB_VARIANT=w13
 KANBAN_DOC_DIR=C:\Users\User\ocr\kanban_refs\04_Documentacao
 CROSS_CHECK_DIR=C:\Users\User\ocr\data\_cross_check
 ```

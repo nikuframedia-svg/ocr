@@ -60,9 +60,6 @@ OLLAMA_URL=http://192.168.1.224:11434
 OCR_MODEL=qwen3.5:9b
 OCR_NO_THINK=1
 
-# Cross-check variant
-CC_STUB_VARIANT=w13
-
 # Refs locais (dentro do repo)
 KANBAN_DOC_DIR=kanban_refs\04_Documentacao
 CROSS_CHECK_DIR=kanban_refs\03_Cross_Check
