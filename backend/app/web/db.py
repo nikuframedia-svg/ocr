@@ -917,15 +917,6 @@ def get_active_template_overlays(template_name: str | None = None) -> list[dict]
         return out
 
 
-def deactivate_template_overlay(overlay_id: int) -> bool:
-    with conn() as c:
-        c.execute(
-            "UPDATE template_overlay SET active = 0 WHERE id = ?",
-            (overlay_id,),
-        )
-        return c.total_changes > 0
-
-
 def log_circuit_breaker(
     event: str,
     metric_name: str = "",
@@ -941,16 +932,6 @@ def log_circuit_breaker(
             (event, metric_name, metric_value, baseline_value, action_taken),
         )
         return cur.lastrowid
-
-
-def list_circuit_breaker_events(limit: int = 50) -> list[dict]:
-    limit = max(1, min(limit, 200))
-    with conn() as c:
-        rows = c.execute(
-            "SELECT * FROM circuit_breaker_log ORDER BY created_at DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-        return [dict(r) for r in rows]
 
 
 def get_sheet_template_name(sheet: dict | int) -> str:
@@ -1362,58 +1343,6 @@ def list_distinct_operadores() -> list[str]:
     return sorted({v[0] for v in by_norm.values()}, key=_normalize_operador)
 
 
-def list_sheets_by_operador(
-    operador: str,
-    *,
-    statuses: tuple[str, ...] = ("extracted", "validated"),
-) -> list[dict]:
-    """Return all sheets where header.operador matches ``operador`` after
-    case+accent normalization. Ordered by captured_at ASC so the kanban
-    viewer iterates chronologically (oldest = position 1).
-    """
-    placeholders = ",".join("?" * len(statuses))
-    sql = f"""
-        SELECT id, captured_at, status, operador, validated_at, image_path,
-               json_extract(sheet_data, '$.header.operador') AS sheet_operador
-        FROM sheets
-        WHERE status IN ({placeholders})
-          AND sheet_data IS NOT NULL
-        ORDER BY captured_at ASC
-    """
-    target = _normalize_operador(operador)
-    with conn() as c:
-        rows = c.execute(sql, statuses).fetchall()
-    return [
-        dict(r) for r in rows
-        if _normalize_operador(r["sheet_operador"]) == target
-    ]
-
-
-def get_sheet_neighbors(
-    sheet_id: int,
-    operador: str,
-) -> dict:
-    """For the kanban viewer's ⬅/➡ nav. Given a (sheet_id, operador) pair,
-    return:
-    - position: 1-based index of this sheet within the operador's list
-    - total: count of sheets for this operador
-    - prev_id: id of the previous sheet (None if first)
-    - next_id: id of the next sheet (None if last)
-    """
-    sheets = list_sheets_by_operador(operador)
-    ids = [s["id"] for s in sheets]
-    try:
-        idx = ids.index(sheet_id)
-    except ValueError:
-        return {"position": 0, "total": len(ids), "prev_id": None, "next_id": None}
-    return {
-        "position": idx + 1,
-        "total": len(ids),
-        "prev_id": ids[idx - 1] if idx > 0 else None,
-        "next_id": ids[idx + 1] if idx + 1 < len(ids) else None,
-    }
-
-
 def apply_edit(
     sheet_id: int,
     field_path: str,
@@ -1630,8 +1559,6 @@ def delete_sheet(sheet_id: int) -> dict:
 
     Returns dict with what was removed for the caller's confirmation.
     """
-    import shutil
-    import os
     removed: dict = {"sheet_id": sheet_id, "image": None, "cross_check": None,
                      "factory_csv": None, "edits": 0, "production_rows": 0}
 
@@ -1942,24 +1869,6 @@ def list_sheets_filtered(
                 continue
         out.append(d)
     return out
-
-
-def backfill_production_rows() -> int:
-    """One-shot: re-populate production_rows for ALL sheets that have
-    sheet_data. Returns count of sheets touched."""
-    with conn() as c:
-        sheets = c.execute(
-            "SELECT id, sheet_data FROM sheets WHERE sheet_data IS NOT NULL"
-        ).fetchall()
-        n = 0
-        for s in sheets:
-            try:
-                data = json.loads(s["sheet_data"])
-            except (json.JSONDecodeError, TypeError):
-                continue
-            _sync_production_rows(c, s["id"], data)
-            n += 1
-        return n
 
 
 # ---- field_path resolution ----

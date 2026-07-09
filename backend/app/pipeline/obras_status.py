@@ -27,7 +27,6 @@ from app.pipeline.of_consumption import (
     _to_num,
     annotate_remaining,
     get_consumption,
-    remaining,
 )
 from app.web import db
 
@@ -63,12 +62,6 @@ def _produced_from_remaining(quanttrp: float, rem: float) -> float:
     if rem == float("inf") or quanttrp <= 0:
         return 0.0
     return min(quanttrp, max(quanttrp - rem, 0.0))
-
-
-def _entry_done(entry: dict, consumption: dict | None = None) -> bool:
-    if str(entry.get("fechado") or "0") in ("1", "True", "true"):
-        return True
-    return remaining(entry, consumption) <= 0
 
 
 # ---------------------------------------------------------------- indexes

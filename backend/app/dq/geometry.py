@@ -16,7 +16,6 @@ Formulas:
 """
 from __future__ import annotations
 
-from math import ceil
 
 DENSITY_KG_PER_MM3 = 7.85e-6  # steel S235JR / S355
 
@@ -86,72 +85,3 @@ def row_weight_kg(
     if lbase > 2000 or ltopo > 2000:
         return 0.0
     return qtd * column_weight_kg(lbase, ltopo, comp_teorico, esp)
-
-
-def row_waste(
-    qtd: float,
-    larg: float | None,
-    comp_a_cortar: float | None,
-    lbase: float | None,
-    ltopo: float | None,
-    comp_teorico: float | None,
-    esp: float | None,
-    *,
-    npecas_override: int | None = None,
-) -> dict:
-    """Waste for a kanban row. Returns dict with computed quantities or
-    {"valid": False, "reason": ...} when any input is missing or invalid.
-
-    Output dict keys (when valid):
-        valid, npecas_used, ciclos,
-        area_teorica_mm2, area_real_total_mm2,
-        peso_produzido_kg, peso_consumido_kg, peso_desperdicio_kg,
-        desperdicio_pct.
-    """
-    inputs = (qtd, larg, comp_a_cortar, lbase, ltopo, comp_teorico, esp)
-    if any(v is None for v in inputs):
-        return {"valid": False, "reason": "missing_input"}
-    if any(v <= 0 for v in inputs):
-        return {"valid": False, "reason": "non_positive"}
-    # Sanity guards (Round 38) — reject obvious OCR garbage so it doesn't
-    # inflate dashboard aggregates. Real steel bobines:
-    #   larg: 800-2500 mm   (rolling mill width limits)
-    #   comp: 1000-15000 mm (typical column lengths)
-    #   esp:  1-15 mm       (sheet metal thickness range)
-    #   lbase/ltopo: 100-1500 mm
-    if larg > 3000 or larg < 200:
-        return {"valid": False, "reason": "larg_implausible"}
-    if comp_a_cortar > 20000 or comp_teorico > 20000:
-        return {"valid": False, "reason": "comp_implausible"}
-    if esp > 30 or esp < 0.5:
-        return {"valid": False, "reason": "esp_implausible"}
-    if lbase > 2000 or ltopo > 2000:
-        return {"valid": False, "reason": "lbase_ltopo_implausible"}
-
-    np = npecas_override if npecas_override else calc_npecas(
-        larg, lbase, ltopo, comp_a_cortar, comp_teorico
-    )
-    if np <= 0:
-        return {"valid": False, "reason": "npecas_zero"}
-
-    ciclos = ceil(qtd / np)
-    area_teorica = trapezoid_area_mm2(lbase, ltopo, comp_teorico)
-    area_real_per_cycle = larg * comp_a_cortar
-    area_real_total = ciclos * area_real_per_cycle
-    area_teorica_total = qtd * area_teorica
-    peso_produzido = area_teorica_total * esp * DENSITY_KG_PER_MM3
-    peso_consumido = area_real_total * esp * DENSITY_KG_PER_MM3
-    peso_waste = max(0.0, peso_consumido - peso_produzido)
-    desp_pct = (peso_waste / peso_consumido * 100) if peso_consumido > 0 else 0.0
-
-    return {
-        "valid": True,
-        "npecas_used": np,
-        "ciclos": ciclos,
-        "area_teorica_mm2": area_teorica,
-        "area_real_total_mm2": area_real_total,
-        "peso_produzido_kg": peso_produzido,
-        "peso_consumido_kg": peso_consumido,
-        "peso_desperdicio_kg": peso_waste,
-        "desperdicio_pct": desp_pct,
-    }
