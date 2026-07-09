@@ -1,0 +1,64 @@
+{# Tab Kanbans — lista de templates registados. O wizard de registo
+   (upload → descoberta OCR → validação → ativação) chega na Entrega 4. #}
+
+{% if flash_ok %}
+<div class="refs-flash ok">✓ {{ flash_ok }}</div>
+{% endif %}
+{% if flash_err %}
+<div class="refs-flash err">✕ {{ flash_err }}</div>
+{% endif %}
+
+<div class="card" style="margin-bottom:14px;">
+  <div class="card-h">
+    <div class="card-h-title">Kanbans registados</div>
+    <div class="card-h-sub">
+      templates registados por unidade fabril — além dos
+      {{ n_builtin_templates }} modelos de fábrica (Trofa)
+    </div>
+  </div>
+  <div class="card-b">
+    {% if not kanban_templates %}
+    <div class="muted">Ainda não há kanbans registados.</div>
+    {% else %}
+    <table class="tbl">
+      <thead>
+        <tr><th>Nome</th><th>Unidade</th><th>Estado</th><th>Criado</th></tr>
+      </thead>
+      <tbody>
+        {% for t in kanban_templates %}
+        <tr>
+          <td>{{ t.name }}</td>
+          <td>{{ t.unidade_nome }}</td>
+          <td>
+            {% if t.status == 'ativo' %}
+            <span class="pill ok">ativo</span>
+            {% elif t.status == 'a_analisar' %}
+            <span class="pill info">a analisar</span>
+            {% elif t.status == 'analisado' %}
+            <span class="pill warn">analisado — por validar</span>
+            {% else %}
+            <span class="pill neutral">{{ t.status }}</span>
+            {% endif %}
+          </td>
+          <td class="muted tiny">{{ (t.created_at | string)[:16] }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-h">
+    <div class="card-h-title">Registar novo kanban</div>
+    <div class="card-h-sub">em preparação</div>
+  </div>
+  <div class="card-b">
+    <div class="muted">
+      O assistente de registo (fotografia do template → análise OCR dos
+      campos → validação → pesquisa no plano/StockSAP → ativação) fica
+      disponível na próxima atualização.
+    </div>
+  </div>
+</div>

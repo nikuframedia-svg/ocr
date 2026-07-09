@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Administração{% endblock %}
+{% block content %}
+
+<div class="page-h">
+  <div>
+    <div class="page-eyebrow">Inteligência</div>
+    <h1 class="page-title">Administração</h1>
+  </div>
+</div>
+
+<div class="page-content">
+
+  {# ---- Separadores (componente .tabs de dashboard_today) ---- #}
+  <div class="tabs" style="margin-bottom:16px;">
+    <a class="tab {% if admin_tab == 'referencias' %}active{% endif %}"
+       style="text-decoration:none;" href="/admin/referencias">Referências</a>
+    <a class="tab {% if admin_tab == 'kanbans' %}active{% endif %}"
+       style="text-decoration:none;" href="/admin/kanbans">Kanbans</a>
+    <a class="tab {% if admin_tab == 'unidades' %}active{% endif %}"
+       style="text-decoration:none;" href="/admin/unidades">Unidades</a>
+    <a class="tab {% if admin_tab == 'kpis' %}active{% endif %}"
+       style="text-decoration:none;" href="/admin/kpis">KPIs</a>
+  </div>
+
+  {% if admin_tab == 'referencias' %}
+    {% include "_refs_content.html" %}
+  {% elif admin_tab == 'kanbans' %}
+    {% include "_admin_kanbans.html" %}
+  {% elif admin_tab == 'unidades' %}
+    {% include "_admin_unidades.html" %}
+  {% elif admin_tab == 'kpis' %}
+    {% include "_admin_kpis.html" %}
+  {% endif %}
+
+</div>
+{% endblock %}

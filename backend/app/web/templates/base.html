@@ -27,6 +27,7 @@
 {% set is_alerts = active_tab is defined and active_tab == 'alerts' %}
 {% set is_learnings = path.startswith('/learnings') %}
 {% set is_refs = path.startswith('/refs') %}
+{% set is_admin = path.startswith('/admin') or is_refs %}
 {% set is_obras = path.startswith('/obras') %}
 {% set is_downtime = active_tab is defined and active_tab == 'downtime' %}
 {% set is_nesting = active_tab is defined and active_tab == 'nesting' %}
@@ -99,9 +100,9 @@
       <span class="sb-num">✦</span>
       <span>Aprendizagens</span>
     </a>
-    <a class="sb-item {% if is_refs %}active{% endif %}" href="/refs">
-      <span class="sb-num">⤓</span>
-      <span>Refs SAP</span>
+    <a class="sb-item {% if is_admin %}active{% endif %}" href="/admin/referencias">
+      <span class="sb-num">⚙</span>
+      <span>Administração</span>
     </a>
 
     <div class="sb-section">Notificações</div>

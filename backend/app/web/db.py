@@ -248,6 +248,34 @@ CREATE TABLE IF NOT EXISTS circuit_breaker_log (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Unidades fabris (fábricas/instalações Metalogalva). 'Trofa' é a sede
+-- (seed no init_db); folhas com unidade_id NULL pertencem-lhe (legacy —
+-- o conceito nasceu com o registo de kanbans por unidade).
+CREATE TABLE IF NOT EXISTS unidades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nome TEXT NOT NULL UNIQUE COLLATE NOCASE,   -- escrito pelo utilizador
+    ativo INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Templates de kanban registados em runtime (por unidade fabril).
+-- spec_json espelha TemplateSpec (templates_registry.py); os 18 builtin
+-- NÃO migram — a DB só guarda templates novos. discovery_json = output
+-- cru do OCR de descoberta (audit EN 1090).
+CREATE TABLE IF NOT EXISTS kanban_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,           -- canónico, prefixo u{unidade_id}_
+    unidade_id INTEGER NOT NULL REFERENCES unidades(id),
+    spec_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft',  -- draft|a_analisar|analisado|ativo|inativo
+    image_path TEXT,
+    discovery_json TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    activated_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_kanban_templates_status ON kanban_templates(status);
+CREATE INDEX IF NOT EXISTS idx_kanban_templates_unidade ON kanban_templates(unidade_id);
+
 CREATE INDEX IF NOT EXISTS idx_sheets_status ON sheets(status);
 CREATE INDEX IF NOT EXISTS idx_sheets_captured ON sheets(captured_at);
 CREATE INDEX IF NOT EXISTS idx_edits_sheet ON edits(sheet_id);
@@ -314,6 +342,15 @@ def init_db() -> None:
             c.execute("ALTER TABLE sheets ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0")
         if "review_reason" not in cols:
             c.execute("ALTER TABLE sheets ADD COLUMN review_reason TEXT")
+        # Unidades fabris — folha carimbada com a unidade do template
+        # detetado; NULL = Trofa (folhas anteriores ao conceito).
+        if "unidade_id" not in cols:
+            c.execute("ALTER TABLE sheets ADD COLUMN unidade_id INTEGER REFERENCES unidades(id)")
+        # Seed idempotente da sede.
+        c.execute(
+            "INSERT INTO unidades (nome) SELECT 'Trofa' WHERE NOT EXISTS "
+            "(SELECT 1 FROM unidades WHERE nome = 'Trofa' COLLATE NOCASE)"
+        )
         # R86 — production_rows ganhou m2 + nesting (Gemini fields).
         # R97 — production_rows ganhou qtd_metros (Soldline/Laser),
         # cesta_n (Expedição), inicio/fim (Gemini/Paragens).
@@ -1623,6 +1660,104 @@ def delete_sheet(sheet_id: int) -> dict:
                 pass
 
     return removed
+
+
+# ---------------------------------------------------------------------------
+# Unidades fabris + templates de kanban registados (registo por unidade)
+# ---------------------------------------------------------------------------
+
+def list_unidades(only_ativo: bool = True) -> list[dict]:
+    sql = "SELECT id, nome, ativo, created_at FROM unidades"
+    if only_ativo:
+        sql += " WHERE ativo = 1"
+    sql += " ORDER BY nome COLLATE NOCASE"
+    with conn() as c:
+        return [dict(r) for r in c.execute(sql).fetchall()]
+
+
+def create_unidade(nome: str) -> int:
+    nome = (nome or "").strip()
+    if not nome:
+        raise ValueError("nome da unidade vazio")
+    with conn() as c:
+        cur = c.execute("INSERT INTO unidades (nome) VALUES (?)", (nome,))
+        return int(cur.lastrowid or 0)
+
+
+def set_unidade_ativo(unidade_id: int, ativo: bool) -> None:
+    with conn() as c:
+        c.execute("UPDATE unidades SET ativo = ? WHERE id = ?",
+                  (1 if ativo else 0, unidade_id))
+
+
+def trofa_unidade_id() -> int:
+    """Id da sede (seed do init_db). As folhas com unidade_id NULL são dela."""
+    with conn() as c:
+        r = c.execute(
+            "SELECT id FROM unidades WHERE nome = 'Trofa' COLLATE NOCASE"
+        ).fetchone()
+        return int(r["id"]) if r else 1
+
+
+def set_sheet_unidade(sheet_id: int, unidade_id: int | None) -> None:
+    with conn() as c:
+        c.execute("UPDATE sheets SET unidade_id = ? WHERE id = ?",
+                  (unidade_id, sheet_id))
+
+
+def insert_kanban_template(
+    name: str, unidade_id: int, spec_json: str,
+    image_path: str | None = None, status: str = "draft",
+) -> int:
+    with conn() as c:
+        cur = c.execute(
+            "INSERT INTO kanban_templates (name, unidade_id, spec_json, "
+            "image_path, status) VALUES (?,?,?,?,?)",
+            (name, unidade_id, spec_json, image_path, status))
+        return int(cur.lastrowid or 0)
+
+
+def get_kanban_template(template_id: int) -> dict | None:
+    with conn() as c:
+        r = c.execute("SELECT * FROM kanban_templates WHERE id = ?",
+                      (template_id,)).fetchone()
+        return dict(r) if r else None
+
+
+def list_kanban_templates(status: str | None = None) -> list[dict]:
+    sql = ("SELECT kt.*, u.nome AS unidade_nome FROM kanban_templates kt "
+           "JOIN unidades u ON u.id = kt.unidade_id")
+    args: tuple = ()
+    if status:
+        sql += " WHERE kt.status = ?"
+        args = (status,)
+    sql += " ORDER BY kt.created_at DESC"
+    with conn() as c:
+        return [dict(r) for r in c.execute(sql, args).fetchall()]
+
+
+def update_kanban_template_spec(template_id: int, spec_json: str) -> None:
+    with conn() as c:
+        c.execute("UPDATE kanban_templates SET spec_json = ? WHERE id = ?",
+                  (spec_json, template_id))
+
+
+def set_kanban_template_status(
+    template_id: int, status: str, discovery_json: str | None = None,
+) -> None:
+    with conn() as c:
+        if discovery_json is not None:
+            c.execute(
+                "UPDATE kanban_templates SET status = ?, discovery_json = ?, "
+                "activated_at = CASE WHEN ? = 'ativo' THEN CURRENT_TIMESTAMP "
+                "ELSE activated_at END WHERE id = ?",
+                (status, discovery_json, status, template_id))
+        else:
+            c.execute(
+                "UPDATE kanban_templates SET status = ?, activated_at = "
+                "CASE WHEN ? = 'ativo' THEN CURRENT_TIMESTAMP ELSE "
+                "activated_at END WHERE id = ?",
+                (status, status, template_id))
 
 
 def list_distinct_setores() -> list[str]:

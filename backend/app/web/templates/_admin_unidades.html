@@ -1,0 +1,75 @@
+{# Tab Unidades — criar/listar/ativar unidades fabris (Task C, E2). #}
+
+{% if flash_ok %}
+<div class="refs-flash ok">✓ {{ flash_ok }}</div>
+{% endif %}
+{% if flash_err %}
+<div class="refs-flash err">✕ {{ flash_err }}</div>
+{% endif %}
+
+<div class="card" style="margin-bottom:14px;">
+  <div class="card-h">
+    <div class="card-h-title">Nova unidade fabril</div>
+    <div class="card-h-sub">
+      outra fábrica/instalação — os kanbans registados ficam associados à
+      unidade e as folhas processadas são carimbadas com ela
+    </div>
+  </div>
+  <div class="card-b">
+    <form method="post" action="/admin/unidades" class="refs-form"
+          style="display:flex; gap:10px; align-items:center;">
+      <input type="text" name="nome" required maxlength="60"
+             placeholder="nome da unidade (ex.: Esposende)"
+             style="flex:1; max-width:320px;">
+      <button class="btn primary" type="submit">Criar unidade</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-h">
+    <div class="card-h-title">Unidades registadas</div>
+    <div class="card-h-sub">
+      Trofa é a sede — folhas antigas (sem unidade) pertencem-lhe
+    </div>
+  </div>
+  <div class="card-b">
+    {% if not unidades %}
+    <div class="muted">Sem unidades registadas.</div>
+    {% else %}
+    <table class="tbl">
+      <thead>
+        <tr><th>Unidade</th><th>Estado</th><th>Criada</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for u in unidades %}
+        <tr>
+          <td>
+            {{ u.nome }}
+            {% if u.id == trofa_id %}<span class="muted tiny">(sede)</span>{% endif %}
+          </td>
+          <td>
+            {% if u.ativo %}
+            <span class="pill ok">ativa</span>
+            {% else %}
+            <span class="pill neutral">inativa</span>
+            {% endif %}
+          </td>
+          <td class="muted tiny">{{ (u.created_at | string)[:16] }}</td>
+          <td style="text-align:right;">
+            {% if u.id != trofa_id %}
+            <form method="post" action="/admin/unidades/{{ u.id }}/toggle"
+                  style="display:inline;">
+              <button class="btn" type="submit">
+                {% if u.ativo %}Desativar{% else %}Reativar{% endif %}
+              </button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+</div>

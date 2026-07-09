@@ -14,6 +14,7 @@ import os
 import re
 import secrets
 import shutil
+import sqlite3  # Task C — erros de unicidade nas unidades fabris
 import sys
 import threading
 import time  # R224 — timing por etapa (profiling)
@@ -2157,9 +2158,18 @@ def _revalidate_all_sheets_bg() -> None:
                 dt.datetime.now().isoformat(timespec="seconds"))
 
 
-def _refs_redirect(param: str, message: str) -> RedirectResponse:
+# Destinos permitidos para o `back` dos POSTs de refs — o corpo da página
+# vive em /refs (URL histórico) e /admin/referencias (Task C).
+_REFS_BACK_PATHS = ("/refs", "/admin/referencias")
+
+
+def _refs_redirect(
+    param: str, message: str, back: str = "/refs",
+) -> RedirectResponse:
+    if back not in _REFS_BACK_PATHS:
+        back = "/refs"
     return RedirectResponse(
-        f"/refs?{param}={quote_plus(message)}", status_code=303,
+        f"{back}?{param}={quote_plus(message)}", status_code=303,
     )
 
 
@@ -2228,9 +2238,9 @@ def _start_revalidation() -> bool:
     return True
 
 
-@app.get("/refs", response_class=HTMLResponse)
-def refs_page(request: Request) -> Response:
-    """Página para carregar refs e ver o estado dos workbooks ativos."""
+def _refs_context(request: Request) -> dict:
+    """Contexto do corpo de refs (_refs_content.html) — partilhado entre
+    /refs (URL histórico) e /admin/referencias (Task C)."""
     from app.cross_check import refs_uploads
     refs = get_watcher().get_refs()
     status = get_watcher().status()
@@ -2307,7 +2317,7 @@ def refs_page(request: Request) -> Response:
             "hash_short": colab_sha[:8] if colab_sha else "—",
         },
     ]
-    return templates.TemplateResponse(request, "refs.html", {
+    return {
         "refs_status": status,
         "stats": stats,
         "uploads": refs_uploads.recent(),
@@ -2331,14 +2341,23 @@ def refs_page(request: Request) -> Response:
         "colaboradores_path": colab_status.get("path") or "—",
         "flash_ok": request.query_params.get("ok"),
         "flash_err": request.query_params.get("err"),
-        "active_tab": "refs",
-    })
+    }
+
+
+@app.get("/refs", response_class=HTMLResponse)
+def refs_page(request: Request) -> Response:
+    """Página para carregar refs e ver o estado dos workbooks ativos."""
+    ctx = _refs_context(request)
+    ctx["active_tab"] = "refs"
+    ctx["refs_back"] = "/refs"
+    return templates.TemplateResponse(request, "refs.html", ctx)
 
 
 @app.post("/refs/upload")
 async def refs_upload(
     kind: str = Form(...),
     file: UploadFile = File(...),
+    back: str = Form("/refs"),
 ) -> Response:
     """Recebe um workbook de refs, valida-o e substitui
     o ficheiro vivo. Recarrega as refs DIRETO do ficheiro (sem acumulação
@@ -2348,9 +2367,9 @@ async def refs_upload(
     if kind not in _REFS_FILENAMES:
         raise HTTPException(400, "kind inválido")
     if not file.filename:
-        return _refs_redirect("err", "sem ficheiro")
+        return _refs_redirect("err", "sem ficheiro", back=back)
     if Path(file.filename).suffix.lower() not in (".xlsx", ".xlsm"):
-        return _refs_redirect("err", "o ficheiro tem de ser .xlsx")
+        return _refs_redirect("err", "o ficheiro tem de ser .xlsx", back=back)
 
     # R118 — rede de segurança global: qualquer exceção (PermissionError no
     # mkdir, falha do watcher, etc.) é silenciosa hoje e dá página em branco
@@ -2369,13 +2388,13 @@ async def refs_upload(
                 if bytes_written > _MAX_UPLOAD_BYTES:
                     f.close()
                     tmp.unlink(missing_ok=True)
-                    return _refs_redirect("err", "ficheiro demasiado grande")
+                    return _refs_redirect("err", "ficheiro demasiado grande", back=back)
                 f.write(chunk)
 
         err, upload_info = _inspect_refs_xlsx(tmp, kind)
         if err:
             tmp.unlink(missing_ok=True)
-            return _refs_redirect("err", f"ficheiro rejeitado: {err}")
+            return _refs_redirect("err", f"ficheiro rejeitado: {err}", back=back)
         upload_sha = file_sha256(tmp)
 
         # R134 — backup do ficheiro vivo ANTES de o substituir, para poder
@@ -2404,9 +2423,7 @@ async def refs_upload(
             tmp.unlink(missing_ok=True)
             if backup is not None:
                 backup.unlink(missing_ok=True)
-            return _refs_redirect(
-                "err", "ficheiro em uso - fecha o Excel e tenta outra vez",
-            )
+            return _refs_redirect("err", "ficheiro em uso - fecha o Excel e tenta outra vez", back=back)
 
         def _rollback(msg: str) -> Response:
             # R134 — restaura o ficheiro anterior e recarrega refs a partir
@@ -2417,7 +2434,7 @@ async def refs_upload(
                     watcher.force_reload()
                 except Exception:  # noqa: BLE001
                     traceback.print_exc()
-            return _refs_redirect("err", msg)
+            return _refs_redirect("err", msg, back=back)
 
         active_sha = file_sha256(target)
         if active_sha != upload_sha:
@@ -2477,17 +2494,17 @@ async def refs_upload(
                 f"Colaboradores atualizados: {n_rows} colaboradores, "
                 f"hash {active_sha[:8]}"
             )
-        return _refs_redirect("ok", ok_msg)
+        return _refs_redirect("ok", ok_msg, back=back)
     except Exception as e:  # noqa: BLE001
         # R118 — captura qualquer exceção não tratada e devolve mensagem
         # útil ao operador (antes: silêncio / página em branco).
         traceback.print_exc()
         msg = str(e)[:80].replace("\n", " ")
-        return _refs_redirect("err", f"erro inesperado: {msg}")
+        return _refs_redirect("err", f"erro inesperado: {msg}", back=back)
 
 
 @app.post("/refs/import-folder")
-def refs_import_folder() -> Response:
+def refs_import_folder(back: str = Form("/refs")) -> Response:
     """Importa refs da pasta partilhada configurada."""
     result = ref_importer.import_refs_from_config()
     if result.get("ok"):
@@ -2498,26 +2515,30 @@ def refs_import_folder() -> Response:
             return _refs_redirect(
                 "ok",
                 f"importação da pasta: {len(imported)} ficheiro(s) atualizado(s) ({kinds})",
+                back=back,
             )
         return _refs_redirect(
             "ok",
             f"importação da pasta: sem alterações ({len(skipped)} já iguais)",
+            back=back,
         )
     errors = result.get("error") or "; ".join(
         str(e.get("error")) for e in result.get("errors", []) if e.get("error")
     )
-    return _refs_redirect("err", f"importação da pasta falhou: {errors or 'erro desconhecido'}")
+    return _refs_redirect(
+        "err",
+        f"importação da pasta falhou: {errors or 'erro desconhecido'}",
+        back=back,
+    )
 
 
 @app.post("/refs/revalidate")
-def refs_revalidate() -> Response:
+def refs_revalidate(back: str = Form("/refs")) -> Response:
     """Botão 'Re-validar folhas' — re-corre o cross-check de TODAS as folhas
     (extracted + validated) contra as refs atuais, em background."""
     if _start_revalidation():
-        return RedirectResponse(
-            "/refs?ok=re-validacao+iniciada", status_code=303)
-    return RedirectResponse(
-        "/refs?err=re-validacao+ja+esta+a+correr", status_code=303)
+        return _refs_redirect("ok", "re-validacao iniciada", back=back)
+    return _refs_redirect("err", "re-validacao ja esta a correr", back=back)
 
 
 @app.get("/refs/revalidation-status", response_class=HTMLResponse)
@@ -2532,6 +2553,84 @@ def refs_revalidation_status(request: Request) -> Response:
 def admin_to_analisar(limit: int | None = None) -> JSONResponse:
     """Inbox of cells flagged ANALISAR — for the supervisor's review queue."""
     return JSONResponse(load_to_analisar(limit=limit))
+
+
+# ---------------------------------------------------------------------------
+# Task C — página /admin com separadores (Referências | Kanbans | Unidades |
+# KPIs). NOTA: as rotas fixas /admin/* (refs-status, to-analisar, …) estão
+# registadas ACIMA, por isso ganham ao wildcard /admin/{tab}.
+# ---------------------------------------------------------------------------
+
+_ADMIN_TABS = ("referencias", "kanbans", "unidades", "kpis")
+
+
+def _admin_redirect(tab: str, param: str, message: str) -> RedirectResponse:
+    if tab not in _ADMIN_TABS:
+        tab = "referencias"
+    return RedirectResponse(
+        f"/admin/{tab}?{param}={quote_plus(message)}", status_code=303,
+    )
+
+
+@app.get("/admin")
+def admin_root() -> RedirectResponse:
+    return RedirectResponse("/admin/referencias", status_code=303)
+
+
+@app.get("/admin/{tab}", response_class=HTMLResponse)
+def admin_page(request: Request, tab: str) -> Response:
+    """Página de administração — cada separador carrega só o seu contexto."""
+    if tab not in _ADMIN_TABS:
+        raise HTTPException(404, "separador desconhecido")
+    ctx: dict = {
+        "admin_tab": tab,
+        "flash_ok": request.query_params.get("ok"),
+        "flash_err": request.query_params.get("err"),
+    }
+    if tab == "referencias":
+        ctx.update(_refs_context(request))
+        ctx["refs_back"] = "/admin/referencias"
+    elif tab == "unidades":
+        ctx["unidades"] = db.list_unidades(only_ativo=False)
+        ctx["trofa_id"] = db.trofa_unidade_id()
+    elif tab == "kanbans":
+        from app.templates_registry import TEMPLATES
+        ctx["kanban_templates"] = db.list_kanban_templates()
+        ctx["n_builtin_templates"] = len(TEMPLATES)
+    # tab "kpis": slot — a edição de fórmulas chega na Entrega 3.
+    ctx["active_tab"] = "admin"
+    return templates.TemplateResponse(request, "admin.html", ctx)
+
+
+@app.post("/admin/unidades")
+def admin_create_unidade(nome: str = Form(...)) -> Response:
+    """Cria uma unidade fabril nova (tab Unidades)."""
+    nome = (nome or "").strip()
+    try:
+        db.create_unidade(nome)
+    except ValueError:
+        return _admin_redirect("unidades", "err", "o nome da unidade não pode ser vazio")
+    except sqlite3.IntegrityError:
+        return _admin_redirect("unidades", "err", f"já existe uma unidade chamada '{nome}'")
+    return _admin_redirect("unidades", "ok", f"unidade '{nome}' criada")
+
+
+@app.post("/admin/unidades/{unidade_id}/toggle")
+def admin_toggle_unidade(unidade_id: int) -> Response:
+    """Ativa/desativa uma unidade. A sede (Trofa) não pode ser desativada —
+    as folhas sem unidade pertencem-lhe."""
+    if unidade_id == db.trofa_unidade_id():
+        return _admin_redirect("unidades", "err", "a sede não pode ser desativada")
+    alvo = next(
+        (u for u in db.list_unidades(only_ativo=False) if u["id"] == unidade_id),
+        None,
+    )
+    if alvo is None:
+        return _admin_redirect("unidades", "err", "unidade não encontrada")
+    novo = not bool(alvo["ativo"])
+    db.set_unidade_ativo(unidade_id, novo)
+    estado = "reativada" if novo else "desativada"
+    return _admin_redirect("unidades", "ok", f"unidade '{alvo['nome']}' {estado}")
 
 
 @app.post("/sheet/{sheet_id}/delete")
