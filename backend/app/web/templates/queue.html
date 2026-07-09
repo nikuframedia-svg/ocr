@@ -10,7 +10,7 @@
 <script>
 (function () {
   var KEY = 'queue_filters';
-  var FILTER_KEYS = ['status', 'of', 'operador', 'data', 'captured', 'setor'];
+  var FILTER_KEYS = ['status', 'of', 'operador', 'data', 'captured', 'setor', 'unidade'];
   var p = new URLSearchParams(location.search);
   var present = FILTER_KEYS.filter(function (k) { return p.get(k); });
   if (present.length) {                       // URL tem filtros → memoriza-os
@@ -44,6 +44,7 @@
     {%- if data_filter %}&data={{ data_filter|urlencode }}{% endif -%}
     {%- if captured_filter %}&captured={{ captured_filter|urlencode }}{% endif -%}
     {%- if setor_filter %}&setor={{ setor_filter|urlencode }}{% endif -%}
+    {%- if unidade_filter is not none %}&unidade={{ unidade_filter }}{% endif -%}
   {%- endset -%}
   {# R88: URL de origem completa para passar ao /sheet via ?back=. Permite
      ao kanban ter botão "← Voltar à lista" que restaura os filtros. #}
@@ -112,6 +113,21 @@
       </select>
     </label>
 
+    {# Task C E4 — filtro por unidade fabril (só aparece com >1 unidade) #}
+    {% if unidades and unidades | length > 1 %}
+    <label style="display:inline-flex; align-items:center; gap:6px;">
+      <span class="lbl" style="margin:0;">UNIDADE</span>
+      <select name="unidade" class="kv-select" onchange="this.form.submit()">
+        <option value="">— Todas —</option>
+        {% for u in unidades %}
+          <option value="{{ u.id }}" {% if u.id == unidade_filter %}selected{% endif %}>
+            {{ u.nome }}{% if u.nome == 'Trofa' %} (sede){% endif %}
+          </option>
+        {% endfor %}
+      </select>
+    </label>
+    {% endif %}
+
     <label style="display:inline-flex; align-items:center; gap:6px;">
       <span class="lbl" style="margin:0;">OF</span>
       <input type="text" name="of" value="{{ of_filter or '' }}"
@@ -120,7 +136,7 @@
       <button class="btn" type="submit">Filtrar</button>
     </label>
 
-    {% if operador_filter or data_filter or captured_filter or setor_filter or of_filter %}
+    {% if operador_filter or data_filter or captured_filter or setor_filter or of_filter or unidade_filter is not none %}
       {# R137 — limpar tem de apagar o sessionStorage, senão o script sticky
          volta a aplicar os filtros que acabámos de limpar. #}
       <a class="btn ghost" style="font-size:12px;"
@@ -142,6 +158,7 @@
             <th>Capturada</th>
             <th>Operador</th>
             <th>Template</th>
+            {% if unidades and unidades | length > 1 %}<th>Unidade</th>{% endif %}
             <th>Estado</th>
             <th></th>
           </tr>
@@ -171,6 +188,11 @@
                 </span>
               {% endif %}
             </td>
+            {% if unidades and unidades | length > 1 %}
+            <td class="muted tiny">
+              {{ unidade_nome_by_id.get(s.unidade_id) or 'Trofa' }}
+            </td>
+            {% endif %}
             <td>
               {% if s.status == 'validated' %}
                 <span class="pill ok">validada</span>

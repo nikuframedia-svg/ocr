@@ -1,5 +1,6 @@
-{# Tab Kanbans — lista de templates registados. O wizard de registo
-   (upload → descoberta OCR → validação → ativação) chega na Entrega 4. #}
+{# Tab Kanbans — lista de templates registados + wizard de registo
+   (Task C E4). Etapas: unidade → upload → análise (fila OCR) → campos →
+   validação (plano/StockSAP) → confirmar/ativar. Ativação NUNCA automática. #}
 
 {% if flash_ok %}
 <div class="refs-flash ok">✓ {{ flash_ok }}</div>
@@ -8,57 +9,448 @@
 <div class="refs-flash err">✕ {{ flash_err }}</div>
 {% endif %}
 
-<div class="card" style="margin-bottom:14px;">
-  <div class="card-h">
-    <div class="card-h-title">Kanbans registados</div>
-    <div class="card-h-sub">
-      templates registados por unidade fabril — além dos
-      {{ n_builtin_templates }} modelos de fábrica (Trofa)
+<div x-data="kanbanWizard()">
+
+  {# ---- Templates registados ---- #}
+  <div class="card" style="margin-bottom:14px;">
+    <div class="card-h">
+      <div class="card-h-title">Kanbans registados</div>
+      <div class="card-h-sub">
+        templates por unidade fabril — além dos {{ n_builtin_templates }}
+        modelos de fábrica (Trofa)
+      </div>
+    </div>
+    <div class="card-b">
+      {% if not kanban_templates %}
+      <div class="muted">Ainda não há kanbans registados.</div>
+      {% else %}
+      <table class="tbl">
+        <thead>
+          <tr><th>Nome</th><th>Unidade</th><th>Estado</th><th>Criado</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for t in kanban_templates %}
+          <tr>
+            <td style="font-family:var(--font-mono); font-size:12px;">{{ t.name }}</td>
+            <td>{{ t.unidade_nome }}</td>
+            <td>
+              {% if t.status == 'ativo' %}
+              <span class="pill ok">ativo</span>
+              {% elif t.status == 'a_analisar' %}
+              <span class="pill info">a analisar</span>
+              {% elif t.status == 'analisado' %}
+              <span class="pill warn">analisado — por validar</span>
+              {% else %}
+              <span class="pill neutral">{{ t.status }}</span>
+              {% endif %}
+            </td>
+            <td class="muted tiny">{{ (t.created_at | string)[:16] }}</td>
+            <td style="text-align:right; white-space:nowrap;">
+              {% if t.status in ('analisado', 'a_analisar') %}
+              <button class="btn" type="button"
+                      @click="resume({{ t.id }})">Retomar registo</button>
+              {% endif %}
+              {% if t.status == 'ativo' %}
+              <button class="btn" type="button"
+                      @click="rowAction({{ t.id }}, 'deactivate')">Desativar</button>
+              {% elif t.status == 'inativo' %}
+              <button class="btn" type="button"
+                      @click="rowAction({{ t.id }}, 'activate')">Reativar</button>
+              {% endif %}
+              {% if t.status != 'ativo' %}
+              <button class="btn" type="button"
+                      @click="rowDelete({{ t.id }}, '{{ t.name }}')">Apagar</button>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
     </div>
   </div>
-  <div class="card-b">
-    {% if not kanban_templates %}
-    <div class="muted">Ainda não há kanbans registados.</div>
-    {% else %}
-    <table class="tbl">
-      <thead>
-        <tr><th>Nome</th><th>Unidade</th><th>Estado</th><th>Criado</th></tr>
-      </thead>
-      <tbody>
-        {% for t in kanban_templates %}
-        <tr>
-          <td>{{ t.name }}</td>
-          <td>{{ t.unidade_nome }}</td>
-          <td>
-            {% if t.status == 'ativo' %}
-            <span class="pill ok">ativo</span>
-            {% elif t.status == 'a_analisar' %}
-            <span class="pill info">a analisar</span>
-            {% elif t.status == 'analisado' %}
-            <span class="pill warn">analisado — por validar</span>
-            {% else %}
-            <span class="pill neutral">{{ t.status }}</span>
-            {% endif %}
-          </td>
-          <td class="muted tiny">{{ (t.created_at | string)[:16] }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% endif %}
+
+  {# ---- Wizard ---- #}
+  <div class="card">
+    <div class="card-h">
+      <div class="card-h-title">Registar novo kanban</div>
+      <div class="card-h-sub">
+        fotografia do template → análise OCR dos campos → validação →
+        pesquisa no plano/StockSAP → ativação
+      </div>
+    </div>
+    <div class="card-b">
+      <div class="refs-flash err" x-show="flashErr" x-cloak x-text="flashErr"></div>
+
+      {# passos #}
+      <div class="tabs" style="margin-bottom:14px;">
+        <template x-for="(s, i) in steps" :key="s.key">
+          <span class="tab" :class="{ active: step === s.key }"
+                x-text="(i + 1) + '. ' + s.label"></span>
+        </template>
+      </div>
+
+      {# ---- 1. unidade ---- #}
+      <div x-show="step === 'unidade'" x-cloak>
+        <div class="muted" style="margin-bottom:10px;">
+          A que unidade fabril pertence este kanban? (criar unidades novas
+          na tab <a href="/admin/unidades">Unidades</a>)
+        </div>
+        <select x-model.number="unidadeId" class="kv-select">
+          <option value="">— escolher unidade —</option>
+          {% for u in unidades_ativas %}
+          <option value="{{ u.id }}">{{ u.nome }}</option>
+          {% endfor %}
+        </select>
+        <button class="btn primary" type="button" style="margin-left:8px;"
+                :disabled="!unidadeId" @click="step = 'upload'">Continuar</button>
+      </div>
+
+      {# ---- 2. upload ---- #}
+      <div x-show="step === 'upload'" x-cloak>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+          <input type="text" x-model="nome" maxlength="40"
+                 placeholder="nome do kanban (ex.: corte esposende)"
+                 style="max-width:280px;">
+          <input type="file" accept=".jpg,.jpeg,.png,.webp" x-ref="tplFile">
+          <button class="btn primary" type="button" :disabled="busy"
+                  @click="upload()">Analisar template</button>
+        </div>
+        <div class="muted tiny" style="margin-top:8px;">
+          usa uma fotografia nítida do template (em branco ou preenchido) —
+          a análise partilha o motor de OCR da produção (~25 s/folha)
+        </div>
+      </div>
+
+      {# ---- 3. análise ---- #}
+      <div x-show="step === 'analise'" x-cloak>
+        <div class="muted">
+          A analisar o template… posição na fila:
+          <strong x-text="queuePosition"></strong>
+          (partilha a fila do OCR de produção — ~25 s por folha à frente)
+        </div>
+      </div>
+
+      {# ---- 4. campos ---- #}
+      <div x-show="step === 'campos'" x-cloak>
+        <div class="refs-flash err" x-show="discoveryFailed" x-cloak>
+          ✕ A análise automática falhou — preenche os campos à mão.
+        </div>
+        <template x-if="warnings.length">
+          <div class="refs-flash err" style="background:var(--warn-soft); color:var(--warn);">
+            <template x-for="w in warnings"><div x-text="'⚠ ' + w"></div></template>
+          </div>
+        </template>
+
+        <div style="display:flex; gap:16px; flex-wrap:wrap;">
+          <div style="flex:2; min-width:340px;">
+            <div class="muted tiny" style="margin-bottom:6px;">
+              Colunas da tabela (ordem esquerda→direita do papel). Campos
+              canónicos ficam com KPIs/cross-check; os restantes são custom.
+            </div>
+            <table class="tbl">
+              <thead><tr><th>Label no papel</th><th>Campo</th><th>Cross-check</th><th></th></tr></thead>
+              <tbody>
+                <template x-for="(f, i) in fields" :key="i">
+                  <tr>
+                    <td><input type="text" x-model="f.label" style="width:140px;"></td>
+                    <td>
+                      <input type="text" x-model="f.field" list="known-fields"
+                             style="width:130px; font-family:var(--font-mono); font-size:12px;">
+                      <span class="tiny" :style="knownFields.includes(f.field) ? 'color:var(--ok);' : 'color:var(--warn);'"
+                            x-text="knownFields.includes(f.field) ? 'canónico' : 'custom'"></span>
+                    </td>
+                    <td style="text-align:center;">
+                      <input type="checkbox" x-model="f.cross"
+                             :disabled="!crossableFields.includes(f.field)">
+                    </td>
+                    <td style="white-space:nowrap; text-align:right;">
+                      <button class="btn" type="button" @click="moveField(i, -1)" :disabled="i === 0">↑</button>
+                      <button class="btn" type="button" @click="moveField(i, 1)" :disabled="i === fields.length - 1">↓</button>
+                      <button class="btn" type="button" @click="fields.splice(i, 1)">✕</button>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+            <datalist id="known-fields">
+              {% for f in known_row_fields %}<option value="{{ f }}">{% endfor %}
+            </datalist>
+            <button class="btn" type="button" style="margin-top:6px;"
+                    @click="fields.push({label: '', field: '', cross: false})">+ Adicionar campo</button>
+          </div>
+
+          <div style="flex:1; min-width:260px;">
+            <div class="muted tiny" style="margin-bottom:6px;">
+              Aliases de Setor/Máquina (um por linha, OBRIGATÓRIO ≥1) — é o
+              que o operador escreve no cabeçalho e permite ao OCR detetar
+              este template.
+            </div>
+            <textarea x-model="aliasesText" rows="4"
+                      placeholder="ex.: CORTE ESPOSENDE&#10;GUILHOTINA ESP"
+                      style="width:100%; font-family:var(--font-mono); font-size:12px;"></textarea>
+            <template x-if="conflicts.length">
+              <div class="tiny" style="margin-top:6px;">
+                <template x-for="c in conflicts">
+                  <div :style="c.kind === 'exact' ? 'color:var(--crit);' : 'color:var(--warn);'"
+                       x-text="(c.kind === 'exact' ? '✕ conflito: ' : '⚠ contém/contido: ') + c.alias + ' vs ' + c.against + ' (' + c.template + ')'"></div>
+                </template>
+              </div>
+            </template>
+            <div style="margin-top:10px;">
+              <img :src="templateId ? ('/admin/kanban-templates/' + templateId + '/image') : ''"
+                   x-show="templateId" style="max-width:100%; border:1px solid var(--rule); border-radius:6px;">
+            </div>
+          </div>
+        </div>
+
+        <div class="tiny" style="color:var(--crit); margin-top:8px;" x-show="specErrors.length" x-cloak>
+          <template x-for="e in specErrors"><div x-text="'✕ ' + e"></div></template>
+        </div>
+        <button class="btn primary" type="button" style="margin-top:10px;"
+                :disabled="busy" @click="saveSpec()">Guardar campos e continuar</button>
+      </div>
+
+      {# ---- 5. validação ---- #}
+      <div x-show="step === 'validacao'" x-cloak>
+        <div class="muted" style="margin-bottom:8px;">
+          Confirma que os campos batem com dados reais: pesquisa uma OF, OV,
+          modelo ou lote deste layout no plano/StockSAP.
+        </div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <input type="text" x-model="lookupQ" placeholder="OF / OV / modelo / lote"
+                 @keydown.enter="lookup()" style="max-width:260px;">
+          <button class="btn" type="button" :disabled="busy" @click="lookup()">Pesquisar</button>
+        </div>
+        <template x-if="lookupResult">
+          <div style="margin-top:10px;">
+            <div class="muted tiny"
+                 x-text="lookupResult.found ? ('modo: ' + lookupResult.mode + ' · ' + (lookupResult.n_total ?? 0) + ' resultado(s)') : 'sem resultados no plano/StockSAP'"></div>
+            <table class="tbl" x-show="lookupResult.entries && lookupResult.entries.length" x-cloak>
+              <thead><tr><th>OF</th><th>Cliente</th><th>OV</th><th>Modelo</th><th class="num">Faltam</th></tr></thead>
+              <tbody>
+                <template x-for="e in (lookupResult.entries || []).slice(0, 8)">
+                  <tr>
+                    <td x-text="e.of"></td><td x-text="e.cliente"></td>
+                    <td x-text="e.ov"></td><td x-text="e.modelo"></td>
+                    <td class="num" x-text="e.remaining === null ? '—' : e.remaining"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+            <div x-show="lookupResult.mode === 'lote'" x-cloak class="tiny" style="margin-top:6px;"
+                 x-text="lookupResult.lote ? ('lote ' + lookupResult.lote.lote + ' · esp ' + (lookupResult.lote.esp ?? '—') + ' · larg ' + (lookupResult.lote.larg ?? '—')) : ''"></div>
+          </div>
+        </template>
+        <div style="margin-top:12px;">
+          <button class="btn" type="button" @click="step = 'campos'">← Voltar aos campos</button>
+          <button class="btn primary" type="button" @click="step = 'confirmar'">Continuar</button>
+        </div>
+      </div>
+
+      {# ---- 6. confirmar ---- #}
+      <div x-show="step === 'confirmar'" x-cloak>
+        <div class="muted" style="margin-bottom:8px;">
+          <strong x-text="templateName"></strong> ·
+          <span x-text="fields.length + ' campos, ' + aliasList().length + ' alias(es)'"></span>
+        </div>
+        <div class="muted tiny" style="margin-bottom:10px;">
+          Ao ativar, o OCR passa a detetar este template imediatamente e as
+          folhas ficam carimbadas com a unidade. Podes desativá-lo a
+          qualquer momento na tabela acima (kill-switch).
+        </div>
+        <button class="btn" type="button" @click="step = 'validacao'">← Voltar</button>
+        <button class="btn primary" type="button" :disabled="busy"
+                @click="activate()">Ativar template</button>
+      </div>
+
+    </div>
   </div>
 </div>
 
-<div class="card">
-  <div class="card-h">
-    <div class="card-h-title">Registar novo kanban</div>
-    <div class="card-h-sub">em preparação</div>
-  </div>
-  <div class="card-b">
-    <div class="muted">
-      O assistente de registo (fotografia do template → análise OCR dos
-      campos → validação → pesquisa no plano/StockSAP → ativação) fica
-      disponível na próxima atualização.
-    </div>
-  </div>
-</div>
+<script>
+function kanbanWizard() {
+  return {
+    steps: [
+      {key: 'unidade', label: 'Unidade'}, {key: 'upload', label: 'Template'},
+      {key: 'analise', label: 'Análise'}, {key: 'campos', label: 'Campos'},
+      {key: 'validacao', label: 'Validação'}, {key: 'confirmar', label: 'Ativar'},
+    ],
+    step: 'unidade',
+    unidadeId: '',
+    nome: '',
+    templateId: null,
+    templateName: '',
+    queuePosition: '…',
+    fields: [],            // [{label, field, cross}]
+    aliasesText: '',
+    warnings: [],
+    conflicts: [],
+    specErrors: [],
+    discoveryFailed: false,
+    lookupQ: '',
+    lookupResult: null,
+    busy: false,
+    flashErr: '',
+    _poll: null,
+    knownFields: {{ known_row_fields | tojson }},
+    crossableFields: {{ crossable_fields | tojson }},
+
+    aliasList() {
+      return this.aliasesText.split('\n').map(s => s.trim()).filter(Boolean);
+    },
+    moveField(i, d) {
+      const j = i + d;
+      if (j < 0 || j >= this.fields.length) return;
+      [this.fields[i], this.fields[j]] = [this.fields[j], this.fields[i]];
+    },
+    async upload() {
+      this.flashErr = '';
+      const file = this.$refs.tplFile.files[0];
+      if (!this.nome.trim() || !file) {
+        this.flashErr = 'Escolhe um nome e uma fotografia do template.'; return;
+      }
+      this.busy = true;
+      try {
+        const fd = new FormData();
+        fd.append('nome', this.nome.trim());
+        fd.append('unidade_id', this.unidadeId);
+        fd.append('file', file);
+        const r = await fetch('/admin/kanban-templates', {method: 'POST', body: fd});
+        const data = await r.json();
+        if (!r.ok) { this.flashErr = data.detail || 'Falha no upload.'; return; }
+        this.templateId = data.id;
+        this.templateName = data.name;
+        this.queuePosition = data.queue_position;
+        this.step = 'analise';
+        this.startPolling();
+      } catch (e) { this.flashErr = 'Erro de rede no upload.'; }
+      finally { this.busy = false; }
+    },
+    startPolling() {
+      this.stopPolling();
+      this._poll = setInterval(() => this.checkStatus(), 3000);
+      this.checkStatus();
+    },
+    stopPolling() { if (this._poll) { clearInterval(this._poll); this._poll = null; } },
+    async checkStatus() {
+      try {
+        const r = await fetch('/admin/kanban-templates/' + this.templateId + '/status');
+        if (!r.ok) return;
+        const data = await r.json();
+        this.queuePosition = data.queue_size;
+        if (data.status !== 'a_analisar') {
+          this.stopPolling();
+          this.loadFromStatus(data);
+          this.step = 'campos';
+        }
+      } catch (e) { /* rede — tenta no próximo tick */ }
+    },
+    loadFromStatus(data) {
+      this.templateId = data.id;
+      this.templateName = data.name;
+      const spec = data.spec || {};
+      const disc = data.discovery || {};
+      this.discoveryFailed = disc && disc.parse_ok === false;
+      this.warnings = (disc && disc.warnings) || [];
+      const labels = spec.field_labels || {};
+      const cross = spec.cross_check_fields || [];
+      this.fields = (spec.row_fields || []).map(f => ({
+        label: labels[f] || f.toUpperCase(),
+        field: f,
+        cross: cross.includes(f),
+      }));
+      if (!this.fields.length) this.fields = [{label: '', field: '', cross: false}];
+      this.aliasesText = (spec.setor_aliases || []).join('\n');
+    },
+    async resume(id) {
+      this.flashErr = '';
+      try {
+        const r = await fetch('/admin/kanban-templates/' + id + '/status');
+        const data = await r.json();
+        if (!r.ok) { this.flashErr = data.detail || 'Falha a retomar.'; return; }
+        this.unidadeId = data.unidade_id;
+        if (data.status === 'a_analisar') {
+          this.templateId = data.id; this.templateName = data.name;
+          this.step = 'analise'; this.startPolling();
+        } else {
+          this.loadFromStatus(data);
+          this.step = 'campos';
+        }
+        window.scrollTo(0, document.body.scrollHeight);
+      } catch (e) { this.flashErr = 'Erro de rede.'; }
+    },
+    buildSpec() {
+      const rowFields = this.fields.map(f => (f.field || '').trim()).filter(Boolean);
+      const labels = {};
+      this.fields.forEach(f => { if (f.field && f.label) labels[f.field.trim()] = f.label.trim(); });
+      return {
+        name: this.templateName,
+        tpl_code: 'TPL103',
+        phase: 'Produção',
+        setor_aliases: this.aliasList(),
+        row_fields: rowFields,
+        cross_check_fields: this.fields.filter(f => f.cross && f.field).map(f => f.field.trim()),
+        field_labels: labels,
+      };
+    },
+    async saveSpec() {
+      this.busy = true; this.specErrors = []; this.conflicts = []; this.flashErr = '';
+      try {
+        const r = await fetch('/admin/kanban-templates/' + this.templateId + '/spec', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({spec: this.buildSpec()}),
+        });
+        const data = await r.json();
+        this.conflicts = data.conflicts || [];
+        if (!r.ok || !data.ok) {
+          this.specErrors = data.errors || [data.detail || 'spec inválido'];
+          return;
+        }
+        this.warnings = data.warnings || [];
+        this.step = 'validacao';
+      } catch (e) { this.flashErr = 'Erro de rede ao guardar.'; }
+      finally { this.busy = false; }
+    },
+    async lookup() {
+      if (!this.lookupQ.trim()) return;
+      this.busy = true;
+      try {
+        const r = await fetch('/admin/refs-lookup?q=' + encodeURIComponent(this.lookupQ.trim()));
+        this.lookupResult = await r.json();
+      } catch (e) { this.flashErr = 'Erro de rede na pesquisa.'; }
+      finally { this.busy = false; }
+    },
+    async activate() {
+      this.busy = true; this.flashErr = '';
+      try {
+        const r = await fetch('/admin/kanban-templates/' + this.templateId + '/activate', {method: 'POST'});
+        const data = await r.json();
+        if (!r.ok || !data.ok) {
+          this.flashErr = (data.errors && data.errors.join(' · ')) || data.detail || 'Falha na ativação.';
+          return;
+        }
+        window.location = '/admin/kanbans?ok=' + encodeURIComponent('template ' + this.templateName + ' ativo');
+      } catch (e) { this.flashErr = 'Erro de rede na ativação.'; }
+      finally { this.busy = false; }
+    },
+    async rowAction(id, action) {
+      try {
+        const r = await fetch('/admin/kanban-templates/' + id + '/' + action, {method: 'POST'});
+        const data = await r.json();
+        if (!r.ok) { alert(data.detail || 'falhou'); return; }
+        window.location = '/admin/kanbans';
+      } catch (e) { alert('erro de rede'); }
+    },
+    async rowDelete(id, name) {
+      if (!confirm('Apagar o template ' + name + '? (recusa se houver folhas processadas)')) return;
+      try {
+        const r = await fetch('/admin/kanban-templates/' + id + '/delete', {method: 'POST'});
+        const data = await r.json();
+        if (!r.ok) { alert(data.detail || 'falhou'); return; }
+        window.location = '/admin/kanbans';
+      } catch (e) { alert('erro de rede'); }
+    },
+  };
+}
+</script>

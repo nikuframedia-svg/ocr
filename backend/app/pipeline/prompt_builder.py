@@ -437,4 +437,57 @@ Return ONLY a JSON object with one key:
 No markdown, no <think>, no explanation."""
 
 
-__all__ = ["build_prompt", "build_setor_only_prompt", "build_side_detect_prompt"]
+def canonical_field_labels() -> dict[str, str]:
+    """Task C E4 — cópia dos labels impressos por campo canónico de linha.
+    Usado pelo índice invertido label→campo no registo de templates."""
+    return dict(_FIELD_LABELS)
+
+
+def canonical_header_labels() -> dict[str, str]:
+    """Task C E4 — cópia dos labels de cabeçalho canónicos."""
+    return dict(_HEADER_LABELS)
+
+
+def build_discovery_prompt() -> str:
+    """Task C E4 — descoberta de campos de um template de kanban NOVO.
+
+    Corre sobre a fotografia do template em branco (ou exemplar) carregada
+    no wizard de registo (/admin, tab Kanbans). Pede APENAS os labels
+    IMPRESSOS, organizados por secção — sem inventar campos e sem tentar
+    ler valores manuscritos. O resultado alimenta o mapeamento
+    label→campo canónico (parse_discovery_response em ocr_runner) e é
+    sempre validado por um humano antes de o template poder ser ativado.
+    """
+    return """You are analysing the LAYOUT of an industrial Kanban production sheet template.
+
+Do NOT read handwritten values. Only report the PRINTED field labels of the form itself.
+
+Identify:
+1. header: labelled boxes at the top (e.g. Operador, N°, Setor/Maquina, Data, Turno)
+2. columns: the table's printed column headers, LEFT TO RIGHT, exactly as printed
+3. footer: labelled totals below the table (e.g. Colunas Produzidas, Horas Trabalhadas)
+4. title: the sheet's printed title/code if any (e.g. "TPL103 - PRODUÇÃO COLUNAS")
+
+Return ONLY a JSON object with exactly these keys:
+{
+  "title": "printed title or empty string",
+  "header": ["label 1", "label 2"],
+  "columns": ["COL 1", "COL 2"],
+  "footer": ["label 1"]
+}
+
+Rules:
+- Copy labels EXACTLY as printed (accents included). Do not translate.
+- Do not invent fields that are not printed on the sheet.
+- If a section does not exist, return an empty list for it.
+- No markdown, no <think>, no explanation."""
+
+
+__all__ = [
+    "build_prompt",
+    "build_setor_only_prompt",
+    "build_side_detect_prompt",
+    "build_discovery_prompt",
+    "canonical_field_labels",
+    "canonical_header_labels",
+]

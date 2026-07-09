@@ -37,7 +37,7 @@ sys.path.insert(0, str(_REPO / "backend"))
 
 from app import kernel  # noqa: E402  — R110.E event log (R117: hoisted for hot-path emits)
 from app.config import get_settings  # noqa: E402  — R236: gate de gravação marginal
-from app.web import attractors, db, export, kpi_params, kpis, llm_assistant, ocr_queue, ocr_runner, pdf_ingest  # noqa: E402
+from app.web import attractors, db, export, kpi_params, kpis, llm_assistant, ocr_queue, ocr_runner, pdf_ingest, template_store  # noqa: E402
 from app.cross_check import (  # noqa: E402
     cross_check_sheet,
     get_watcher,
@@ -205,6 +205,14 @@ def _process_sheet_ocr(sheet_id: int) -> None:
                 _deposit_csv_to_factory(sheet_id)
         except Exception as dep_err:  # noqa: BLE001
             print(f"[worker deposit] sheet {sheet_id}: {dep_err}", file=sys.stderr)
+        # Task C E4 — carimba a unidade fabril da folha a partir do template
+        # detetado (builtins → NULL = Trofa). Best-effort: nunca falha o OCR.
+        try:
+            tpl_name = (result.get("raw") or {}).get("template_name")
+            db.set_sheet_unidade(
+                sheet_id, template_store.unidade_for_template(tpl_name))
+        except Exception:  # noqa: BLE001
+            pass
     except Exception as e:  # noqa: BLE001
         try:
             db.update_error(sheet_id, f"{type(e).__name__}: {e}")
@@ -213,19 +221,93 @@ def _process_sheet_ocr(sheet_id: int) -> None:
         traceback.print_exc()
 
 
+def _process_discovery(template_id: int) -> None:
+    """Task C E4 — worker callback da descoberta de campos de um template
+    novo (wizard /admin). Partilha a fila FIFO do OCR de produção.
+
+    Nunca crasha o worker: qualquer falha fica registada no discovery_json
+    (parse_ok=False) e o template passa a 'analisado' — o humano corrige
+    os campos à mão no wizard em vez de o job ficar preso na fila.
+    """
+    try:
+        tpl = db.get_kanban_template(template_id)
+        if tpl is None or tpl.get("status") != "a_analisar":
+            return  # idempotência — já processado ou apagado
+        img_rel = tpl.get("image_path") or ""
+        img_path = _DATA_DIR / img_rel if img_rel else None
+        if img_path is None or not img_path.exists():
+            db.set_kanban_template_status(
+                template_id, "analisado",
+                discovery_json=json.dumps(
+                    {"parse_ok": False, "error": "imagem do template em falta"},
+                    ensure_ascii=False))
+            return
+        discovery = ocr_runner.run_discovery(img_path)
+        suggestion = template_store.suggest_spec_from_discovery(
+            discovery, name=tpl["name"], unidade_id=tpl["unidade_id"])
+        spec = suggestion["spec"]
+        # Preserva o que o humano já tiver posto no stub (ex.: aliases).
+        try:
+            stub = json.loads(tpl.get("spec_json") or "{}")
+        except json.JSONDecodeError:
+            stub = {}
+        if stub.get("setor_aliases"):
+            spec["setor_aliases"] = stub["setor_aliases"]
+        if not discovery.get("parse_ok") and stub.get("row_fields"):
+            spec["row_fields"] = stub["row_fields"]
+        db.update_kanban_template_spec(
+            template_id, json.dumps(spec, ensure_ascii=False))
+        db.set_kanban_template_status(
+            template_id, "analisado",
+            discovery_json=json.dumps({
+                "parse_ok": discovery.get("parse_ok", False),
+                "discovery": {k: v for k, v in discovery.items() if k != "raw"},
+                "raw": (discovery.get("raw") or "")[:4000],  # audit EN1090
+                "field_map": suggestion["field_map"],
+                "warnings": suggestion["warnings"],
+            }, ensure_ascii=False))
+    except Exception as e:  # noqa: BLE001
+        try:
+            db.set_kanban_template_status(
+                template_id, "analisado",
+                discovery_json=json.dumps(
+                    {"parse_ok": False, "error": f"{type(e).__name__}: {e}"},
+                    ensure_ascii=False))
+        except Exception:  # noqa: BLE001
+            pass
+        traceback.print_exc()
+
+
 @app.on_event("startup")
 def _startup() -> None:
     db.init_db()
+    # Task C E4 — instala os templates registados (DB) no registry antes de
+    # o worker arrancar; com DB vazia é identidade (18 builtins).
+    try:
+        loaded = template_store.reload_registry()
+        if loaded.get("loaded"):
+            print(f"[templates] runtime: {', '.join(loaded['loaded'])}",
+                  file=sys.stderr)
+    except Exception as e:  # noqa: BLE001
+        print(f"[templates startup] {e}", file=sys.stderr)
     # R71 — boot background OCR worker + recover any sheets stuck in
     # status='pending' from a previous process. The 10s window skips
     # sheets that are about to be enqueued by /upload in flight right now.
-    ocr_queue.start_worker(_process_sheet_ocr)
+    ocr_queue.start_worker(_process_sheet_ocr, _process_discovery)
     n_recovered = ocr_queue.recover_pending(
         older_than_seconds=10,
         list_pending_fn=db.list_stuck_pending,
     )
     if n_recovered:
         print(f"[R71 startup] re-enqueued {n_recovered} pending sheet(s)", file=sys.stderr)
+    # Task C E4 — re-enfileira descobertas órfãs (processo morreu a meio).
+    try:
+        for tpl in db.list_kanban_templates(status="a_analisar"):
+            ocr_queue.enqueue_discovery(tpl["id"])
+            print(f"[templates startup] re-enqueued discovery #{tpl['id']}",
+                  file=sys.stderr)
+    except Exception as e:  # noqa: BLE001
+        print(f"[templates discovery startup] {e}", file=sys.stderr)
     try:
         if ref_importer.start_background_importer():
             st = ref_importer.status()
@@ -2555,6 +2637,32 @@ def admin_to_analisar(limit: int | None = None) -> JSONResponse:
     return JSONResponse(load_to_analisar(limit=limit))
 
 
+@app.get("/admin/refs-lookup")
+def admin_refs_lookup(q: str = "", include_done: int = 0) -> JSONResponse:
+    """Passo 'validação' do wizard — pesquisa OF/OV/modelo no plano (via
+    _refs_lookup, sem folha/fase) + lote no StockSAP."""
+    query = (q or "").strip()
+    if not query:
+        return JSONResponse({
+            "found": False, "mode": "none", "q": "", "of": "", "entries": [],
+        })
+    result = _refs_lookup(query, include_done=bool(include_done), phase=None)
+    if result.get("found"):
+        return JSONResponse(result)
+    # Tier 4 — lote (StockSAP). R35: lotes indexados com e sem prefixo M.
+    refs = get_watcher().get_refs() or {}
+    lotes = refs.get("lotes_sap_full") or {}
+    key = query.upper()
+    rec = lotes.get(key) or lotes.get(f"M{key}")
+    if rec:
+        return JSONResponse({
+            "found": True, "mode": "lote", "q": query, "of": "",
+            "entries": [], "n_entries": 0, "n_total": 1,
+            "lote": {**rec, "lote": key},
+        })
+    return JSONResponse(result)
+
+
 # ---------------------------------------------------------------------------
 # Task C — página /admin com separadores (Referências | Kanbans | Unidades |
 # KPIs). NOTA: as rotas fixas /admin/* (refs-status, to-analisar, …) estão
@@ -2596,7 +2704,11 @@ def admin_page(request: Request, tab: str) -> Response:
     elif tab == "kanbans":
         from app.templates_registry import TEMPLATES
         ctx["kanban_templates"] = db.list_kanban_templates()
-        ctx["n_builtin_templates"] = len(TEMPLATES)
+        ctx["n_builtin_templates"] = sum(
+            1 for t in TEMPLATES.values() if t.source == "builtin")
+        ctx["unidades_ativas"] = db.list_unidades()
+        ctx["crossable_fields"] = sorted(template_store.CROSSABLE_FIELDS)
+        ctx["known_row_fields"] = sorted(template_store.KNOWN_ROW_FIELDS)
     elif tab == "kpis":
         state = kpi_params.load_state()
         ctx["kpi_state"] = state
@@ -2725,6 +2837,208 @@ def admin_toggle_unidade(unidade_id: int) -> Response:
     return _admin_redirect("unidades", "ok", f"unidade '{alvo['nome']}' {estado}")
 
 
+# ---------------------------------------------------------------------------
+# Task C E4 — registo de kanbans novos (wizard da tab Kanbans)
+# ---------------------------------------------------------------------------
+
+_TEMPLATE_IMAGES_DIR = "template_images"  # sob _DATA_DIR (gitignored)
+_TEMPLATE_IMG_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
+
+
+def _slug_template_name(nome: str) -> str:
+    from app.web.template_store import _slug_field
+    return _slug_field(nome)
+
+
+@app.post("/admin/kanban-templates")
+async def admin_create_kanban_template(
+    request: Request,
+    nome: str = Form(...),
+    unidade_id: int = Form(...),
+    file: UploadFile = File(...),
+) -> JSONResponse:
+    """Passo 'upload' do wizard: guarda a fotografia do template, cria o
+    registo (status a_analisar) e mete a descoberta na fila FIFO do OCR
+    (partilhada com a produção — sem prioridades)."""
+    if _is_mobile_request(request):
+        raise HTTPException(403, "Registo de kanbans só em desktop")
+    unidades = {u["id"]: u for u in db.list_unidades()}
+    if unidade_id not in unidades:
+        raise HTTPException(422, "unidade inexistente ou inativa")
+    slug = _slug_template_name(nome)
+    if not slug or slug == "campo":
+        raise HTTPException(422, "nome do kanban inválido")
+    # Prefixo u{unidade_id}_ — proteção estrutural contra colisão com os
+    # builtins (nenhum builtin começa por u\\d).
+    canonical = f"u{unidade_id}_{slug}"
+    from app.templates_registry import TEMPLATES
+    if canonical in TEMPLATES:
+        raise HTTPException(409, f"já existe um template '{canonical}'")
+    if not file.filename or Path(file.filename).suffix.lower() not in _TEMPLATE_IMG_SUFFIXES:
+        raise HTTPException(422, "a imagem tem de ser .jpg/.png/.webp")
+
+    img_dir = _DATA_DIR / _TEMPLATE_IMAGES_DIR
+    img_dir.mkdir(parents=True, exist_ok=True)
+    suffix = Path(file.filename).suffix.lower()
+    rel_path = f"{_TEMPLATE_IMAGES_DIR}/{canonical}{suffix}"
+    target = _DATA_DIR / rel_path
+    bytes_written = 0
+    with target.open("wb") as f:
+        while chunk := await file.read(1024 * 1024):
+            bytes_written += len(chunk)
+            if bytes_written > _MAX_UPLOAD_BYTES:
+                f.close()
+                target.unlink(missing_ok=True)
+                raise HTTPException(413, "imagem demasiado grande")
+            f.write(chunk)
+
+    stub = {"name": canonical, "row_fields": [], "setor_aliases": []}
+    try:
+        tid = db.insert_kanban_template(
+            canonical, unidade_id, json.dumps(stub, ensure_ascii=False),
+            image_path=rel_path, status="a_analisar")
+    except sqlite3.IntegrityError:
+        target.unlink(missing_ok=True)
+        raise HTTPException(409, f"já existe um template '{canonical}'")
+    pos = ocr_queue.enqueue_discovery(tid)
+    return JSONResponse({
+        "ok": True, "id": tid, "name": canonical,
+        "queue_position": pos, "queue_size": ocr_queue.queue_size(),
+    })
+
+
+@app.get("/admin/kanban-templates/{template_id}/status")
+def admin_kanban_template_status(template_id: int) -> JSONResponse:
+    """Polling do wizard (passo 'análise') + retoma de um registo."""
+    tpl = db.get_kanban_template(template_id)
+    if tpl is None:
+        raise HTTPException(404, "template não encontrado")
+    try:
+        spec = json.loads(tpl.get("spec_json") or "{}")
+    except json.JSONDecodeError:
+        spec = {}
+    try:
+        discovery = json.loads(tpl.get("discovery_json") or "null")
+    except json.JSONDecodeError:
+        discovery = None
+    return JSONResponse({
+        "id": tpl["id"], "name": tpl["name"], "status": tpl["status"],
+        "unidade_id": tpl["unidade_id"], "spec": spec,
+        "discovery": discovery, "queue_size": ocr_queue.queue_size(),
+    })
+
+
+@app.post("/admin/kanban-templates/{template_id}/spec")
+async def admin_kanban_template_spec(
+    template_id: int, request: Request,
+) -> JSONResponse:
+    """Passo 'campos' do wizard — grava o spec corrigido pelo humano.
+    422 com erros/conflitos bloqueantes; avisos seguem no 200."""
+    if _is_mobile_request(request):
+        raise HTTPException(403, "Registo de kanbans só em desktop")
+    tpl = db.get_kanban_template(template_id)
+    if tpl is None:
+        raise HTTPException(404, "template não encontrado")
+    body = await request.json()
+    spec = dict(body.get("spec") or {})
+    spec["name"] = tpl["name"]  # o nome canónico não muda por aqui
+    errors, warnings = template_store.validate_spec_payload(spec)
+    from app.templates_registry import alias_conflicts
+    conflicts = alias_conflicts(
+        spec.get("setor_aliases") or [], exclude_template=tpl["name"])
+    # Alias EXATO contra qualquer template existente rouba folhas — bloqueia.
+    blocking = [c for c in conflicts if c["kind"] == "exact"]
+    if errors or blocking:
+        return JSONResponse(
+            {"ok": False, "errors": errors, "conflicts": conflicts},
+            status_code=422)
+    db.update_kanban_template_spec(
+        template_id, json.dumps(spec, ensure_ascii=False))
+    if tpl["status"] == "ativo":
+        template_store.reload_registry()
+    return JSONResponse({"ok": True, "warnings": warnings,
+                         "conflicts": conflicts})
+
+
+@app.post("/admin/kanban-templates/{template_id}/activate")
+def admin_kanban_template_activate(
+    template_id: int, request: Request,
+) -> JSONResponse:
+    """Ativação FINAL — só depois da validação humana (nunca automática).
+    Revalida o spec e os conflitos de alias antes de instalar no registry."""
+    if _is_mobile_request(request):
+        raise HTTPException(403, "Registo de kanbans só em desktop")
+    tpl = db.get_kanban_template(template_id)
+    if tpl is None:
+        raise HTTPException(404, "template não encontrado")
+    if tpl["status"] not in ("analisado", "inativo"):
+        raise HTTPException(409, f"não ativável a partir de '{tpl['status']}'")
+    try:
+        spec = json.loads(tpl.get("spec_json") or "{}")
+    except json.JSONDecodeError:
+        raise HTTPException(422, "spec inválido — volta ao passo dos campos")
+    errors, _warnings = template_store.validate_spec_payload(spec)
+    from app.templates_registry import alias_conflicts
+    conflicts = alias_conflicts(
+        spec.get("setor_aliases") or [], exclude_template=tpl["name"])
+    blocking = [c for c in conflicts if c["kind"] == "exact"]
+    if errors or blocking:
+        return JSONResponse(
+            {"ok": False, "errors": errors, "conflicts": conflicts},
+            status_code=422)
+    db.set_kanban_template_status(template_id, "ativo")
+    template_store.reload_registry()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/admin/kanban-templates/{template_id}/deactivate")
+def admin_kanban_template_deactivate(
+    template_id: int, request: Request,
+) -> JSONResponse:
+    """Kill-switch — tira o template do registry imediatamente."""
+    if _is_mobile_request(request):
+        raise HTTPException(403, "Registo de kanbans só em desktop")
+    tpl = db.get_kanban_template(template_id)
+    if tpl is None:
+        raise HTTPException(404, "template não encontrado")
+    db.set_kanban_template_status(template_id, "inativo")
+    template_store.reload_registry()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/admin/kanban-templates/{template_id}/delete")
+def admin_kanban_template_delete(
+    template_id: int, request: Request,
+) -> JSONResponse:
+    """Apaga um registo SEM folhas processadas (audit EN1090: com folhas
+    só desativar)."""
+    if _is_mobile_request(request):
+        raise HTTPException(403, "Registo de kanbans só em desktop")
+    tpl = db.get_kanban_template(template_id)
+    if tpl is None:
+        raise HTTPException(404, "template não encontrado")
+    n = db.count_sheets_for_template(tpl["name"])
+    if n > 0:
+        raise HTTPException(
+            409, f"{n} folha(s) processadas com este template — desativa em vez de apagar")
+    if tpl.get("image_path"):
+        (_DATA_DIR / tpl["image_path"]).unlink(missing_ok=True)
+    db.delete_kanban_template(template_id)
+    template_store.reload_registry()
+    return JSONResponse({"ok": True})
+
+
+@app.get("/admin/kanban-templates/{template_id}/image")
+def admin_kanban_template_image(template_id: int) -> Response:
+    tpl = db.get_kanban_template(template_id)
+    if tpl is None or not tpl.get("image_path"):
+        raise HTTPException(404, "imagem não encontrada")
+    path = _DATA_DIR / tpl["image_path"]
+    if not path.exists():
+        raise HTTPException(404, "imagem não encontrada")
+    return FileResponse(path)
+
+
 @app.post("/sheet/{sheet_id}/delete")
 def sheet_delete(sheet_id: int, request: Request) -> JSONResponse:
     """Round 34 — hard delete sheet + cascade. Desktop only.
@@ -2812,42 +3126,20 @@ def sheet_rotate(sheet_id: int, request: Request) -> JSONResponse:
 
 # R112 — Wizard "Corrigir via OF" -----------------------------------------
 
-@app.get("/sheet/{sheet_id}/of-lookup")
-def sheet_of_lookup(
-    sheet_id: int,
-    of: str = "",
-    q: str = "",
-    include_done: int = 0,
-) -> JSONResponse:
-    """R112 — devolve entries do plan_colunas para um OF/OV/modelo.
-
-    R113 — entries são ordenadas por "faltam menos primeiro" e entries
-    já fechadas (remaining ≤ 0) são filtradas por defeito.
-    `include_done=1` para mostrar todas (recuperação de folhas antigas).
-
-    R128 — auto-detect multi-modo. O parâmetro `q` aceita OF (6 dígitos),
-    OV (≥6 dígitos) ou prefixo de modelo (alfanumérico). Ordem de
-    tentativa: OF → OV → modelo prefix. `of=` mantido para back-compat
-    com clients antigos.
-    """
-    sheet = db.get_sheet(sheet_id)
-    if sheet is None:
-        raise HTTPException(404, f"sheet {sheet_id} not found")
-    query_raw = (q or of or "").strip()
-    if not query_raw:
-        return JSONResponse({
-            "found": False, "mode": "none", "q": "", "of": "", "entries": [],
-        })
-
-    from app.pipeline.scoring_engine import normalize_of, _current_phase
-    from app.pipeline.of_consumption import sort_entries_by_remaining
+def _refs_lookup(
+    query_raw: str,
+    *,
+    include_done: bool = False,
+    phase: str | None = None,
+) -> dict:
+    """R112/R128 — núcleo do lookup OF/OV/modelo contra o plano, sem
+    depender de folha. Task C E4: extraído de sheet_of_lookup (o endpoint
+    delega aqui, comportamento intacto) para o wizard de registo de
+    kanbans reutilizar na etapa de validação (/admin/refs-lookup)."""
+    from app.pipeline.scoring_engine import normalize_of
+    from app.pipeline.of_consumption import sort_entries_by_remaining, _plan_cutoff_iso
 
     refs = get_watcher().get_refs() or {}
-    # R138 — etapa do kanban (setor→colunaexcel) para o "done"/remaining ser
-    # consciente do setor: uma linha só está fechada quando ESTA fase atingiu
-    # quanttrp. Sem este phase, o remaining usava max(fases) e a fase inicial
-    # sobre-produzida marcava ~92% das linhas como fechadas.
-    phase = _current_phase(sheet.get("sheet_data") or {}, refs)
     of_to_entries = refs.get("of_to_entries") or {}
     plan_by_ov = refs.get("plan_by_ov") or {}
     plan_by_modelo_ft = refs.get("plan_by_modelo_ft") or {}
@@ -2937,13 +3229,13 @@ def sheet_of_lookup(
             n_total_pre_filter = len(pooled)
 
     if mode == "none":
-        return JSONResponse({
+        return {
             "found": False, "mode": "none", "q": query_raw, "of": "",
             "entries": [], "n_entries": 0, "n_total": 0,
-        })
+        }
 
     sorted_entries = sort_entries_by_remaining(
-        pooled, include_done=bool(include_done), phase=phase,
+        pooled, include_done=include_done, phase=phase,
     )
 
     if len(sorted_entries) > LIMIT:
@@ -2973,9 +3265,8 @@ def sheet_of_lookup(
             "produced_erp": e.get("_produced_erp"),
             "kanban_qty": e.get("_kanban_qty"),
         })
-    from app.pipeline.of_consumption import _plan_cutoff_iso
 
-    return JSONResponse({
+    return {
         "found": True,
         "mode": mode,
         "q": query_raw,
@@ -2985,7 +3276,47 @@ def sheet_of_lookup(
         "n_total": n_total_pre_filter,
         "truncated": truncated,
         "plan_date": _plan_cutoff_iso(),  # corte dos kanbans pós-plano
-    })
+    }
+
+
+@app.get("/sheet/{sheet_id}/of-lookup")
+def sheet_of_lookup(
+    sheet_id: int,
+    of: str = "",
+    q: str = "",
+    include_done: int = 0,
+) -> JSONResponse:
+    """R112 — devolve entries do plan_colunas para um OF/OV/modelo.
+
+    R113 — entries são ordenadas por "faltam menos primeiro" e entries
+    já fechadas (remaining ≤ 0) são filtradas por defeito.
+    `include_done=1` para mostrar todas (recuperação de folhas antigas).
+
+    R128 — auto-detect multi-modo. O parâmetro `q` aceita OF (6 dígitos),
+    OV (≥6 dígitos) ou prefixo de modelo (alfanumérico). Ordem de
+    tentativa: OF → OV → modelo prefix. `of=` mantido para back-compat
+    com clients antigos.
+    """
+    sheet = db.get_sheet(sheet_id)
+    if sheet is None:
+        raise HTTPException(404, f"sheet {sheet_id} not found")
+    query_raw = (q or of or "").strip()
+    if not query_raw:
+        return JSONResponse({
+            "found": False, "mode": "none", "q": "", "of": "", "entries": [],
+        })
+
+    from app.pipeline.scoring_engine import _current_phase
+
+    refs = get_watcher().get_refs() or {}
+    # R138 — etapa do kanban (setor→colunaexcel) para o "done"/remaining ser
+    # consciente do setor: uma linha só está fechada quando ESTA fase atingiu
+    # quanttrp. Sem este phase, o remaining usava max(fases) e a fase inicial
+    # sobre-produzida marcava ~92% das linhas como fechadas.
+    phase = _current_phase(sheet.get("sheet_data") or {}, refs)
+    return JSONResponse(_refs_lookup(
+        query_raw, include_done=bool(include_done), phase=phase,
+    ))
 
 
 @app.post("/sheet/{sheet_id}/apply-of-entry")
@@ -3267,6 +3598,14 @@ def _serve_image_with_rotation(sheet: dict, img_path: Path) -> FileResponse:
     return FileResponse(cache_path, media_type="image/jpeg")
 
 
+def _parse_unidade_param(unidade: str | None) -> int | None:
+    """Task C E4 — query param 'unidade' (id) tolerante a lixo."""
+    try:
+        return int(unidade) if unidade not in (None, "", "all") else None
+    except (TypeError, ValueError):
+        return None
+
+
 @app.get("/kanbans", response_class=HTMLResponse)
 def kanban_viewer(
     request: Request,
@@ -3276,12 +3615,14 @@ def kanban_viewer(
     of: str | None = None,
     status: str | None = None,
     sheet_id: int | None = None,
+    unidade: str | None = None,
 ) -> Response:
     """Desktop kanban viewer with multi-filter (operador + data + setor + of + status).
 
     Round 34/36: filters combinable via URL params. ``data`` is YYYY-MM-DD.
     ``of`` matches sheets that have at least one row with that OF.
     ``status`` accepts 'extracted' (não validadas) or 'validated'; empty = both.
+    Task C E4 — ``unidade`` (id) filtra pela unidade fabril da folha.
     Empty filters = all matching sheets.
     """
     operadores = db.list_distinct_operadores()
@@ -3289,6 +3630,8 @@ def kanban_viewer(
     current_of = (of or "").strip() or None
     current_status = status if status in ("extracted", "validated") else None
     statuses = (current_status,) if current_status else ("extracted", "validated")
+    current_unidade = _parse_unidade_param(unidade)
+    unidades = db.list_unidades(only_ativo=False)
 
     if not operadores:
         return templates.TemplateResponse(
@@ -3301,6 +3644,8 @@ def kanban_viewer(
                 "current_setor": setor,
                 "current_of": current_of,
                 "current_status": current_status,
+                "current_unidade": current_unidade,
+                "unidades": unidades,
                 "sheets": [],
                 "sheet": None,
                 "neighbors": {"position": 0, "total": 0, "prev_id": None, "next_id": None},
@@ -3333,6 +3678,7 @@ def kanban_viewer(
         setor=setor,
         of=current_of,
         statuses=statuses,
+        unidade=current_unidade,
     )
     if not sheets:
         sheet = None
@@ -3391,6 +3737,8 @@ def kanban_viewer(
             "current_setor": setor,
             "current_of": current_of,
             "current_status": current_status,
+            "current_unidade": current_unidade,
+            "unidades": unidades,
             "sheets": sheets,
             "sheet": sheet,
             "neighbors": neighbors,
@@ -3421,16 +3769,21 @@ def queue_page(
     data: str | None = None,
     captured: str | None = None,
     setor: str | None = None,
+    unidade: str | None = None,
 ) -> Response:
     """Round 36 — OF filter; R81 — operador/data/setor filters (combinable).
-    R128 — captured (data de captura, distinta de header.data)."""
+    R128 — captured (data de captura, distinta de header.data).
+    Task C E4 — unidade (id da unidade fabril)."""
     of_filter = (of or "").strip() or None
     operador_filter = (operador or "").strip() or None
     data_filter = (data or "").strip() or None
     captured_filter = (captured or "").strip() or None
     setor_filter = (setor or "").strip() or None
+    unidade_filter = _parse_unidade_param(unidade)
 
-    use_filtered = any([of_filter, operador_filter, data_filter, captured_filter, setor_filter])
+    use_filtered = any([of_filter, operador_filter, data_filter,
+                        captured_filter, setor_filter,
+                        unidade_filter is not None])
     if use_filtered:
         statuses_all = ("pending", "extracted", "validated", "error")
         statuses = (status,) if status and status != "all" else statuses_all
@@ -3441,12 +3794,15 @@ def queue_page(
             setor=setor_filter,
             of=of_filter,
             statuses=statuses,
+            unidade=unidade_filter,
         )
         # list_sheets_filtered returns oldest first; flip to newest first
         sheets = sorted(sheets, key=lambda s: s.get("captured_at") or "", reverse=True)
     else:
         sheets = db.list_sheets(status=status)
 
+    unidades = db.list_unidades(only_ativo=False)
+    unidade_nome_by_id = {u["id"]: u["nome"] for u in unidades}
     return templates.TemplateResponse(
         request,
         "queue.html",
@@ -3458,6 +3814,9 @@ def queue_page(
             "data_filter": data_filter,
             "captured_filter": captured_filter,
             "setor_filter": setor_filter,
+            "unidade_filter": unidade_filter,
+            "unidades": unidades,
+            "unidade_nome_by_id": unidade_nome_by_id,
             "operadores": db.list_distinct_operadores(),
             "setores": db.list_distinct_setores(),
         },

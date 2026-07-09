@@ -6,18 +6,25 @@ drains the queue serially (matching Ollama's single-inference GPU
 constraint), running the same OCR → DQ → cross-check → CSV deposit
 pipeline that used to run inline.
 
+Task C E4 — jobs tipados: a MESMA fila FIFO passa a transportar
+("sheet", sheet_id) e ("discovery", template_id). A descoberta de campos
+de um template novo (wizard /admin) partilha o motor de OCR da produção
+— sem prioridades: quem chega primeiro é servido primeiro (decisão do
+dono; o wizard mostra a posição na fila).
+
 Public API:
     enqueue(sheet_id)                — push a sheet onto the queue
+    enqueue_discovery(template_id)   — push a template-discovery job
     queue_size() -> int              — depth (informational)
     worker_alive() -> bool           — health check
-    start_worker(processor_fn)       — boot once at app startup
+    start_worker(processor_fn, discovery_fn=None) — boot once at startup
     recover_pending(seconds, callback) — re-enqueue orphaned 'pending'
 
-The ``processor_fn`` callback is injected at startup so this module
-stays free of imports from app.web.main (avoiding circular imports).
-Signature: ``processor_fn(sheet_id: int) -> None``. Exceptions are
-swallowed by the worker loop; the callback is responsible for setting
-status='error' on failure.
+The ``processor_fn``/``discovery_fn`` callbacks are injected at startup
+so this module stays free of imports from app.web.main (avoiding circular
+imports). Signatures: ``fn(item_id: int) -> None``. Exceptions are
+swallowed by the worker loop; each callback is responsible for setting
+its own error status.
 """
 from __future__ import annotations
 
@@ -27,15 +34,24 @@ import time
 from collections.abc import Callable
 from typing import Optional
 
-_ocr_queue: queue.Queue[int] = queue.Queue()
+# Job = (kind, id): kind ∈ {"sheet", "discovery"}.
+_ocr_queue: queue.Queue[tuple[str, int]] = queue.Queue()
 _worker_thread: Optional[threading.Thread] = None
 _processor_fn: Optional[Callable[[int], None]] = None
+_discovery_fn: Optional[Callable[[int], None]] = None
 
 
 def enqueue(sheet_id: int) -> int:
     """Put a sheet_id on the queue. Returns approximate queue position
     (1-based; this sheet's spot, snapshot at insertion time)."""
-    _ocr_queue.put(sheet_id)
+    _ocr_queue.put(("sheet", sheet_id))
+    return _ocr_queue.qsize()
+
+
+def enqueue_discovery(template_id: int) -> int:
+    """Task C E4 — põe uma descoberta de template na MESMA fila FIFO.
+    Devolve a posição aproximada (1-based) para o wizard mostrar."""
+    _ocr_queue.put(("discovery", template_id))
     return _ocr_queue.qsize()
 
 
@@ -53,28 +69,34 @@ def _worker_loop() -> None:
     """Drain the queue forever. NEVER crashes — all exceptions are
     swallowed after delegating to the processor for error-status update."""
     while True:
-        sheet_id = _ocr_queue.get()
+        job = _ocr_queue.get()
         try:
-            if _processor_fn is None:
-                # Should never happen — start_worker installs it before
-                # the thread runs. Defensive: just drop the item.
-                continue
-            _processor_fn(sheet_id)
+            # Tolerância a itens legados (int puro) — testes/código antigo.
+            kind, item_id = job if isinstance(job, tuple) else ("sheet", job)
+            if kind == "discovery":
+                if _discovery_fn is not None:
+                    _discovery_fn(item_id)
+            elif _processor_fn is not None:
+                _processor_fn(item_id)
         except Exception:  # noqa: BLE001 — last-ditch catch-all
-            # Processor is expected to handle errors itself (set
-            # status='error' on the sheet). This catch is a safety net.
+            # Callbacks are expected to handle errors themselves (set
+            # status='error'). This catch is a safety net.
             pass
         finally:
             _ocr_queue.task_done()
 
 
-def start_worker(processor_fn: Callable[[int], None]) -> None:
+def start_worker(
+    processor_fn: Callable[[int], None],
+    discovery_fn: Callable[[int], None] | None = None,
+) -> None:
     """Boot the singleton daemon worker thread. Idempotent — calling
-    twice is a no-op (subsequent processor_fn arguments are ignored)."""
-    global _worker_thread, _processor_fn
+    twice is a no-op (subsequent callback arguments are ignored)."""
+    global _worker_thread, _processor_fn, _discovery_fn
     if _worker_thread is not None and _worker_thread.is_alive():
         return
     _processor_fn = processor_fn
+    _discovery_fn = discovery_fn
     _worker_thread = threading.Thread(
         target=_worker_loop,
         name="ocr-worker",
@@ -99,7 +121,7 @@ def recover_pending(
     """
     stuck = list_pending_fn(older_than_seconds)
     for sheet_id in stuck:
-        _ocr_queue.put(sheet_id)
+        _ocr_queue.put(("sheet", sheet_id))
     return len(stuck)
 
 
@@ -117,6 +139,7 @@ def shutdown(timeout: float = 5.0) -> None:
 
 __all__ = [
     "enqueue",
+    "enqueue_discovery",
     "queue_size",
     "worker_alive",
     "start_worker",

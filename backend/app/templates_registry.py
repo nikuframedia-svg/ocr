@@ -126,6 +126,13 @@ class TemplateSpec:
     # "REFERÊNCIA / PEÇA" sobre o campo interno `modelo`.
     field_labels: dict[str, str] = dc_field(default_factory=dict)
 
+    # Task C E4 — templates registados em runtime (/admin, wizard de
+    # kanbans). Builtins ficam com os defaults: source="builtin",
+    # unidade_id=None (Trofa), db_id=None.
+    source: str = "builtin"           # "builtin" | "db"
+    unidade_id: int | None = None     # None = Trofa (sede)
+    db_id: int | None = None          # kanban_templates.id quando source="db"
+
 
 # ============================================================================
 #  TPL103 — Produção Colunas (11 variants)
@@ -531,6 +538,11 @@ TEMPLATES: dict[str, TemplateSpec] = {
     )
 }
 
+# Task C E4 — snapshot imutável dos builtins. TEMPLATES pode ganhar
+# templates registados em runtime (set_runtime_templates); este snapshot é
+# a base de cada rebuild e a referência para conflitos de alias.
+_BUILTIN_TEMPLATES: dict[str, TemplateSpec] = dict(TEMPLATES)
+
 # Default template — used for legacy sheets that don't have template_name
 # in sheet_data, and as fallback when detect_template() can't match.
 DEFAULT_TEMPLATE: TemplateSpec = _BOBINE_FORMATO
@@ -548,14 +560,12 @@ _TEMPLATE_ALIASES = {
 #  Detection
 # ============================================================================
 
-# Pre-built reverse index: setor alias (uppercased, stripped) → template name.
+# Reverse index: setor alias (uppercased, stripped) → template name.
 # Order matters: more specific aliases must be checked first when there's
 # overlap (e.g. "QUINADORA PAV.4" vs "QUINADORA PAV.8" — both contain
 # "QUINADORA"). The dict iteration order matches insertion in TEMPLATES.
 _ALIAS_INDEX: dict[str, str] = {}
-for _t in TEMPLATES.values():
-    for _alias in _t.setor_aliases:
-        _ALIAS_INDEX[_alias.upper().strip()] = _t.name
+_ALIAS_NORM_INDEX: dict[str, str] = {}
 
 
 def _normalize_setor(raw: str) -> str:
@@ -572,10 +582,97 @@ def _normalize_setor(raw: str) -> str:
     return " ".join(s.split()).strip()
 
 
-_ALIAS_NORM_INDEX: dict[str, str] = {}
-for _t in TEMPLATES.values():
-    for _alias in _t.setor_aliases:
-        _ALIAS_NORM_INDEX[_normalize_setor(_alias)] = _t.name
+def _rebuild_alias_indexes() -> None:
+    """Task C E4 — reconstrói os índices de alias a partir de TEMPLATES.
+
+    Builtins mantêm a semântica histórica (colisão entre builtins: o último
+    na ordem de inserção ganha). Templates registados em runtime só entram
+    quando o alias ainda não existe — um alias de builtin NUNCA é roubado
+    por um template de unidade."""
+    _ALIAS_INDEX.clear()
+    _ALIAS_NORM_INDEX.clear()
+    for t in TEMPLATES.values():
+        is_builtin = t.source == "builtin"
+        for alias in t.setor_aliases:
+            key_up = alias.upper().strip()
+            key_norm = _normalize_setor(alias)
+            if is_builtin:
+                _ALIAS_INDEX[key_up] = t.name
+                _ALIAS_NORM_INDEX[key_norm] = t.name
+            else:
+                _ALIAS_INDEX.setdefault(key_up, t.name)
+                _ALIAS_NORM_INDEX.setdefault(key_norm, t.name)
+
+
+_rebuild_alias_indexes()
+
+
+def set_runtime_templates(specs) -> list[str]:
+    """Task C E4 — instala os templates registados (DB) por cima dos builtins.
+
+    Mutação IN-PLACE de TEMPLATES (ocr_runner e afins importam o dict por
+    referência) + rebuild dos índices de alias. Chamar com a lista completa
+    dos templates ativos; chamadas repetidas são idempotentes (a base é
+    sempre o snapshot builtin). Devolve os nomes ignorados por colidirem
+    com um builtin (proteção estrutural — o prefixo u{id}_ já o evita).
+    """
+    skipped: list[str] = []
+    runtime: dict[str, TemplateSpec] = {}
+    for s in specs:
+        if s.name in _BUILTIN_TEMPLATES:
+            skipped.append(s.name)
+            continue
+        runtime[s.name] = s
+    TEMPLATES.clear()
+    TEMPLATES.update(_BUILTIN_TEMPLATES)
+    TEMPLATES.update(runtime)
+    _rebuild_alias_indexes()
+    return skipped
+
+
+def alias_conflicts(
+    setor_aliases,
+    *,
+    exclude_template: str | None = None,
+) -> list[dict]:
+    """Task C E4 — conflitos dos aliases candidatos contra o registry atual.
+
+    kind="exact": o alias normalizado é igual a um alias existente — deve
+    BLOQUEAR a ativação quando `builtin=True` (roubaria folhas da sede).
+    kind="containment": um contém o outro — o fuzzy_alias do detect pode
+    confundir; devolvido como aviso para confirmação humana no wizard.
+    """
+    out: list[dict] = []
+    seen: set[tuple] = set()
+    for alias in setor_aliases:
+        norm = _normalize_setor(alias)
+        if not norm:
+            continue
+        for t in TEMPLATES.values():
+            if exclude_template and t.name == exclude_template:
+                continue
+            for other in t.setor_aliases:
+                onorm = _normalize_setor(other)
+                if not onorm:
+                    continue
+                if norm == onorm:
+                    kind = "exact"
+                elif norm in onorm or onorm in norm:
+                    kind = "containment"
+                else:
+                    continue
+                key = (norm, t.name, onorm, kind)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append({
+                    "alias": alias,
+                    "against": other,
+                    "template": t.name,
+                    "builtin": t.source == "builtin",
+                    "kind": kind,
+                })
+    return out
 
 
 def _compact_setor(raw: str) -> str:
@@ -746,4 +843,6 @@ __all__ = [
     "get_template",
     "all_phases",
     "templates_in_phase",
+    "set_runtime_templates",
+    "alias_conflicts",
 ]

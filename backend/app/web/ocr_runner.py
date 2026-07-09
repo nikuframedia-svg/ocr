@@ -36,6 +36,7 @@ import ocr6  # type: ignore  # noqa: E402
 
 from app.dq.alignment import check_and_fix_alignment  # noqa: E402
 from app.pipeline.prompt_builder import (  # noqa: E402
+    build_discovery_prompt,
     build_prompt,
     build_side_detect_prompt,
 )
@@ -52,11 +53,19 @@ from app.templates_registry import (  # noqa: E402
 # `run_pipeline` usa a pista de página da captura guiada (autoritativa) e/ou o
 # mini-OCR side-detect para escolher o lado.
 _GENERIC_PARAGENS: Final[str] = "paragens"
-TWO_SIDED_TEMPLATES: Final[dict[str, str]] = {
-    name: _GENERIC_PARAGENS
-    for name, tpl in TEMPLATES.items()
-    if tpl.has_production_rows
-}
+
+
+def __getattr__(name: str) -> object:
+    # Task C E4 — era um snapshot de import-time; com templates registados
+    # em runtime (set_runtime_templates) ficaria desatualizado. PEP 562:
+    # calculado a cada acesso, sempre em sincronia com TEMPLATES.
+    if name == "TWO_SIDED_TEMPLATES":
+        return {
+            tname: _GENERIC_PARAGENS
+            for tname, tpl in TEMPLATES.items()
+            if tpl.has_production_rows
+        }
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 _PROMPT_PATH = _REPO / "prompts" / "ocr6_v3.txt"
 _V3_PROMPT, _V3_PROMPT_HASH = ocr6.load_prompt(_PROMPT_PATH)
@@ -119,6 +128,71 @@ def _detect_side(image_path: Path) -> str:
             return "?"
     side = str(parsed.get("side", "")).strip().upper()
     return side if side in ("F", "V") else "?"
+
+
+def parse_discovery_response(raw: str) -> dict:
+    """Task C E4 — parse tolerante da resposta de descoberta de template.
+
+    NUNCA levanta. Devolve sempre o mesmo shape:
+    {"parse_ok", "title", "header", "columns", "footer", "raw"} — com
+    parse_ok=False o wizard mostra o aviso e o humano preenche à mão.
+    """
+    out: dict = {
+        "parse_ok": False, "title": "",
+        "header": [], "columns": [], "footer": [],
+        "raw": raw or "",
+    }
+    if not raw:
+        return out
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        # markdown/prefixo à volta do JSON — tenta extrair {…} (padrão
+        # _detect_side).
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return out
+        try:
+            parsed = json.loads(raw[start:end + 1])
+        except json.JSONDecodeError:
+            return out
+    if not isinstance(parsed, dict):
+        return out
+
+    def _str_list(value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(v).strip() for v in value if str(v).strip()]
+
+    out["title"] = str(parsed.get("title") or "").strip()
+    out["header"] = _str_list(parsed.get("header"))
+    out["columns"] = _str_list(parsed.get("columns"))
+    out["footer"] = _str_list(parsed.get("footer"))
+    # Sem colunas não há template utilizável — parse_ok exige-as.
+    out["parse_ok"] = bool(out["columns"])
+    return out
+
+
+def run_discovery(image_path: Path) -> dict:
+    """Task C E4 — mini-OCR de descoberta do layout de um template novo
+    (wizard /admin). Padrão _detect_side: swap do prompt sob _PROMPT_LOCK →
+    process_image → restore. Nunca levanta — falhas devolvem parse_ok=False.
+    """
+    prompt = build_discovery_prompt()
+    try:
+        with _PROMPT_LOCK:
+            prev = _swap_prompt(prompt)
+            try:
+                result = ocr6.process_image(image_path, idx=1, total=1)
+            finally:
+                ocr6.PROMPT, ocr6.PROMPT_HASH = prev
+        raw = getattr(result, "raw_response", "") or ""
+    except Exception as exc:  # noqa: BLE001 — Ollama down, imagem ilegível…
+        print(f"[discovery] {image_path.name}: {type(exc).__name__}: {exc}",
+              file=sys.stderr)
+        return parse_discovery_response("")
+    return parse_discovery_response(raw)
 
 
 def _looks_confidently_frente(pass1_raw: dict) -> bool:
@@ -458,7 +532,9 @@ def run_pipeline(image_path: Path, page_hint: str | None = None) -> dict:
     needs_review = False
     review_reason = ""
     hint = (page_hint or "").strip().upper()
-    if template.name in TWO_SIDED_TEMPLATES:
+    # Task C E4 — has_production_rows em vez do dict snapshot: cobre também
+    # templates registados em runtime (unidades novas).
+    if template.has_production_rows:
         if hint in ("F", "V"):
             # Pista da captura guiada é autoritativa para o routing.
             side = hint
@@ -503,7 +579,7 @@ def run_pipeline(image_path: Path, page_hint: str | None = None) -> dict:
                 needs_review = True
                 review_reason = "side_indeterminate"
         if side == "V":
-            template = get_template(TWO_SIDED_TEMPLATES[template.name])
+            template = get_template(_GENERIC_PARAGENS)
 
     m2 = None
     if template.name == DEFAULT_TEMPLATE.name:

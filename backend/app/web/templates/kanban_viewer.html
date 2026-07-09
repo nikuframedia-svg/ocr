@@ -8,7 +8,7 @@
 <script>
 (function () {
   var KEY = 'kanbans_filters';
-  var FILTER_KEYS = ['operador', 'data', 'setor', 'of', 'status'];
+  var FILTER_KEYS = ['operador', 'data', 'setor', 'of', 'status', 'unidade'];
   var p = new URLSearchParams(location.search);
   var present = FILTER_KEYS.filter(function (k) { return p.get(k); });
   if (present.length) {
@@ -117,6 +117,21 @@
       </select>
     </label>
 
+    {# Task C E4 — filtro por unidade fabril (só aparece com >1 unidade) #}
+    {% if unidades and unidades | length > 1 %}
+    <label style="display:inline-flex; align-items:center; gap:6px;">
+      <span class="lbl" style="margin:0;">UNIDADE</span>
+      <select name="unidade" class="kv-select" onchange="this.form.submit()">
+        <option value="">— Todas —</option>
+        {% for u in unidades %}
+          <option value="{{ u.id }}" {% if u.id == current_unidade %}selected{% endif %}>
+            {{ u.nome }}{% if u.nome == 'Trofa' %} (sede){% endif %}
+          </option>
+        {% endfor %}
+      </select>
+    </label>
+    {% endif %}
+
     <label style="display:inline-flex; align-items:center; gap:6px;">
       <span class="lbl" style="margin:0;">ESTADO</span>
       <select name="status" class="kv-select" onchange="this.form.submit()">
@@ -133,7 +148,7 @@
              placeholder="ex.: 261699">
     </label>
 
-    {% if current_operador or current_data or current_setor or current_of or current_status %}
+    {% if current_operador or current_data or current_setor or current_of or current_status or current_unidade is not none %}
       {# R137 — limpar apaga o sessionStorage, senão o sticky reaplica-os. #}
       <a class="btn ghost" href="/kanbans" style="font-size:12px;"
          onclick="sessionStorage.removeItem('kanbans_filters')">✕ Limpar filtros</a>
@@ -141,7 +156,7 @@
 
     {# Kanban nav within filtered set (Round 34: keyboard ←/→ work) #}
     {% if sheet %}
-      {% set _qs %}{% if current_operador %}operador={{ current_operador|urlencode }}&{% endif %}{% if current_data %}data={{ current_data|urlencode }}&{% endif %}{% if current_setor %}setor={{ current_setor|urlencode }}&{% endif %}{% if current_of %}of={{ current_of|urlencode }}&{% endif %}{% if current_status %}status={{ current_status|urlencode }}&{% endif %}{% endset %}
+      {% set _qs %}{% if current_operador %}operador={{ current_operador|urlencode }}&{% endif %}{% if current_data %}data={{ current_data|urlencode }}&{% endif %}{% if current_setor %}setor={{ current_setor|urlencode }}&{% endif %}{% if current_of %}of={{ current_of|urlencode }}&{% endif %}{% if current_status %}status={{ current_status|urlencode }}&{% endif %}{% if current_unidade is not none %}unidade={{ current_unidade }}&{% endif %}{% endset %}
       <div class="kv-nav" style="margin-left:auto;">
         <a class="btn" id="kv-prev"
            href="{% if neighbors.prev_id %}/kanbans?{{ _qs }}sheet_id={{ neighbors.prev_id }}{% else %}#{% endif %}"

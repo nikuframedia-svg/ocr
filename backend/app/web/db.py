@@ -1232,6 +1232,7 @@ def list_sheets(status: str | None = None, limit: int = 100) -> list[dict]:
     sql = """
         SELECT id, captured_at, status, operador, validated_at, image_path,
                needs_review, review_reason, page_hint, capture_group,
+               unidade_id,
                json_extract(sheet_data, '$.header.operador') AS sheet_operador,
                COALESCE(json_extract(sheet_data, '$.template_name'),
                         json_extract(raw_extraction, '$.template_name')) AS template_name,
@@ -1760,6 +1761,22 @@ def set_kanban_template_status(
                 (status, status, template_id))
 
 
+def delete_kanban_template(template_id: int) -> None:
+    with conn() as c:
+        c.execute("DELETE FROM kanban_templates WHERE id = ?", (template_id,))
+
+
+def count_sheets_for_template(template_name: str) -> int:
+    """Folhas processadas com este template — bloqueia o delete (audit
+    trail EN1090: um template com folhas só pode ser desativado)."""
+    with conn() as c:
+        r = c.execute(
+            "SELECT COUNT(*) AS n FROM sheets "
+            "WHERE json_extract(sheet_data, '$.template_name') = ?",
+            (template_name,)).fetchone()
+        return int(r["n"] or 0)
+
+
 def list_distinct_setores() -> list[str]:
     """Return distinct setor_maquina values across extracted/validated sheets."""
     sql = """
@@ -1782,6 +1799,7 @@ def list_sheets_filtered(
     setor: str | None = None,
     of: str | None = None,
     statuses: tuple[str, ...] = ("extracted", "validated"),
+    unidade: int | None = None,
 ) -> list[dict]:
     """Round 34/36 — multi-filter: operador AND data AND setor AND of (all optional).
 
@@ -1796,6 +1814,10 @@ def list_sheets_filtered(
     `of` filters sheets that have at least one production row with that OF
     (exact match against `production_rows.of`).
 
+    Task C E4 — `unidade` filtra pela unidade fabril da folha: usa
+    `sheets.unidade_id` quando carimbado; folhas antigas (NULL) resolvem
+    pelo template registado (kanban_templates) ou caem na sede (Trofa).
+
     Filters in Python after the SQL pull because operador uses
     case+accent-insensitive normalisation that SQLite UPPER doesn't handle.
     """
@@ -1803,6 +1825,7 @@ def list_sheets_filtered(
     sql = f"""
         SELECT id, captured_at, status, operador, validated_at, image_path,
                needs_review, review_reason, page_hint, capture_group,
+               unidade_id,
                json_extract(sheet_data, '$.header.operador') AS sheet_operador,
                json_extract(sheet_data, '$.header.data') AS sheet_data_str,
                json_extract(sheet_data, '$.header.setor_maquina') AS sheet_setor,
@@ -1818,8 +1841,21 @@ def list_sheets_filtered(
     target_setor = setor.upper().strip() if setor else None
     target_of = of.strip() if of else None
 
+    tpl_unidade: dict[str, int] = {}
+    trofa_id: int | None = None
     with conn() as c:
         rows = c.execute(sql, statuses).fetchall()
+        if unidade is not None:
+            tpl_unidade = {
+                r["name"]: r["unidade_id"]
+                for r in c.execute(
+                    "SELECT name, unidade_id FROM kanban_templates"
+                ).fetchall()
+            }
+            t = c.execute(
+                "SELECT id FROM unidades WHERE nome = 'Trofa' COLLATE NOCASE"
+            ).fetchone()
+            trofa_id = int(t["id"]) if t else 1
         of_sheet_ids: set[int] | None = None
         if target_of:
             of_sheet_ids = {
@@ -1861,6 +1897,13 @@ def list_sheets_filtered(
         # of filter — sheet must have ≥ 1 row with this OF
         if of_sheet_ids is not None and d["id"] not in of_sheet_ids:
             continue
+        # unidade filter — carimbo ∥ template registado ∥ Trofa (NULL)
+        if unidade is not None:
+            uid = d.get("unidade_id")
+            if uid is None:
+                uid = tpl_unidade.get(d.get("template_name") or "") or trofa_id
+            if uid != unidade:
+                continue
         out.append(d)
     return out
 
