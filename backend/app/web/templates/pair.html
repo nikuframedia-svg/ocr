@@ -78,9 +78,10 @@ function pairApp() {
       // Build URL from current location host (works on LAN behind any IP)
       const url = new URL('/capture', window.location.href);
       this.captureUrl = url.toString();
-      // Use api.qrserver.com (same as referência); free, no API key
-      const enc = encodeURIComponent(this.captureUrl);
-      this.qrSrc = 'https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=8&data=' + enc;
+      // R257 — QR gerado pelo próprio servidor (/pair/qr.png). Antes ia a um
+      // serviço externo com o URL completo (incl. tunnel) na query string —
+      // fuga a terceiro — e numa LAN offline o QR nem renderizava.
+      this.qrSrc = '/pair/qr.png';
     },
 
     async copyUrl() {

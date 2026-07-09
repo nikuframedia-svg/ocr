@@ -4345,8 +4345,35 @@ def dashboard_alerts(request: Request) -> Response:
 def pair_page(request: Request) -> Response:
     """QR-code pairing: shows a QR pointing at /capture so a phone on the
     same LAN can scan and open the camera page directly without typing
-    the IP. The QR is generated client-side from the page URL."""
+    the IP. R257 — the QR image is served by /pair/qr.png (local)."""
     return templates.TemplateResponse(request, "pair.html", {})
+
+
+@app.get("/pair/qr.png")
+def pair_qr(request: Request) -> Response:
+    """R257 — QR do /capture gerado LOCALMENTE (lib qrcode + pillow).
+
+    Antes o pair.html usava api.qrserver.com com o URL completo da app
+    (incluindo o hostname do tunnel público) na query string — fuga a um
+    terceiro externo; e numa LAN offline o QR não renderizava. O URL é
+    derivado do Host do request (o browser pede esta imagem ao MESMO host
+    da página, portanto coincide com o window.location do JS); o
+    X-Forwarded-Proto cobre o https do cloudflared.
+    """
+    import io as _io
+
+    import qrcode
+
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("host") or request.url.netloc
+    qr = qrcode.QRCode(box_size=8, border=2)
+    qr.add_data(f"{proto}://{host}/capture")
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buf = _io.BytesIO()
+    img.save(buf)  # PNG por default (PilImage.kind)
+    return Response(content=buf.getvalue(), media_type="image/png",
+                    headers={"Cache-Control": "no-store"})
 
 
 # ============================================================================
