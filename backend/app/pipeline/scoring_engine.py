@@ -293,21 +293,7 @@ _PLAN_FIELDS = ("of", "ov", "modelo", "cliente", "comp_mm", "larg_mm",
 
 _TOP_K = 10
 
-_FORCED_WINNER_MIN_SIM = {
-    "cliente": 50.0,
-    "modelo": 50.0,
-    "of": 70.0,
-    "ov": 70.0,
-    "comp_mm": 80.0,
-    "larg_mm": 80.0,
-    "lbase": 80.0,
-    "ltopo": 80.0,
-    "esp": 80.0,
-    "dbase": 80.0,
-    "dtopo": 80.0,
-}
 _MIN_FORCED_WINNER_SCORE = 0.01
-_MIN_FORCED_TOP1_SCORE = -999.0
 # R223 — votação holística: um campo "concorda" quando a similaridade >= isto.
 # O winner passa a ser quem concorda em MAIS campos (todos com peso igual), e
 # não quem soma mais peso — para nenhum campo (ex.: um modelo exato) mandar
@@ -974,16 +960,6 @@ def _num_matches(field: str, value: Any, candidate: Any, max_delta: float) -> bo
     return any(abs(v - cand) <= max_delta for v in _num_variants(field, value))
 
 
-def _best_num_sim(field: str, target: Any, candidate: Any, max_delta: float) -> float:
-    cand = _num(candidate)
-    if cand is None:
-        return 0.0
-    variants = _num_variants(field, target)
-    if not variants:
-        return 0.0
-    return max(_num_sim(v, cand, max_delta) for v in variants)
-
-
 def _num_sim(target: float | None, candidate: float | None, max_delta: float) -> float:
     if target is None or candidate is None:
         return 0.0
@@ -1264,14 +1240,6 @@ def _model_matches_designacao(model_value: object, designacao: object) -> bool:
         # NÃO entra aqui (pode ser código real) — fica no tier 0.97.
         or _model_core_matches(model, des, strip_ab=False)
     )
-
-
-def _model_exact_compact_contained(model_value: object, designacao: object) -> bool:
-    model = _model_compact(model_value)
-    if len(model) < 4:
-        return False
-    des = _model_compact(designacao)
-    return bool(des and model in des)
 
 
 def _is_missing_ocr(value: object) -> bool:
@@ -2645,13 +2613,6 @@ def _best_scored_entry(
             "by_t": by_t,
         }
     return winner
-
-
-def _candidate_is_real_evidence(field: str, cand: dict) -> bool:
-    if not cand.get("plan_entries"):
-        return False
-    sim = float(cand.get("sim") or 0.0)
-    return sim >= _FORCED_WINNER_MIN_SIM.get(field, 100.0)
 
 
 def _candidate_entries_by_key(
@@ -4942,7 +4903,7 @@ def shadow_score(
             ab = float(q6.get("production_prior_bits") or 2.0)
             ib = float(q6.get("production_prior_inactive_bits") or -1.77)
             prod_bias = {"of": {k: ab for k in active}, "of_default": ib}
-    except Exception:  # noqa: BLE001 — prior é opcional por construção
+    except Exception:
         prod_bias = None
     # R245 — operador da folha: seleciona o canal de chars por operador
     # quando fitted (fallback global; sem efeito até haver >=300 pares dele).
@@ -4962,7 +4923,7 @@ def shadow_score(
             age_days = max((time.time() - pm) / 86400.0, 0.0)
             prod_bias = dict(prod_bias or {})
             prod_bias["plan_age_days"] = age_days
-    except Exception:  # noqa: BLE001 — telemetria é opcional por construção
+    except Exception:
         pass
 
     out_rows = []
