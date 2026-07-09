@@ -68,6 +68,7 @@ EVENT_TYPES = frozenset({
     "qwen_session",
     "shadow_run_completed",
     "sheet_profiled",  # R224 — timing por etapa + resumo do profiling por folha
+    "kpi_params_changed",  # Task C E3 — fórmulas de KPI editadas em /admin/kpis
 })
 
 

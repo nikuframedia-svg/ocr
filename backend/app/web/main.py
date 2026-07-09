@@ -37,7 +37,7 @@ sys.path.insert(0, str(_REPO / "backend"))
 
 from app import kernel  # noqa: E402  — R110.E event log (R117: hoisted for hot-path emits)
 from app.config import get_settings  # noqa: E402  — R236: gate de gravação marginal
-from app.web import attractors, db, export, kpis, llm_assistant, ocr_queue, ocr_runner, pdf_ingest  # noqa: E402
+from app.web import attractors, db, export, kpi_params, kpis, llm_assistant, ocr_queue, ocr_runner, pdf_ingest  # noqa: E402
 from app.cross_check import (  # noqa: E402
     cross_check_sheet,
     get_watcher,
@@ -2597,9 +2597,101 @@ def admin_page(request: Request, tab: str) -> Response:
         from app.templates_registry import TEMPLATES
         ctx["kanban_templates"] = db.list_kanban_templates()
         ctx["n_builtin_templates"] = len(TEMPLATES)
-    # tab "kpis": slot — a edição de fórmulas chega na Entrega 3.
+    elif tab == "kpis":
+        state = kpi_params.load_state()
+        ctx["kpi_state"] = state
+        ctx["kpi_default_ids"] = [k["id"] for k in kpi_params.DEFAULT_KPIS]
+        ctx["kpi_scope_variables"] = kpi_params.SCOPE_VARIABLES
+        ctx["kpi_preview_date"] = _kpi_last_production_day()
     ctx["active_tab"] = "admin"
     return templates.TemplateResponse(request, "admin.html", ctx)
+
+
+def _kpi_last_production_day() -> str | None:
+    """Último dia com produção — alvo do preview de fórmulas de KPI."""
+    with db.conn() as c:
+        r = c.execute(
+            "SELECT MAX(sheet_iso_date) AS d FROM production_rows "
+            "WHERE sheet_iso_date IS NOT NULL"
+        ).fetchone()
+        return r["d"] if r and r["d"] else None
+
+
+@app.post("/admin/kpis/validate")
+async def admin_kpis_validate(request: Request) -> JSONResponse:
+    """Valida um conjunto candidato de KPIs e devolve o preview calculado
+    contra o último dia com produção (sem gravar nada)."""
+    if _is_mobile_request(request):
+        raise HTTPException(403, "Edição de KPIs só em desktop")
+    body = await request.json()
+    kpis_in = body.get("kpis") or []
+    errors: dict[str, str] = {}
+    seen: set[str] = set()
+    for k in kpis_in:
+        kid = str(k.get("id") or "?")
+        if kid in seen:
+            errors[kid] = "id duplicado"
+            continue
+        seen.add(kid)
+        err = kpi_params.validate_kpi_def(k)
+        if err:
+            errors[kid] = err
+    preview_cards = None
+    variables = None
+    preview_date = _kpi_last_production_day()
+    if not errors and preview_date:
+        candidate = kpi_params.normalize_kpis(kpis_in)
+        ov = kpis.production_overview(preview_date, "day", kpi_defs=candidate)
+        preview_cards = ov["kpi_cards"]
+        variables = ov["kpi_variables"]["totals"]
+    return JSONResponse({
+        "ok": not errors,
+        "errors": errors,
+        "preview_date": preview_date,
+        "preview": preview_cards,
+        "variables": variables,
+    })
+
+
+@app.post("/admin/kpis/save")
+async def admin_kpis_save(request: Request) -> JSONResponse:
+    """Grava o conjunto completo de KPIs (versão otimista: 409 se outro
+    browser gravou entretanto; 422 com erros por-KPI)."""
+    if _is_mobile_request(request):
+        raise HTTPException(403, "Edição de KPIs só em desktop")
+    body = await request.json()
+    try:
+        version = int(body.get("version"))
+    except (TypeError, ValueError):
+        raise HTTPException(422, "versão em falta")
+    try:
+        state = kpi_params.save_kpis(body.get("kpis") or [], expected_version=version)
+    except kpi_params.KpiVersionConflict as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        try:
+            errors = json.loads(str(e))
+        except json.JSONDecodeError:
+            errors = {"_": str(e)}
+        return JSONResponse({"ok": False, "errors": errors}, status_code=422)
+    return JSONResponse({"ok": True, "version": state["version"]})
+
+
+@app.post("/admin/kpis/revert")
+async def admin_kpis_revert(request: Request) -> JSONResponse:
+    """Reverte para os defaults de fábrica ou para uma entrada do histórico."""
+    if _is_mobile_request(request):
+        raise HTTPException(403, "Edição de KPIs só em desktop")
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — POST sem corpo = defaults
+        body = {}
+    to = body.get("to", "defaults")
+    try:
+        state = kpi_params.revert_kpis(to)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return JSONResponse({"ok": True, "version": state["version"]})
 
 
 @app.post("/admin/unidades")

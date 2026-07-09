@@ -30,6 +30,16 @@
 
 <div class="page-content">
 
+  {# Task C E3 — metas opcionais definidas em /admin/kpis. #}
+  {% macro kpi_meta(kid) %}
+    {%- set c = (overview.kpi_cards | selectattr('id', 'equalto', kid) | list | first) -%}
+    {%- if c and c.target is not none -%}
+      <div class="kpi-meta-line {% if c.meets_target %}ok{% elif c.meets_target is false %}bad{% endif %}">
+        meta {{ c.target }}{% if c.meets_target %} ✓{% elif c.meets_target is false %} ✕{% endif %}
+      </div>
+    {%- endif -%}
+  {% endmacro %}
+
   {# ============== TOP TOTALS BAR ============== #}
   <div class="prod-totals">
     <div class="prod-tot-card prod-tot-hero">
@@ -39,10 +49,12 @@
     <div class="prod-tot-card">
       <div class="prod-tot-label">COL/H</div>
       <div class="prod-tot-value">{{ overview.totals.col_per_h }}</div>
+      {{ kpi_meta('col_per_h') }}
     </div>
     <div class="prod-tot-card">
       <div class="prod-tot-label">MIN/COL</div>
       <div class="prod-tot-value">{{ overview.totals.min_per_col }}</div>
+      {{ kpi_meta('min_per_col') }}
     </div>
     <div class="prod-tot-card">
       <div class="prod-tot-label">HORAS TRAB.</div>
@@ -72,7 +84,22 @@
       <div class="prod-tot-value">
         {% if overview.totals.perc_desperdicio is none %}—{% else %}{{ overview.totals.perc_desperdicio }}%{% endif %}
       </div>
+      {{ kpi_meta('perc_desperdicio') }}
     </div>
+    {# Task C E3 — KPIs personalizados (render genérico dos kpi_cards) #}
+    {% set fixed_kpi_ids = ['col_per_h', 'min_per_col', 'toneladas_consumido',
+                            'toneladas_produzido', 'chapas_total',
+                            'perc_desperdicio', 'toneladas', 'col_per_operador'] %}
+    {% for k in overview.kpi_cards if k.id not in fixed_kpi_ids %}
+    <div class="prod-tot-card">
+      <div class="prod-tot-label">{{ k.label | upper }}</div>
+      <div class="prod-tot-value">
+        {% if k.value is none %}—{% else %}{{ k.value }}{% if k.unit == '%' %}%{% endif %}{% endif %}
+        {% if k.unit and k.unit != '%' %}<span class="kpi-unit">{{ k.unit }}</span>{% endif %}
+      </div>
+      {{ kpi_meta(k.id) }}
+    </div>
+    {% endfor %}
   </div>
 
   {# ============== SECTOR FLOW ============== #}
@@ -127,6 +154,7 @@
     <div class="prod-ops-card">
       <div class="prod-tot-label">COL/OPERADOR</div>
       <div class="prod-tot-value">{{ overview.totals.col_per_operador }}</div>
+      {{ kpi_meta('col_per_operador') }}
     </div>
     <div class="prod-ops-card">
       <div class="prod-tot-label">N° OPERADORES</div>
@@ -141,6 +169,12 @@
 </div>{# end page-content #}
 
 <style>
+/* Task C E3 — metas de KPI + unidade dos KPIs personalizados */
+.kpi-meta-line { font-size: 11px; color: var(--ink-4); margin-top: 2px; }
+.kpi-meta-line.ok { color: var(--ok); }
+.kpi-meta-line.bad { color: var(--crit); }
+.kpi-unit { font-size: 12px; color: var(--ink-4); font-weight: 400; }
+
 /* Round 34 — period tabs */
 .period-tabs {
   display: inline-flex; gap: 0;

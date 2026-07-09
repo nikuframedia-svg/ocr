@@ -14,6 +14,7 @@ from __future__ import annotations
 from app.dq.machines import resolve_machine_from_setor
 from app.production.weights import calculate_row_weights
 
+from . import kpi_params
 from .db import conn
 
 
@@ -738,7 +739,11 @@ def _range_for_period(date_iso: str, period: str) -> tuple[str, str, str]:
     return date_iso, date_iso, label
 
 
-def production_overview(date: str | None = None, period: str = "day") -> dict:
+def production_overview(
+    date: str | None = None,
+    period: str = "day",
+    kpi_defs: list[dict] | None = None,
+) -> dict:
     """Production overview — sector flow + totals over a period.
 
     Round 34 added period support: 'day' | 'week' | 'month' | 'year'.
@@ -746,6 +751,11 @@ def production_overview(date: str | None = None, period: str = "day") -> dict:
     `date` (YYYY-MM-DD) is the reference date inside the period.
     Default: today. The query runs ``BETWEEN date_from AND date_to``
     where the range is derived from period.
+
+    Task C E3 — os KPIs derivados (col/h, min/col, toneladas, …) vêm de
+    fórmulas editáveis (kpi_params); sem ficheiro de overrides o resultado
+    é idêntico às fórmulas históricas. `kpi_defs` permite calcular com um
+    conjunto candidato (preview do /admin/kpis) sem o gravar.
     """
     if not date:
         from datetime import date as _Date
@@ -850,81 +860,116 @@ def production_overview(date: str | None = None, period: str = "day") -> dict:
         if weights.n_chapas is not None:
             total_chapas += weights.n_chapas
 
+    # Task C E3 — derivados via fórmulas editáveis. As expressões default
+    # reproduzem as fórmulas históricas (R29/R34/R72) byte-a-byte; ver
+    # kpi_params.DEFAULT_KPIS. Fórmula partida → fallback à default.
+    if kpi_defs is None:
+        kpi_defs = kpi_params.get_kpis()
+
     sectors_out = []
     for sector in PRODUCTION_SECTORS:
         b = sector_data[sector]
         hours = sum(b["_sheet_hours"].values())
-        col_per_h = (b["qtd"] / hours) if hours > 0 else 0
-        min_per_col = (hours * 60.0 / b["qtd"]) if b["qtd"] > 0 else 0
+        sector_kpis = kpi_params.compute_scope_kpis("sector", {
+            "qtd": b["qtd"], "horas": hours,
+            "n_folhas": len(b["n_sheets"]), "n_linhas": b["n_rows"],
+        }, kpi_defs)
         machines_out = []
         for cm in sector_to_codes.get(sector, []):
             mb = b["machines"].get(cm)
             if mb:
                 m_hours = sum(mb["_sheet_hours"].values())
-                machines_out.append({
+                m_out = {
                     "code": cm,
                     "qtd": mb["qtd"],
                     "n_sheets": len(mb["n_sheets"]),
                     "n_rows": mb["n_rows"],
                     "hours": round(m_hours, 1),
-                    "col_per_h": round((mb["qtd"] / m_hours) if m_hours > 0 else 0, 1),
-                    "min_per_col": round((m_hours * 60.0 / mb["qtd"]) if mb["qtd"] > 0 else 0, 1),
-                })
+                    "col_per_h": None,
+                    "min_per_col": None,
+                }
+                m_kpis = kpi_params.compute_scope_kpis("machine", {
+                    "qtd": mb["qtd"], "horas": m_hours,
+                    "n_folhas": len(mb["n_sheets"]), "n_linhas": mb["n_rows"],
+                }, kpi_defs)
+                for kid, val in m_kpis.items():
+                    if kid not in ("code", "qtd", "n_sheets", "n_rows", "hours"):
+                        m_out[kid] = val
+                machines_out.append(m_out)
             else:
                 machines_out.append({
                     "code": cm, "qtd": None, "n_sheets": 0, "n_rows": 0,
                     "hours": None, "col_per_h": None, "min_per_col": None,
                 })
         has_data = b["qtd"] > 0
-        sectors_out.append({
+        s_out = {
             "name": sector,
             "has_data": has_data,
             "qtd": b["qtd"] if has_data else None,
             "n_sheets": len(b["n_sheets"]),
             "n_rows": b["n_rows"],
             "hours": round(hours, 1) if has_data else None,
-            "col_per_h": round(col_per_h, 1) if has_data else None,
-            "min_per_col": round(min_per_col, 1) if has_data else None,
+            "col_per_h": None,
+            "min_per_col": None,
             "machines": machines_out,
-        })
+        }
+        if has_data:
+            # O gate has_data → None mantém o comportamento histórico
+            # (setor sem produção mostra '—', não 0).
+            for kid, val in sector_kpis.items():
+                if kid not in ("name", "has_data", "qtd", "n_sheets",
+                               "n_rows", "hours", "machines"):
+                    s_out[kid] = val
+        sectors_out.append(s_out)
 
     total_hours = sum(sheet_hours_global.values())
     n_ops = len(all_operadores)
+    totals_vars = {
+        "qtd": total_qty,
+        "horas": total_hours,
+        "kg_consumido": total_consumido_kg,
+        "kg_produzido": total_produzido_kg,
+        "kg_desperdicio": total_waste_kg,
+        "chapas": total_chapas,
+        "n_folhas": len(all_sheet_ids),
+        "n_operadores": n_ops,
+    }
+    totals_kpis = kpi_params.compute_scope_kpis("totals", totals_vars, kpi_defs)
+    totals = {
+        "colunas": total_qty,
+        "hours": round(total_hours, 1),
+        "n_sheets": len(all_sheet_ids),
+        "n_operadores": n_ops,
+    }
+    for kid, val in totals_kpis.items():
+        if kid not in totals:
+            totals[kid] = val
+
+    # Cartões para render genérico (metas são capacidade nova do E3).
+    kpi_cards = []
+    for k in kpi_defs:
+        if "totals" not in (k.get("scopes") or []):
+            continue
+        val = totals_kpis.get(k["id"])
+        target = k.get("target")
+        meets = None
+        if target is not None and val is not None:
+            meets = (val >= target) if k.get("direction") == "higher" else (val <= target)
+        kpi_cards.append({
+            "id": k["id"], "label": k.get("label") or k["id"],
+            "unit": k.get("unit") or "", "value": val,
+            "target": target, "direction": k.get("direction"),
+            "meets_target": meets,
+        })
+
     return {
         "date": date,
         "period": period,
         "period_label": period_label,
         "date_from": date_from,
         "date_to": date_to,
-        "totals": {
-            "colunas": total_qty,
-            "col_per_h": round((total_qty / total_hours) if total_hours > 0 else 0, 1),
-            "min_per_col": round((total_hours * 60.0 / total_qty) if total_qty > 0 else 0, 1),
-            "hours": round(total_hours, 1),
-            # R72 — 4 weight metrics (user pediu "mostrar ambos lado-a-lado"
-            # + nº chapas). Toneladas em t com 1 casa decimal.
-            "toneladas_consumido": (
-                round(total_consumido_kg / 1000.0, 1)
-                if total_consumido_kg > 0 else None
-            ),
-            "toneladas_produzido": (
-                round(total_produzido_kg / 1000.0, 1)
-                if total_produzido_kg > 0 else None
-            ),
-            "chapas_total": int(total_chapas) if total_chapas else None,
-            "perc_desperdicio": (
-                round(total_waste_kg / total_consumido_kg * 100, 1)
-                if total_consumido_kg > 0 else None
-            ),
-            # Back-compat alias — legacy templates/scripts that read
-            # `toneladas` get peso produzido (same semantic as before R72).
-            "toneladas": (
-                round(total_produzido_kg / 1000.0, 1)
-                if total_produzido_kg > 0 else None
-            ),
-            "n_sheets": len(all_sheet_ids),
-            "n_operadores": n_ops,
-            "col_per_operador": round((total_qty / n_ops) if n_ops > 0 else 0, 1),
-        },
+        "totals": totals,
         "sectors": sectors_out,
+        "kpi_cards": kpi_cards,
+        "kpi_variables": {"totals": totals_vars},
     }

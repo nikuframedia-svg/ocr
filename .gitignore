@@ -108,6 +108,7 @@ kanban_refs/04_Documentacao/_refs_status.json
 data/images/
 data/events.jsonl
 data/kernel_state.json
+data/kpi_params.json
 kanban_refs/03_Cross_Check/
 lexicons/operador_aliases.json
 lexicons/cliente_aliases.json

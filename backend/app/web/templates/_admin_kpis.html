@@ -1,14 +1,271 @@
-{# Tab KPIs — edição das fórmulas dos KPIs de produção (Entrega 3). #}
+{# Tab KPIs — edição das fórmulas dos KPIs de produção (Task C E3).
+   Estado Alpine hidratado do servidor; validar/gravar/reverter via fetch
+   aos endpoints /admin/kpis/*. Gravação com versão otimista (409). #}
 
-<div class="card">
-  <div class="card-h">
-    <div class="card-h-title">Fórmulas dos KPIs</div>
-    <div class="card-h-sub">em preparação</div>
-  </div>
-  <div class="card-b">
-    <div class="muted">
-      A edição das fórmulas dos KPIs do dashboard de produção fica
-      disponível na próxima atualização.
+<div x-data="kpiAdmin()" x-init="init()">
+
+  <div class="card" style="margin-bottom:14px;">
+    <div class="card-h">
+      <div class="card-h-title">Fórmulas dos KPIs</div>
+      <div class="card-h-sub">
+        aritmética simples sobre as variáveis do painel ao lado —
+        ex.: <span style="font-family:var(--font-mono);">qtd / horas</span> ou
+        <span style="font-family:var(--font-mono);">max(kg_produzido - kg_desperdicio, 0) / 1000</span>.
+        Divisão por zero mostra 0 ou oculta o cartão (conforme o KPI).
+      </div>
+    </div>
+    <div class="card-b">
+      <div class="refs-flash err" x-show="flashErr" x-cloak x-text="flashErr"></div>
+      <div class="refs-flash ok" x-show="flashOk" x-cloak x-text="flashOk"></div>
+
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>KPI</th><th>Fórmula</th><th>Unidade</th>
+            <th>Meta</th><th>Direção</th><th>Âmbito</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="(k, i) in kpis" :key="i">
+            <tr>
+              <td>
+                <input type="text" x-model="k.label" style="width:150px;"
+                       :title="'id: ' + k.id">
+                <div class="muted tiny" x-text="k.id"></div>
+                <template x-if="!isDefault(k.id)">
+                  <input type="text" x-model="k.id" placeholder="id_snake_case"
+                         style="width:150px; font-family:var(--font-mono); font-size:11px;">
+                </template>
+              </td>
+              <td>
+                <input type="text" x-model="k.expr"
+                       style="width:100%; min-width:220px; font-family:var(--font-mono); font-size:12px;">
+                <div class="tiny" style="color:var(--crit);" x-show="errors[k.id]"
+                     x-text="errors[k.id]" x-cloak></div>
+              </td>
+              <td><input type="text" x-model="k.unit" style="width:60px;"></td>
+              <td>
+                <input type="number" step="any" style="width:80px;"
+                       :value="k.target === null ? '' : k.target"
+                       @input="k.target = $event.target.value === '' ? null : parseFloat($event.target.value)">
+              </td>
+              <td>
+                <select x-model="k.direction">
+                  <option value="higher">maior é melhor</option>
+                  <option value="lower">menor é melhor</option>
+                </select>
+              </td>
+              <td class="muted tiny" x-text="(k.scopes || []).join(', ')"></td>
+              <td style="text-align:right;">
+                <button class="btn" type="button" x-show="!isDefault(k.id)"
+                        @click="kpis.splice(i, 1)" title="remover KPI">✕</button>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+
+      <div style="display:flex; gap:10px; margin-top:12px; flex-wrap:wrap;">
+        <button class="btn" type="button" @click="addKpi()">+ Adicionar KPI</button>
+        <button class="btn" type="button" @click="validate()" :disabled="busy">
+          Validar e pré-visualizar
+        </button>
+        <button class="btn primary" type="button" @click="save()" :disabled="busy">
+          Gravar
+        </button>
+        <button class="btn" type="button" @click="revert()" :disabled="busy">
+          Repor fórmulas de fábrica
+        </button>
+      </div>
+      <div class="muted tiny" style="margin-top:8px;">
+        versão atual: {{ kpi_state.version }} · os KPIs de fábrica não podem
+        ser removidos (a fórmula pode ser editada); uma fórmula inválida em
+        produção cai na fórmula de fábrica do mesmo KPI.
+      </div>
     </div>
   </div>
+
+  {# ---- Preview ---- #}
+  <div class="card" style="margin-bottom:14px;" x-show="preview.length" x-cloak>
+    <div class="card-h">
+      <div class="card-h-title">Pré-visualização</div>
+      <div class="card-h-sub">
+        calculada com dados reais do último dia com produção
+        (<span x-text="previewDate"></span>) — nada foi gravado
+      </div>
+    </div>
+    <div class="card-b">
+      <table class="tbl">
+        <thead><tr><th>KPI</th><th class="num">Valor</th><th>Meta</th></tr></thead>
+        <tbody>
+          <template x-for="c in preview" :key="c.id">
+            <tr>
+              <td><span x-text="c.label"></span>
+                  <span class="muted tiny" x-text="c.unit"></span></td>
+              <td class="num" style="font-family:var(--font-mono);"
+                  x-text="c.value === null ? '—' : c.value"></td>
+              <td class="tiny"
+                  x-text="c.target === null ? '' : ('meta ' + c.target + (c.meets_target === true ? ' ✓' : c.meets_target === false ? ' ✕' : ''))"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+      <div class="muted tiny" style="margin-top:8px;" x-show="variables">
+        variáveis do dia:
+        <span x-text="Object.entries(variables || {}).map(([k, v]) => k + '=' + (typeof v === 'number' ? Math.round(v * 10) / 10 : v)).join(' · ')"></span>
+      </div>
+    </div>
+  </div>
+
+  {# ---- Variáveis disponíveis ---- #}
+  <div class="card" style="margin-bottom:14px;">
+    <div class="card-h">
+      <div class="card-h-title">Variáveis disponíveis</div>
+      <div class="card-h-sub">por âmbito — totais do período, setor e máquina</div>
+    </div>
+    <div class="card-b">
+      <div class="refs-status">
+        {% for scope, vars in kpi_scope_variables.items() %}
+        <div class="refs-stat">
+          <div class="refs-stat-name">
+            {% if scope == 'totals' %}Totais{% elif scope == 'sector' %}Setor{% else %}Máquina{% endif %}
+          </div>
+          {% for name, meta in vars.items() %}
+          <div class="refs-stat-sub">
+            <span style="font-family:var(--font-mono);">{{ name }}</span>
+            <span class="muted">— {{ meta.label }} ({{ meta.unit }})</span>
+          </div>
+          {% endfor %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  {# ---- Histórico ---- #}
+  <div class="card">
+    <div class="card-h">
+      <div class="card-h-title">Histórico</div>
+      <div class="card-h-sub">últimas {{ kpi_state.history | length }} gravações (máx. 20)</div>
+    </div>
+    <div class="card-b">
+      {% if not kpi_state.history %}
+      <div class="muted">Ainda não há gravações — fórmulas de fábrica ativas.</div>
+      {% else %}
+      <table class="tbl">
+        <thead><tr><th>Data</th><th>Versão</th><th></th></tr></thead>
+        <tbody>
+          {% for h in kpi_state.history | reverse %}
+          <tr>
+            <td>{{ h.saved_at.replace('T', ' ') }}</td>
+            <td class="muted tiny">v{{ h.version }}</td>
+            <td style="text-align:right;">
+              {# história renderizada invertida — o índice real na lista é len - loop.index #}
+              <button class="btn" type="button"
+                      data-idx="{{ (kpi_state.history | length) - loop.index }}"
+                      @click="revertTo($el.dataset.idx)">Repor esta versão</button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </div>
+  </div>
+
 </div>
+
+<script>
+function kpiAdmin() {
+  return {
+    kpis: {{ kpi_state.kpis | tojson }},
+    version: {{ kpi_state.version }},
+    defaultIds: {{ kpi_default_ids | tojson }},
+    errors: {},
+    preview: [],
+    previewDate: {{ kpi_preview_date | tojson }},
+    variables: null,
+    busy: false,
+    flashOk: '',
+    flashErr: '',
+    init() {},
+    isDefault(id) { return this.defaultIds.includes(id); },
+    addKpi() {
+      this.kpis.push({
+        id: '', label: '', expr: '', unit: '', round: 1, compat: null,
+        fmt: null, target: null, direction: 'higher', scopes: ['totals'],
+      });
+    },
+    async validate() {
+      this.busy = true; this.flashOk = ''; this.flashErr = '';
+      try {
+        const r = await fetch('/admin/kpis/validate', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({kpis: this.kpis}),
+        });
+        const data = await r.json();
+        this.errors = data.errors || {};
+        if (data.ok) {
+          this.preview = data.preview || [];
+          this.variables = data.variables;
+          this.previewDate = data.preview_date;
+          this.flashOk = data.preview ? 'Fórmulas válidas — preview atualizado.'
+                                      : 'Fórmulas válidas (sem dia com produção para preview).';
+        } else {
+          this.preview = [];
+          this.flashErr = 'Há fórmulas inválidas — corrige os campos assinalados.';
+        }
+      } catch (e) {
+        this.flashErr = 'Erro de rede ao validar.';
+      } finally { this.busy = false; }
+    },
+    async save() {
+      this.busy = true; this.flashOk = ''; this.flashErr = '';
+      try {
+        const r = await fetch('/admin/kpis/save', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({version: this.version, kpis: this.kpis}),
+        });
+        if (r.status === 409) {
+          this.flashErr = 'Outra sessão gravou entretanto — recarrega a página para veres a versão atual.';
+          return;
+        }
+        const data = await r.json();
+        if (data.ok) {
+          window.location = '/admin/kpis?ok=' + encodeURIComponent('KPIs gravados (v' + data.version + ')');
+        } else {
+          this.errors = data.errors || {};
+          this.flashErr = 'Há fórmulas inválidas — nada foi gravado.';
+        }
+      } catch (e) {
+        this.flashErr = 'Erro de rede ao gravar.';
+      } finally { this.busy = false; }
+    },
+    async revert() {
+      if (!confirm('Repor as fórmulas de fábrica? As fórmulas atuais ficam no histórico.')) return;
+      await this._revert('defaults');
+    },
+    async revertTo(idx) {
+      if (!confirm('Repor esta versão do histórico? As fórmulas atuais ficam no histórico.')) return;
+      await this._revert(parseInt(idx, 10));
+    },
+    async _revert(to) {
+      this.busy = true;
+      try {
+        const r = await fetch('/admin/kpis/revert', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({to: to}),
+        });
+        const data = await r.json();
+        if (data.ok) {
+          window.location = '/admin/kpis?ok=' + encodeURIComponent('KPIs repostos (v' + data.version + ')');
+        } else {
+          this.flashErr = 'Não foi possível repor.';
+        }
+      } catch (e) {
+        this.flashErr = 'Erro de rede ao repor.';
+      } finally { this.busy = false; }
+    },
+  };
+}
+</script>
