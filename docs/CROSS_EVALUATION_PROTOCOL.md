@@ -100,6 +100,34 @@ Qualquer mudanca ao matching de modelo corre o `backtest_winner` com estes
 conjuntos ANTES do gate oficial, mais um controlo HEAD-vs-HEAD (delta MODEL
 tem de ser 0 com o mesmo motor dos dois lados).
 
+## Variante "next" (R250-R252) e procedimento de FLIP
+
+A refundacao matematica (posterior bayesiano) vive atras de
+`SCORING_VARIANT` (ContextVar; default "v30" em producao). Medicao:
+
+- `CROSS_SCORING_VARIANT=next` no ambiente poe o backtest a medir a
+  variante nova (o baseline por git-show fica no motor antigo).
+- O harness reporta a reliability do POSTERIOR (`p_of`) em paralelo com a
+  logistica, a abstencao probabilistica no conjunto OOD (P(H0)>P(OF)) e o
+  pos-fit de Platt (o fit do flip).
+
+Procedimento de flip (por esta ordem, nada se salta):
+
+1. Backtest com `CROSS_SCORING_VARIANT=next` vs o SHA anterior + controlo
+   HEAD-vs-HEAD: GOOD 110/110 inviolavel; TOTAL nao-pior; ler MODEL_SIB
+   comparativamente (as perdas tem de ter sibling margin ~0 = vermelhas).
+2. Soak na fabrica: `CROSS_SHADOW_VARIANT=next` no .env — a thread de
+   sombra corre a variante nova por folha real (producao intocada; output
+   em `sheets.shadow_scoring_json`). Criterios:
+   >=300 folhas, `scripts/diag/shadow_agreement.py` com divergencia de
+   valor <=2%, todas triadas via `/sheet/<id>/shadow-view`, 0 falhas.
+3. Commit de FLIP isolado: default da variante -> "next" + BUMP de
+   `ENGINE_VERSION` + `--calibrate` (grava Platt/posterior params) +
+   re-validacao dos limiares de gravacao (err@0.95 <=5% na reliability
+   nova).
+4. Reversao: `git revert` do commit de flip (a regeneracao on-demand repoe
+   as decisoes antigas); a sombra desliga-se por env sem deploy.
+
 ## Processo para variantes
 
 1. Criar uma variante pequena e generica.
