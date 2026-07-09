@@ -142,6 +142,7 @@ def _run_eval(
     doc_dir: Path,
     out_dir: Path,
     sections: str,
+    scoring_variant: str = "v30",
 ) -> tuple[dict[str, Any], Path, str]:
     out_dir.mkdir(parents=True, exist_ok=True)
     proc = _run(
@@ -152,7 +153,14 @@ def _run_eval(
             "--sections", sections,
         ],
         cwd=repo,
-        env={"KANBAN_DOC_DIR": str(doc_dir)},
+        # R253/F2 — a variante é SEMPRE explícita nos dois subprocessos: o
+        # baseline fica pinned a v30 (não herda CROSS_SCORING_VARIANT do
+        # ambiente do operador) e o candidato corre a variante pedida por
+        # --scoring-variant. Antes disto nenhuma corrida oficial conseguia
+        # medir a "next" sem export manual — e um export manual contaminava
+        # também o baseline.
+        env={"KANBAN_DOC_DIR": str(doc_dir),
+             "CROSS_SCORING_VARIANT": scoring_variant},
     )
     report_dir = None
     for line in proc.stdout.splitlines():
@@ -371,6 +379,10 @@ def main() -> int:
     parser.add_argument("--sections", default="rows")
     parser.add_argument("--gate-pp", type=float, default=3.0)
     parser.add_argument("--keep-worktree", action="store_true")
+    parser.add_argument("--scoring-variant", default="v30",
+                        choices=("v30", "next"),
+                        help="variante do CANDIDATO (o baseline fica "
+                             "sempre pinned a v30)")
     args = parser.parse_args()
 
     candidate_repo = args.candidate_repo.resolve()
@@ -409,6 +421,7 @@ def main() -> int:
             doc_dir=doc_dir,
             out_dir=out_root / "candidate",
             sections=args.sections,
+            scoring_variant=args.scoring_variant,
         )
 
         baseline_acc = float(baseline_summary["output_accuracy_vs_resultado_atual_pct"])
@@ -449,6 +462,7 @@ def main() -> int:
         comparison = {
             "created_at": datetime.now(timezone.utc).isoformat(),
             "baseline_ref": args.baseline_ref,
+            "candidate_scoring_variant": args.scoring_variant,
             "gate_pp": args.gate_pp,
             "target_accuracy_pct": target_acc,
             "passed": passed,

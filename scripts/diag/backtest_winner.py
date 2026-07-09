@@ -53,6 +53,14 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO / "backend"))
 
+# R253.5 — o CANDIDATO emite `_posterior_stats` (estatísticas suficientes por
+# temperatura) para o grid 3D do --calibrate recomputar p_of em forma fechada.
+# Tem de estar setado ANTES de importar app.pipeline.scoring_engine (a flag é
+# lida no import). O baseline é desligado em _load_engine_from_ref.
+import os  # noqa: E402
+
+os.environ.setdefault("CROSS_POSTERIOR_SWEEP", "1")
+
 _ID_EDIT_RE = re.compile(r"^rows\[(\d+)\]\.(of|ov|cliente|modelo)$")
 _MODEL_EDIT_RE = re.compile(r"^rows\[(\d+)\]\.modelo$")
 # Tokens-código de um modelo: alfanuméricos com dígito E letra, len>=4.
@@ -106,6 +114,31 @@ def _load_engine_from_ref(ref: str, out_dir: Path):
     mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod
     spec.loader.exec_module(mod)
+    # R253/F0 — o baseline NUNCA herda CROSS_SCORING_VARIANT do processo: um
+    # ref pós-R250 leria a env no import e, com =next no ambiente (o modo
+    # normal de medir a variante), a comparação vira next-vs-next disfarçada.
+    if hasattr(mod, "set_scoring_variant"):
+        mod.set_scoring_variant("v30")
+    # R253/F0b — 2ª assimetria (achada pelo controlo delta-0 pós-fix): o
+    # motor resolve cross_params.json por Path(__file__).parents[3], mas este
+    # ficheiro vive em reports/<out>/ → parents[3] cai FORA do repo → o
+    # baseline corria com params VAZIOS (matriz default, calibração T=3.0)
+    # contra um candidato fitted (+1 ENG/+1 MODEL_SIB medidos HEAD-vs-HEAD).
+    if hasattr(mod, "_load_cross_params"):
+        params_path = _REPO / "lexicons" / "cross_params.json"
+
+        def _params_from_repo(_p=params_path):
+            try:
+                return json.loads(_p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return {}
+
+        _params_from_repo.cache_clear = lambda: None  # interface lru_cache
+        mod._load_cross_params = _params_from_repo
+    # R253.5 — o sweep é só para o candidato (o baseline não precisa e paga
+    # 16×|pool| exponenciais por linha).
+    if hasattr(mod, "_POSTERIOR_SWEEP"):
+        mod._POSTERIOR_SWEEP = False
     return mod
 
 
@@ -201,7 +234,11 @@ def _labeled_sets(db: Path, engine, plan_of_keys: set[str],
                     sets["OOD"].append((s["id"], i, tpl, dict(rr[i]), t_of))
                 continue
             r_of = engine.normalize_of((rr[i] or {}).get("of"))
-            rec = (s["id"], i, tpl, dict(rr[i]), t_of)
+            # R253.6 — a linha FINAL validada segue no rec (índice 5) para a
+            # verdade POR CAMPO (ov/cliente/modelo, não só OF). Os sets
+            # SHIFT/MODEL_* têm formatos próprios no índice 5 — o consumo é
+            # sempre filtrado por nome do set.
+            rec = (s["id"], i, tpl, dict(rr[i]), t_of, dict(rf[i] or {}))
             # R247 — conjuntos MODEL: modelo escrito + verdade DECIDÍVEL (a
             # verdade final é consistente com >=1 entry da OF; senão a linha
             # não distingue motores e só diluiria a métrica).
@@ -331,6 +368,11 @@ def main() -> None:
     cal_samples: list[tuple[float, float, float]] = []
     model_rel_samples: list[tuple[float, float]] = []  # R247 — (p_top, acerto)
     post_samples: list[tuple[float, float]] = []  # R252 — (p_of posterior, acerto)
+    # R253.5 — (stats suficientes, acerto) p/ o grid 3D do posterior.
+    post_stats_samples: list[tuple[dict, float]] = []
+    # R253.6 — (p_field, acerto) POR CAMPO, verdade da linha final.
+    field_rel_samples: dict[str, list[tuple[float, float]]] = {
+        "of": [], "ov": [], "cliente": [], "modelo": []}
     ood_stats = [0, 0, 0]  # [n, abstencoes, abstencoes_posterior (p_h0>p_of)]
     flips_path = args.out_dir / "flips.csv"
     model_flips_path = args.out_dir / "model_flips.csv"
@@ -355,11 +397,17 @@ def main() -> None:
             for rec in S:
                 sid, i, tpl, row, t_of = rec[:5]  # SHIFT traz a coluna-fonte em rec[5]
                 try:
-                    b_of, _bm, _bb, b_w = _winner_of(base, row, refs, idx_b, tpl)
+                    # R253/F0 — o MESMO extra_bias nos dois lados: dar o prior
+                    # de produção só ao candidato inflava-o ~+1.1pp TOTAL /
+                    # +4.3pp SHIFT (provado HEAD-vs-HEAD em
+                    # reports/backtest_winner_control_headvshead). Baselines
+                    # pré-R242 continuam protegidos pelo except TypeError de
+                    # _winner_of (caem na chamada sem extra_bias).
+                    prod_bias = _prod_bias_for(sheet_dates.get(sid, ""))
+                    b_of, _bm, _bb, b_w = _winner_of(
+                        base, row, refs, idx_b, tpl, extra_bias=prod_bias)
                     c_of, mg, cb, c_w = _winner_of(
-                        cand, row, refs, idx_c, tpl,
-                        extra_bias=_prod_bias_for(sheet_dates.get(sid, "")),
-                    )
+                        cand, row, refs, idx_c, tpl, extra_bias=prod_bias)
                 except Exception as exc:  # noqa: BLE001 — não parar o batch
                     errs += 1
                     print(f"  ERRO s{sid} r{i}: {exc}", file=sys.stderr)
@@ -372,9 +420,19 @@ def main() -> None:
                     c_des = str((c_w or {}).get("designacao") or "")
                     B = b_of == t_of and _model_truth_consistent(t_mod, b_des)
                     C = c_of == t_of and _model_truth_consistent(t_mod, c_des)
-                    if name == "MODEL_SIB" and (c_w or {}).get("_p_top") is not None:
-                        model_rel_samples.append(
-                            (float(c_w["_p_top"]), 1.0 if C else 0.0))
+                    # R253/F0 — a reliability do MODELO mede a confiança da
+                    # CÉLULA modelo (_p_field["modelo"] — é o que o gate de
+                    # gravação consome na variante next), não o _p_top, que na
+                    # next é a marginal da OF: o gap 0.993/0.776 do bucket
+                    # 0.9-1.0 media a grandeza errada. Fallback _p_top para
+                    # motores sem _p_field (pré-R252).
+                    if name == "MODEL_SIB":
+                        pf_mod = ((c_w or {}).get("_p_field") or {}).get("modelo")
+                        if pf_mod is None:
+                            pf_mod = (c_w or {}).get("_p_top")
+                        if pf_mod is not None:
+                            model_rel_samples.append(
+                                (float(pf_mod), 1.0 if C else 0.0))
                     if B != C:
                         mw.writerow([
                             name, sid, i, tpl, t_of, t_mod[:40],
@@ -394,6 +452,37 @@ def main() -> None:
                     _p_of_v2 = (c_w or {}).get("_p_of")
                     if c_of and _p_of_v2 is not None:
                         post_samples.append((float(_p_of_v2), 1.0 if C else 0.0))
+                    # R253.5 — estatísticas suficientes p/ o grid 3D (OOD
+                    # incluído: y=0 por construção — c_of nunca == t_of).
+                    _pst = (c_w or {}).get("_posterior_stats")
+                    if _pst is not None:
+                        post_stats_samples.append((_pst, 1.0 if C else 0.0))
+                    # R253.6 — verdade POR CAMPO da linha final validada.
+                    fin_row = (rec[5] if name in ("CORR", "GOOD", "ENG")
+                               and len(rec) > 5 else None)
+                    pf_all = (c_w or {}).get("_p_field") or {}
+                    if fin_row and pf_all:
+                        c_des = (c_w or {}).get("designacao")
+                        for f in ("of", "ov", "cliente", "modelo"):
+                            tv = str(fin_row.get(f) or "").strip()
+                            pv = pf_all.get(f)
+                            if not tv or pv is None:
+                                continue
+                            if f == "of":
+                                yk = 1.0 if C else 0.0
+                            elif f == "ov":
+                                yk = 1.0 if cand._identifier_compact(
+                                    (c_w or {}).get("ov")
+                                ) == cand._identifier_compact(tv) else 0.0
+                            elif f == "cliente":
+                                yk = 1.0 if cand._cliente_compact(
+                                    (c_w or {}).get("cliente")
+                                ) == cand._cliente_compact(tv) else 0.0
+                            else:
+                                yk = 1.0 if (
+                                    C and _model_truth_consistent(tv, c_des)
+                                ) else 0.0
+                            field_rel_samples[f].append((float(pv), yk))
                 if name == "OOD":
                     ood_stats[0] += 1
                     ood_stats[1] += 0 if c_of else 1  # absteve = certo
@@ -630,15 +719,157 @@ def main() -> None:
               f"| Platt(a={pa}, b={pb}) brier={brier_cal:.4f}")
         for r in post_rel:
             print(f"  {r['bucket']}: n={r['n']:4d} conf={r['conf']:.2f} acc={r['acc']:.2f} gap={r['gap']:.2f}")
+
+        # R253.5 — grid 3D (T, b_h0_raw, a_floor) sobre as estatísticas
+        # suficientes do sweep, minimizando Brier com a MESMA fórmula do
+        # motor (p_of recomputado em forma fechada; H0 com N explícito).
+        posterior_fit: dict | None = None
+        if post_stats_samples:
+            t_grid = sorted(
+                float(k) for k in post_stats_samples[0][0]["by_t"])
+
+            def _p_from_stats(st: dict, t: float, b_raw: float,
+                              a_floor: float) -> float:
+                zp, wof = st["by_t"][f"{t:g}"]
+                w_h0 = (st["odds_h0"] * max(st["n_plan"], 1)
+                        * 2.0 ** ((b_raw - st["b_max"]) / t))
+                fb = st["floor_base"]
+                b_fl = (fb + a_floor) if fb is not None else -10.0
+                w_rest = st["n_rest"] * 2.0 ** ((b_fl - st["b_max"]) / t)
+                zz = zp + w_h0 + w_rest
+                return wof / zz if zz > 0 else 0.0
+
+            best3 = None
+            for t3 in t_grid:
+                for braw in range(-16, 6):
+                    for afl in range(-5, 6):
+                        se_ = sum(
+                            (_p_from_stats(st, t3, float(braw), float(afl))
+                             - y) ** 2
+                            for st, y in post_stats_samples)
+                        br3 = se_ / len(post_stats_samples)
+                        if best3 is None or br3 < best3[0]:
+                            best3 = (br3, t3, float(braw), float(afl))
+            brier3, t_post, braw_post, afl_post = best3
+            # b_h0_raw POR BUCKET de nº de campos escritos (R253.3) — refina
+            # o flat com T/a_floor fixos; só buckets com amostra >=30.
+            by_bucket: dict[str, list[tuple[dict, float]]] = defaultdict(list)
+            for st, y in post_stats_samples:
+                nw = int(st.get("n_written") or 0)
+                bk = ("0-2" if nw <= 2 else "3-4" if nw <= 4
+                      else "5-6" if nw <= 6 else "7+")
+                by_bucket[bk].append((st, y))
+            braw_by_bucket: dict[str, float] = {}
+            for bk, samp in sorted(by_bucket.items()):
+                if len(samp) < 30:
+                    continue
+                bb = min(
+                    ((sum((_p_from_stats(st, t_post, float(braw), afl_post)
+                           - y) ** 2 for st, y in samp) / len(samp),
+                      float(braw)) for braw in range(-16, 6)),
+                )
+                braw_by_bucket[bk] = bb[1]
+
+            def _p_fitted(st: dict) -> float:
+                nw = int(st.get("n_written") or 0)
+                bk = ("0-2" if nw <= 2 else "3-4" if nw <= 4
+                      else "5-6" if nw <= 6 else "7+")
+                return _p_from_stats(
+                    st, t_post, braw_by_bucket.get(bk, braw_post), afl_post)
+
+            fitted_pairs = [(_p_fitted(st), y) for st, y in post_stats_samples]
+            brier_fit = sum((p - y) ** 2 for p, y in fitted_pairs) / len(fitted_pairs)
+            best_platt3 = None
+            for a10 in range(2, 31, 2):
+                for b10 in range(-40, 41, 4):
+                    a3, b3 = a10 / 10.0, b10 / 10.0
+                    ll3 = 0.0
+                    for p, y in fitted_pairs:
+                        q = min(max(_sig(a3 * _logit(p) + b3), 1e-6), 1 - 1e-6)
+                        ll3 -= y * _m.log(q) + (1 - y) * _m.log(1 - q)
+                    if best_platt3 is None or ll3 < best_platt3[0]:
+                        best_platt3 = (ll3, a3, b3)
+            _ll3, pa3, pb3 = best_platt3
+            brier_fit_cal = sum(
+                (_sig(pa3 * _logit(p) + pb3) - y) ** 2 for p, y in fitted_pairs
+            ) / len(fitted_pairs)
+            posterior_fit = {
+                "n_samples": len(post_stats_samples),
+                "posterior_temperature_bits": t_post,
+                "b_h0_raw_bits": braw_post,
+                "b_h0_raw_by_n_fields": braw_by_bucket,
+                "posterior_floor_a_bits": afl_post,
+                "posterior_platt_a": pa3, "posterior_platt_b": pb3,
+                "posterior_brier": round(brier_fit, 4),
+                "posterior_brier_calibrado": round(brier_fit_cal, 4),
+                "posterior_brier_grid": round(brier3, 4),
+            }
+            summary["posterior_fit"] = posterior_fit
+            print(f"fit POSTERIOR (grid 3D): T={t_post} b_h0_raw={braw_post} "
+                  f"a_floor={afl_post} brier={brier_fit:.4f} "
+                  f"(Platt a={pa3} b={pb3} → {brier_fit_cal:.4f}) "
+                  f"buckets={braw_by_bucket}")
+
+        # R253.6 — reliability + Platt POR CAMPO (verdade da linha final).
+        field_platt: dict[str, list[float]] = {}
+        field_rel_summary: dict[str, dict] = {}
+        for f, samp in field_rel_samples.items():
+            if not samp:
+                continue
+            br_f = sum((p - y) ** 2 for p, y in samp) / len(samp)
+            entry: dict = {"n": len(samp), "brier": round(br_f, 4)}
+            if len(samp) >= 100:
+                best_pf = None
+                for a10 in range(2, 31, 2):
+                    for b10 in range(-40, 41, 4):
+                        a4, b4 = a10 / 10.0, b10 / 10.0
+                        ll4 = 0.0
+                        for p, y in samp:
+                            q = min(max(_sig(a4 * _logit(p) + b4), 1e-6),
+                                    1 - 1e-6)
+                            ll4 -= y * _m.log(q) + (1 - y) * _m.log(1 - q)
+                        if best_pf is None or ll4 < best_pf[0]:
+                            best_pf = (ll4, a4, b4)
+                _llf, paf, pbf = best_pf
+                br_f_cal = sum(
+                    (_sig(paf * _logit(p) + pbf) - y) ** 2 for p, y in samp
+                ) / len(samp)
+                field_platt[f] = [paf, pbf]
+                entry.update({"platt_a": paf, "platt_b": pbf,
+                              "brier_calibrado": round(br_f_cal, 4)})
+            field_rel_summary[f] = entry
+        if field_rel_summary:
+            summary["field_reliability"] = field_rel_summary
+            print("reliability POR CAMPO (p_field vs verdade final): "
+                  + " | ".join(
+                      f"{f}: n={v['n']} brier={v['brier']}"
+                      + (f"→{v['brier_calibrado']}" if "platt_a" in v else "")
+                      for f, v in field_rel_summary.items()))
+
         if getattr(args, "calibrate", False):
             import json as _json
             cp = _REPO / "lexicons" / "cross_params.json"
             params = _json.loads(cp.read_text(encoding="utf-8")) if cp.exists() else {}
-            params["calibration"] = {
+            cal_prev = dict(params.get("calibration") or {})
+            new_cal = dict(cal_prev)  # UPDATE, nunca substituir (R253.5)
+            new_cal.update({
                 "fitted_at_run": str(args.out_dir),
                 "temperature_bits": t_fit, "s_ood_bits": s_fit,
                 "brier": round(brier, 4), "n_samples": len(cal_samples),
-            }
+            })
+            # Governança R244: piso de amostra p/ o posterior; backup do
+            # dict anterior; proveniência do run.
+            if posterior_fit and posterior_fit["n_samples"] >= 300:
+                new_cal.update({k: v for k, v in posterior_fit.items()
+                                if k != "n_samples"})
+                new_cal["posterior_n_samples"] = posterior_fit["n_samples"]
+            elif posterior_fit:
+                print(f"AVISO: posterior NÃO gravado — n="
+                      f"{posterior_fit['n_samples']} < 300 (piso R244)")
+            if field_platt:
+                new_cal["posterior_platt_by_field"] = field_platt
+            params["calibration_previous"] = cal_prev
+            params["calibration"] = new_cal
             cp.write_text(_json.dumps(params, indent=2, ensure_ascii=False) + "\n",
                           encoding="utf-8")
             print(f"calibração gravada -> {cp}")

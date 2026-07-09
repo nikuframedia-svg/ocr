@@ -231,6 +231,32 @@ def main() -> None:
             for name, (n, k) in b_stats.items()
         },
     }
+    # R253.2 — isotonic (PAVA, pesado por n) sobre a série por idade: os
+    # buckets crus não são monótonos (8-14d: 31% > 15-30d: 19,5% com n
+    # díspares, 305 vs 1391) mas o prior "plano mais velho => mais OOD" é —
+    # o PAVA só funde violações adjacentes (média pesada), nunca inventa
+    # sinal. Escreve p_ood_isotonic A PAR do cru (auditoria); _pi_h0 lê o
+    # isotonic com fallback para o cru.
+    ordered = [name for name, _, _ in _OOD_BUCKETS]
+    blocks: list[list[float]] = []  # [soma_p*n, n, count_buckets]
+    for name in ordered:
+        n, k = b_stats[name]
+        if not n:
+            blocks.append([0.0, 0.0, 1])
+            continue
+        blocks.append([((k + 1) / (n + 2)) * n, float(n), 1])
+        while (len(blocks) >= 2 and blocks[-2][1] > 0 and blocks[-1][1] > 0
+               and blocks[-2][0] / blocks[-2][1]
+               > blocks[-1][0] / blocks[-1][1]):
+            b = blocks.pop()
+            blocks[-1] = [blocks[-1][0] + b[0], blocks[-1][1] + b[1],
+                          blocks[-1][2] + b[2]]
+    iso: list[float | None] = []
+    for wsum, wn, cnt in blocks:
+        iso.extend([wsum / wn if wn else None] * int(cnt))
+    for name, p in zip(ordered, iso):
+        quant7["buckets"][name]["p_ood_isotonic"] = (
+            round(p, 4) if p is not None else None)
 
     # ---------------- quant8: identidade conjunta (R250) ----------------
     # m̂_A sobre linhas validadas: raw vs FINAL (verdade humana) por campo,

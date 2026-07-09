@@ -2179,6 +2179,30 @@ def _all_plan_entries(idx: dict) -> dict[tuple, dict]:
 # traço de match (o pool pode ter ~12k, quase todos sim≈0/ruído).
 _TRACE_TOP_K = 50
 
+# R253.1 — as marginais por VALOR do posterior (_p_field/_p_of) somam sobre
+# TODO o pool dentro desta margem do topo (não só o top-50 do traço): a
+# truncatura subestimava a confiança por célula exatamente no regime de
+# posterior plano. 2^-30 ≈ 1e-9 relativo — abaixo disto a contribuição é
+# ruído numérico a qualquer escala de Brier.
+_POSTERIOR_MARGINAL_CUTOFF_BITS = 30.0
+
+# R253.5 — sweep de calibração (SÓ harness; produção nunca liga isto): com
+# CROSS_POSTERIOR_SWEEP=1 o winner leva `_posterior_stats` — estatísticas
+# suficientes (Z_pool e massa da OF por temperatura da grelha + b_max,
+# n_rest, odds_H0, N, piso estrutural da linha) que permitem ao
+# backtest_winner recomputar p_of/p_H0 em forma FECHADA para qualquer
+# (T, b_h0_raw, a_floor) sem re-correr o motor — é assim que o grid 3D do
+# --calibrate fita as chaves posterior_* com a MESMA fórmula do consumidor.
+_POSTERIOR_SWEEP = os.environ.get("CROSS_POSTERIOR_SWEEP") == "1"
+_SWEEP_T_GRID = tuple(round(0.25 * k, 2) for k in range(1, 17))  # 0.25..4.0
+
+# R253.7 — a telemetria do posterior (bloco R252) corre também em v30 desde
+# R250 e é parte mensurável do +47% de runtime vs R231 (o gate do protocolo
+# é +10%). Em produção v30 pode desligar-se sem tocar em NENHUMA decisão
+# (v30 não consome _p_of/_p_field): CROSS_POSTERIOR_TELEMETRY=0. Default ON
+# (backtest/sombra precisam dela; na variante next é DECISÃO, nunca salta).
+_POSTERIOR_TELEMETRY = os.environ.get("CROSS_POSTERIOR_TELEMETRY", "1") != "0"
+
 
 def _best_scored_entry(
     entries_by_key: dict[tuple, dict],
@@ -2344,7 +2368,15 @@ def _best_scored_entry(
     # confiança POR CÉLULA nasce aqui — a logística de 1 rival do R243
     # mentia nas bandas 0.3-0.7 (gap 0.16-0.34 medido) e abstinha 0% no OOD.
     # A massa além do top-K entra em Z mas não nas marginais (conservador).
-    t_cal, b_h0, b_floor = _posterior_params()
+    # R253.7 — em produção v30 a telemetria do posterior é opcional (parte
+    # mensurável do +47% de runtime vs R231); na variante next é DECISÃO e
+    # corre sempre. A variante já está resolvida no fs_ctx (1×/linha).
+    if fs_ctx.get("variant", "v30") == "v30" and not _POSTERIOR_TELEMETRY:
+        return winner
+    # R253.3/.4 — piso/H0 condicionais aos campos escritos desta linha;
+    # N do plano para a forma explícita da H0 (ativa só com chaves fitted).
+    t_cal, b_h0, b_floor = _posterior_params(
+        row, len(fs_ctx.get("dims") or {}), int(idx.get("fs_n") or 0))
     eb_ctx = fs_ctx.get("extra_bias") or {}
     pi = _pi_h0(eb_ctx.get("plan_age_days"))
     odds_h0 = pi / max(1.0 - pi, 1e-9)
@@ -2363,17 +2395,25 @@ def _best_scored_entry(
         corr_list = None
         b_max = best_bits
     z = 0.0
-    top_probs: list[float] = []
+    s_wlogw = 0.0  # Σ w·log2(w) — entropia exata sem segunda passagem
+    # R253.1 — corte por MARGEM (não por posição): `eligible` está ordenado
+    # por bits BRUTOS decrescentes e id_infl>=0 ⇒ b_i <= raw_i; quando
+    # raw_i < b_max − 30, wgt < 2^-30 e a entry já não move marginal nenhuma
+    # (z continua exato — soma TODOS os pesos).
+    marg_cutoff = b_max - _POSTERIOR_MARGINAL_CUTOFF_BITS
     by_of_w: dict[str, float] = {}
     by_ov_w: dict[str, float] = {}
     by_cli_w: dict[str, float] = {}
     by_des_w: dict[str, float] = {}
     for pos, cand in enumerate(eligible):
-        b_i = corr_list[pos] if corr_list is not None else float(cand[15])
-        wgt = 2.0 ** ((b_i - b_max) / t_cal)
+        raw_i = float(cand[15])
+        b_i = corr_list[pos] if corr_list is not None else raw_i
+        lw = (b_i - b_max) / t_cal
+        wgt = 2.0 ** lw
         z += wgt
-        if pos < _TRACE_TOP_K:
-            top_probs.append(wgt)
+        if wgt > 0.0:
+            s_wlogw += wgt * lw
+        if raw_i >= marg_cutoff:
             e = cand[7] or {}
             of_k = str(e.get("_of") or e.get("of") or "").strip()
             if of_k:
@@ -2389,8 +2429,14 @@ def _best_scored_entry(
                 by_des_w[des_k] = by_des_w.get(des_k, 0.0) + wgt
     w_h0 = odds_h0 * (2.0 ** ((b_h0 - b_max) / t_cal))
     n_rest = max(int((idx or {}).get("fs_n") or 0) - len(eligible), 0)
-    w_rest = n_rest * (2.0 ** ((b_floor - b_max) / t_cal))
+    w_atom = 2.0 ** ((b_floor - b_max) / t_cal)
+    w_rest = n_rest * w_atom
     z += w_h0 + w_rest
+    if w_h0 > 0.0:
+        s_wlogw += w_h0 * math.log2(w_h0)
+    if n_rest and w_atom > 0.0:
+        # cauda = n_rest ÁTOMOS a b_floor (o lump antigo subestimava H)
+        s_wlogw += w_rest * ((b_floor - b_max) / t_cal)
     b_top_corr = corr_list[0] if corr_list is not None else best_bits
     winner["_p_entry"] = round((2.0 ** ((b_top_corr - b_max) / t_cal)) / z, 4)
     winner["_p_of"] = round(by_of_w.get(winner_of_key, 0.0) / z, 4)
@@ -2402,13 +2448,34 @@ def _best_scored_entry(
             by_cli_w.get(_cliente_compact(winner.get("cliente")), 0.0) / z, 4),
         "modelo": round(by_des_w.get(winner_des, 0.0) / z, 4),
     }
-    tail = max(z - sum(top_probs) - w_h0 - w_rest, 0.0)
-    ent = 0.0
-    for wv in (*top_probs, tail, w_h0, w_rest):
-        p = wv / z
-        if p > 1e-12:
-            ent -= p * math.log2(p)
+    # R253.1 — entropia EXATA em forma fechada: H = log2(Z) − Σw·log2(w)/Z
+    # (o tail-lump antigo subestimava H; a cauda entra como n_rest átomos).
+    ent = max(math.log2(z) - s_wlogw / z, 0.0) if z > 0.0 else 0.0
     winner["_posterior_entropy_bits"] = round(ent, 3)
+    if _POSTERIOR_SWEEP:
+        # R253.5 — ver o bloco de constantes; custo 16×|pool| exponenciais,
+        # pago SÓ no harness.
+        by_t: dict[str, tuple[float, float]] = {}
+        for t_s in _SWEEP_T_GRID:
+            zp = wof = 0.0
+            for pos2, cand2 in enumerate(eligible):
+                b_i2 = (corr_list[pos2] if corr_list is not None
+                        else float(cand2[15]))
+                w2 = 2.0 ** ((b_i2 - b_max) / t_s)
+                zp += w2
+                e2 = cand2[7] or {}
+                if str(e2.get("_of") or e2.get("of") or "").strip() \
+                        == winner_of_key:
+                    wof += w2
+            by_t[f"{t_s:g}"] = (zp, wof)
+        n_dims_w = len(fs_ctx.get("dims") or {})
+        winner["_posterior_stats"] = {
+            "b_max": b_max, "n_rest": n_rest, "odds_h0": odds_h0,
+            "n_plan": int(idx.get("fs_n") or 0),
+            "floor_base": _row_floor_base(row, n_dims_w),
+            "n_written": len(_fs_written_id_fields(row)) + n_dims_w,
+            "by_t": by_t,
+        }
     return winner
 
 
@@ -2604,22 +2671,106 @@ def _posterior_p_top(bits_top: float, margin_bits: float | None) -> float:
     return 1.0 / (1.0 + 2.0 ** (-margin_eff / t))
 
 
-def _posterior_params() -> tuple[float, float, float]:
-    """R252 — (T, b_H0, b_floor) do posterior softmax multi-via.
+def _fs_written_id_fields(row: dict | None) -> tuple[str, ...]:
+    """R253.3 — campos de identidade escritos e legíveis na linha (a mesma
+    régua _is_missing_ocr da construção dos id_sets)."""
+    if not row:
+        return ()
+    return tuple(f for f in ("of", "ov", "cliente", "modelo")
+                 if not _is_missing_ocr(row.get(f)))
+
+
+def _row_floor_base(row: dict | None, n_dims_written: int) -> float | None:
+    """R253.3 — piso estrutural da linha SEM o a_floor fitted: soma dos
+    w_disagree dos campos de identidade escritos + cap das dims. None =
+    linha sem campos escritos (cai no piso legado)."""
+    written = _fs_written_id_fields(row)
+    if not written and not n_dims_written:
+        return None
+    fb = sum(_FS_W_DISAGREE[f] for f in written)
+    if n_dims_written:
+        fb += max(_FS_DIM_DISAGREE_CAP, n_dims_written * _FS_DIM_DISAGREE)
+    return fb
+
+
+def _posterior_params(
+    row: dict | None = None, n_dims_written: int = 0, n_plan: int = 0
+) -> tuple[float, float, float]:
+    """R252/R253.3 — (T, b_H0, b_floor) do posterior softmax multi-via.
 
     T=1.0 e NÃO a temperatura logística do R243: os bits corrigidos (R250)
     JÁ são log-likelihood-ratios honestos — o T≈2,0-2,5 fitted do R243 era,
     empiricamente, o antídoto da dupla contagem da identidade (fator ~2,6×
     medido); aplicá-lo ao softmax sobre ~20k entries engorda a cauda até a
-    dominar (medido: brier 0,64). b_floor = custo típico de uma entry que
-    discorda de tudo (Σ disagrees ≈ −10); b_H0 ≈ evidência típica de uma
-    linha OOD (s_ood do R243). Os três são re-fitted no flip
-    (backtest --calibrate, chaves posterior_*)."""
+    dominar (medido: brier 0,64).
+
+    R253.3 — b_floor e b_H0 CONDICIONAIS à linha: a evidência disponível
+    varia com os campos escritos. Uma linha com 2 campos nunca acumula −10
+    bits de discordância (máx. Σ w_disagree ≈ −2,9) — o piso fixo −10
+    subestimava a cauda e SOBRE-confiava exatamente nas linhas esparsas.
+      b_floor(row) = Σ_{f∈id escritos} w_disagree_f
+                   + max(DIM_CAP, n_dims·DIM_DISAGREE) + a_floor
+    (linha completa: −1,7−0,9−1,2−1,1−5,0 = −9,9 ≈ o −10 legado — coerente).
+    b_H0 por bucket de nº de campos escritos (calibration.b_h0_by_n_fields,
+    MEDIDO no conjunto OOD do harness); sem fit, constante legada. Fitted no
+    flip (backtest --calibrate, chaves posterior_*)."""
     cal = (_load_cross_params().get("calibration") or {})
     t = max(0.25, float(cal.get("posterior_temperature_bits") or 1.0))
-    b_h0 = float(cal.get("b_h0_bits") or cal.get("s_ood_bits") or 10.0)
-    b_floor = float(cal.get("b_floor_bits") or -10.0)
+    b_h0_flat = float(cal.get("b_h0_bits") or cal.get("s_ood_bits") or 10.0)
+    written = _fs_written_id_fields(row)
+    floor_base = _row_floor_base(row, n_dims_written)
+    if floor_base is not None:
+        b_floor = floor_base + float(cal.get("posterior_floor_a_bits") or 0.0)
+    else:
+        b_floor = float(cal.get("b_floor_bits") or -10.0)
+    nw = len(written) + n_dims_written
+    bucket = ("0-2" if nw <= 2 else "3-4" if nw <= 4
+              else "5-6" if nw <= 6 else "7+")
+    # R253.4 — N explícito na H0: o prior por entry é (1−π)/N, logo o odds
+    # correto de H0 contra UMA entry é π·N/(1−π) — o b_H0 legado absorvia
+    # T·log2(N)≈14,3 e derivava em silêncio com o tamanho do plano
+    # (12k→16,6k→20,8k). Com chaves *_raw fitted: b_H0 = raw + T·log2(N).
+    # Sem fit, cai na forma legada byte-idêntica (flip só via --calibrate).
+    by_n_raw = cal.get("b_h0_raw_by_n_fields") or {}
+    raw_flat = cal.get("b_h0_raw_bits")
+    if n_plan > 0 and (by_n_raw or raw_flat is not None):
+        base_raw = by_n_raw.get(bucket) if (
+            by_n_raw and (written or n_dims_written)) else None
+        if base_raw is None:
+            base_raw = raw_flat
+        if base_raw is not None:
+            return (t, float(base_raw) + t * math.log2(float(n_plan)),
+                    b_floor)
+    by_n = cal.get("b_h0_by_n_fields") or {}
+    if by_n and (written or n_dims_written):
+        b_h0 = float(by_n.get(bucket) or b_h0_flat)
+    else:
+        b_h0 = b_h0_flat
     return t, b_h0, b_floor
+
+
+def _platt_calibrate(p: float | None, field: str | None = None) -> float | None:
+    """R253.5/.6 — leitura CALIBRADA (Platt) da confiança do posterior nos
+    pontos de consumo (p_top, decision_confidence). Monótona (a>0 do grid) —
+    nunca reordena nada; as marginais cruas (_p_of/_p_field/_p_h0) ficam
+    intactas (a comparação de abstenção P(H0)>P(OF) usa sempre as cruas).
+    Por campo quando fitted (calibration.posterior_platt_by_field), senão
+    global (posterior_platt_a/b); sem fit = identidade."""
+    if p is None:
+        return None
+    cal = (_load_cross_params().get("calibration") or {})
+    ab = None
+    if field:
+        ab = (cal.get("posterior_platt_by_field") or {}).get(field)
+    if not ab:
+        a = cal.get("posterior_platt_a")
+        b = cal.get("posterior_platt_b")
+        ab = (a, b) if a is not None and b is not None else None
+    if not ab:
+        return float(p)
+    q = min(max(float(p), 1e-6), 1.0 - 1e-6)
+    x = float(ab[0]) * math.log(q / (1.0 - q)) + float(ab[1])
+    return round(1.0 / (1.0 + math.exp(-x)), 4)
 
 
 def _pi_h0(age_days: float | None) -> float:
@@ -2628,16 +2779,30 @@ def _pi_h0(age_days: float | None) -> float:
     clamp [0.05, 0.50] — a série não é monótona, não forçamos."""
     buckets = ((_load_cross_params().get("quant7_ood_by_age") or {})
                .get("buckets") or {})
+    # R253/F0 — fallbacks sincronizados com o quant7 re-medido no d1fa593
+    # (0-3d: 5.9%); o 0.107 era a medição antiga do R243 e divergia ~2× do
+    # ficheiro fitted (teste de não-divergência em test_fallback_sync.py).
+    # R253.2 — preferir a série ISOTONIC (PAVA pesado por n, fitted no
+    # quant_context_priors): os buckets crus não são monótonos (8-14d 31% >
+    # 15-30d 19,5%, n díspares) mas "plano mais velho ⇒ mais OOD" é;
+    # fallback para o cru mantém compatibilidade com snapshots antigos.
+    def _bucket_p(b: dict | None) -> float | None:
+        if not b:
+            return None
+        v = b.get("p_ood_isotonic")
+        if v is None:
+            v = b.get("p_ood")
+        return float(v) if v else None
     if age_days is None:
-        p = (buckets.get("0-3") or {}).get("p_ood")
-        return min(max(float(p or 0.107), 0.05), 0.50)
+        p = _bucket_p(buckets.get("0-3"))
+        return min(max(p or 0.059, 0.05), 0.50)
     a = max(float(age_days), 0.0)
     name = ("0-3" if a <= 3 else "4-7" if a <= 7 else "8-14" if a <= 14
             else "15-30" if a <= 30 else ">30")
-    p = (buckets.get(name) or {}).get("p_ood")
+    p = _bucket_p(buckets.get(name))
     if not p:
-        return 0.107 if a <= 3 else 0.25
-    return min(max(float(p), 0.05), 0.50)
+        return 0.059 if a <= 3 else 0.25
+    return min(max(p, 0.05), 0.50)
 
 
 def _sibling_p(margin_bits: float) -> float:
@@ -2993,7 +3158,9 @@ def _find_winner_entry(
         # como telemetria de transição.
         if scoring_variant() != "v30" and winner.get("_p_of") is not None:
             winner["_p_top_logistic"] = winner["_p_top"]
-            winner["_p_top"] = winner["_p_of"]
+            # R253.5 — leitura calibrada (Platt); a marginal crua fica em
+            # _p_of para a abstenção e telemetria.
+            winner["_p_top"] = _platt_calibrate(winner["_p_of"], "of")
         # R241/C2 — o winner contradiz uma OF escrita e VÁLIDA: marcar a
         # natureza provável do erro (visão vs transcrição humana) para a UI.
         of_written = str((row or {}).get("of") or "").strip()
@@ -3160,9 +3327,10 @@ def _mark_winner_cell(cell: dict, winner: dict | None) -> dict:
             pf = winner.get("_p_field") or {}
             af = winner.get("_active_field")
             if af in pf:
-                conf = pf[af]
+                # R253.5/.6 — leitura calibrada (Platt por campo → global).
+                conf = _platt_calibrate(pf[af], af)
             elif winner.get("_p_of") is not None:
-                conf = winner.get("_p_of")
+                conf = _platt_calibrate(winner.get("_p_of"), "of")
         out.setdefault("decision_confidence", conf)
     if winner.get("_score_reasons"):
         out["score_reasons"] = winner.get("_score_reasons")
@@ -3807,7 +3975,8 @@ def _apply_winner_to_field(
         # substitui a aproximação p_top × _sibling_p do R248.
         pf_modelo = (winner.get("_p_field") or {}).get("modelo")
         if scoring_variant() != "v30" and pf_modelo is not None:
-            conf = round(float(pf_modelo), 3)
+            # R253.5/.6 — leitura calibrada (Platt por campo → global).
+            conf = round(float(_platt_calibrate(pf_modelo, "modelo")), 3)
         else:
             conf = round(
                 p_top * _sibling_p(
