@@ -1145,11 +1145,17 @@ def _spawn_shadow_scoring(
     def _run() -> None:
         try:
             from app.pipeline.scoring_engine import shadow_score, set_scoring_variant
-            # R250 — A/B real na fábrica: com CROSS_SHADOW_VARIANT=next, a
-            # sombra corre a matemática nova (só nesta thread — ContextVar);
-            # produção intocada, output em sheets.shadow_scoring_json.
-            if get_settings().cross_shadow_variant == "next":
-                set_scoring_variant("next")
+            # R250 — A/B real na fábrica: a sombra corre a variante configurada
+            # (só nesta thread — ContextVar); produção intocada, output em
+            # sheets.shadow_scoring_json.
+            # R257 — o dispatch comparava com o literal "next" (era R250), pelo
+            # que CROSS_SHADOW_VARIANT=v30cal caía silenciosamente no default
+            # v30 — e como o ranking v30cal é byte-idêntico ao v30, o soak do
+            # R255 compararia v30-vs-v30 e daria luz verde FALSA ao flip.
+            # Agora qualquer valor != "current" é despachado.
+            shadow_variant = (get_settings().cross_shadow_variant or "").strip()
+            if shadow_variant and shadow_variant != "current":
+                set_scoring_variant(shadow_variant)
             run_id = db.start_shadow_run(sheet_id)
             try:
                 scoring, total, snapped, confirmed, na, dur_ms = shadow_score(

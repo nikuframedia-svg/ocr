@@ -78,7 +78,10 @@ fine-tune por operador · 7 LiLT (opcional). Hoje: Fase 0.5 + R104-R106
   soak→flip→gate em `docs/DECISAO_v30cal.md`; procedimento formal em
   `docs/CROSS_EVALUATION_PROTOCOL.md`.
 - `CROSS_SHADOW_VARIANT` (default "current"): variante da thread de sombra;
-  "=v30cal" inicia o soak (triagem em /shadow-queue + scripts/diag/soak_sprt.py).
+  `CROSS_SHADOW_VARIANT=v30cal` inicia o soak (triagem em /shadow-queue +
+  scripts/diag/soak_sprt.py). Nota R257: até ao R257 o dispatch só aceitava
+  "next" — v30cal caía silenciosamente em v30 e o soak media v30-vs-v30;
+  agora qualquer valor != "current" é despachado.
 - `CROSS_POSTERIOR_TELEMETRY=0`: desliga a telemetria do posterior em v30
   (recuperação de runtime); na variante ativa é decisão e corre sempre.
 - `CROSS_WRITE_GATE_MARGINAL` (default OFF; ligar só com OK do Luís): gate de
