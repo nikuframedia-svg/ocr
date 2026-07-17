@@ -325,6 +325,198 @@ class TestSpecAndActivate:
         assert name not in reg.TEMPLATES  # kill-switch imediato
 
 
+class TestDeclaredCrossWizard:
+    """Cross declarado (fase A) — spec com declared_cross pelos endpoints
+    do wizard + wiring do force_reload do watcher na ativação."""
+
+    _DECLARED = {"pbase": {"ref": "plan", "column": "pbase",
+                           "cmp": "num", "tol": 2.0}}
+
+    class _WatcherStub:
+        def __init__(self):
+            self.reloads = 0
+
+        def get_refs(self):
+            return {"plan_headers": ["cliente", "of", "pbase"]}
+
+        def force_reload(self):
+            self.reloads += 1
+            return {}
+
+    def _analisado(self, client, monkeypatch):
+        uid, r = _create(client)
+        tid = r.json()["id"]
+        monkeypatch.setattr(main.ocr_runner, "run_discovery",
+                            lambda p: dict(_DISC))
+        main._process_discovery(tid)
+        stub = self._WatcherStub()
+        monkeypatch.setattr(main, "get_watcher", lambda: stub)
+        return uid, tid, stub
+
+    def _spec_with_declared(self, tid):
+        spec = json.loads(db.get_kanban_template(tid)["spec_json"])
+        spec["setor_aliases"] = ["CORTE ESPOSENDE"]
+        spec["row_fields"] = list(dict.fromkeys(
+            list(spec.get("row_fields") or []) + ["pbase"]))
+        spec["declared_cross"] = json.loads(json.dumps(self._DECLARED))
+        return spec
+
+    def test_save_activate_installs_declared(self, env, client, monkeypatch):
+        uid, tid, stub = self._analisado(client, monkeypatch)
+        r = client.post(f"/admin/kanban-templates/{tid}/spec",
+                        json={"spec": self._spec_with_declared(tid)},
+                        headers=_DESKTOP)
+        assert r.status_code == 200, r.text
+        assert stub.reloads == 0  # ainda não ativo — sem re-mine
+        r = client.post(f"/admin/kanban-templates/{tid}/activate",
+                        headers=_DESKTOP)
+        assert r.status_code == 200, r.text
+        name = f"u{uid}_corte_esposende"
+        assert reg.TEMPLATES[name].declared_cross == {
+            "pbase": reg.DeclaredRef(column="pbase", cmp="num", tol=2.0)}
+        # a união de colunas declaradas mudou (∅ → {pbase}) → 1 force_reload
+        assert stub.reloads == 1
+
+    def test_deactivate_declared_forces_reload(self, env, client, monkeypatch):
+        uid, tid, stub = self._analisado(client, monkeypatch)
+        client.post(f"/admin/kanban-templates/{tid}/spec",
+                    json={"spec": self._spec_with_declared(tid)},
+                    headers=_DESKTOP)
+        client.post(f"/admin/kanban-templates/{tid}/activate",
+                    headers=_DESKTOP)
+        assert stub.reloads == 1
+        r = client.post(f"/admin/kanban-templates/{tid}/deactivate",
+                        headers=_DESKTOP)
+        assert r.status_code == 200
+        assert stub.reloads == 2  # {pbase} → ∅
+
+    def test_activate_without_declared_no_reload(self, env, client, monkeypatch):
+        uid, tid, stub = self._analisado(client, monkeypatch)
+        spec = json.loads(db.get_kanban_template(tid)["spec_json"])
+        spec["setor_aliases"] = ["CORTE ESPOSENDE"]
+        client.post(f"/admin/kanban-templates/{tid}/spec",
+                    json={"spec": spec}, headers=_DESKTOP)
+        client.post(f"/admin/kanban-templates/{tid}/activate",
+                    headers=_DESKTOP)
+        assert stub.reloads == 0  # união inalterada (∅ → ∅)
+
+    def test_declared_on_crossable_field_422(self, env, client, monkeypatch):
+        _, tid, _stub = self._analisado(client, monkeypatch)
+        spec = json.loads(db.get_kanban_template(tid)["spec_json"])
+        spec["setor_aliases"] = ["CORTE ESPOSENDE"]
+        spec["declared_cross"] = {"of": {"ref": "plan", "column": "of",
+                                         "cmp": "text"}}
+        r = client.post(f"/admin/kanban-templates/{tid}/spec",
+                        json={"spec": spec}, headers=_DESKTOP)
+        assert r.status_code == 422
+        assert any("cross-check normal" in e for e in r.json()["errors"])
+
+    def test_status_returns_declared_for_rehydration(self, env, client,
+                                                     monkeypatch):
+        """O wizard reidrata (loadFromStatus) a partir do /status — o
+        declared_cross tem de voltar, senão regravar o spec perdia-o."""
+        _, tid, _stub = self._analisado(client, monkeypatch)
+        client.post(f"/admin/kanban-templates/{tid}/spec",
+                    json={"spec": self._spec_with_declared(tid)},
+                    headers=_DESKTOP)
+        r = client.get(f"/admin/kanban-templates/{tid}/status",
+                       headers=_DESKTOP)
+        assert r.status_code == 200
+        assert r.json()["spec"]["declared_cross"] == self._DECLARED
+
+    # ---- dv (fase C-lite) — voto no spec via wizard ----
+
+    def _spec_with_vote(self, tid):
+        spec = self._spec_with_declared(tid)
+        spec["declared_cross"]["pbase"]["vote"] = True
+        return spec
+
+    def test_vote_save_stamps_decided_at_and_emits_event(
+            self, env, client, monkeypatch):
+        _, tid, _stub = self._analisado(client, monkeypatch)
+        events: list[tuple[str, dict]] = []
+        monkeypatch.setattr(
+            main.kernel, "emit_event",
+            lambda etype, payload=None, **kw: events.append((etype, payload)))
+        r = client.post(f"/admin/kanban-templates/{tid}/spec",
+                        json={"spec": self._spec_with_vote(tid)},
+                        headers=_DESKTOP)
+        assert r.status_code == 200, r.text
+        saved = json.loads(db.get_kanban_template(tid)["spec_json"])
+        cfg = saved["declared_cross"]["pbase"]
+        assert cfg["vote"] is True
+        assert cfg.get("vote_decided_at")        # carimbo server-side
+        dv_events = [e for e in events if e[0] == "declared_vote_changed"]
+        assert dv_events and dv_events[0][1]["fields_on"] == ["pbase"]
+
+    def test_vote_stamp_preserved_on_resave(self, env, client, monkeypatch):
+        """Regravar o spec (round-trip do wizard, sem carimbos do cliente)
+        preserva o vote_decided_at original."""
+        _, tid, _stub = self._analisado(client, monkeypatch)
+        monkeypatch.setattr(main.kernel, "emit_event",
+                            lambda *a, **kw: None)
+        client.post(f"/admin/kanban-templates/{tid}/spec",
+                    json={"spec": self._spec_with_vote(tid)},
+                    headers=_DESKTOP)
+        first = json.loads(db.get_kanban_template(tid)["spec_json"])
+        stamp = first["declared_cross"]["pbase"]["vote_decided_at"]
+        # regravação idêntica vinda do cliente (sem carimbo)
+        client.post(f"/admin/kanban-templates/{tid}/spec",
+                    json={"spec": self._spec_with_vote(tid)},
+                    headers=_DESKTOP)
+        again = json.loads(db.get_kanban_template(tid)["spec_json"])
+        assert again["declared_cross"]["pbase"]["vote_decided_at"] == stamp
+
+    def test_vote_off_emits_fields_off(self, env, client, monkeypatch):
+        _, tid, _stub = self._analisado(client, monkeypatch)
+        events: list[tuple[str, dict]] = []
+        monkeypatch.setattr(
+            main.kernel, "emit_event",
+            lambda etype, payload=None, **kw: events.append((etype, payload)))
+        client.post(f"/admin/kanban-templates/{tid}/spec",
+                    json={"spec": self._spec_with_vote(tid)},
+                    headers=_DESKTOP)
+        client.post(f"/admin/kanban-templates/{tid}/spec",
+                    json={"spec": self._spec_with_declared(tid)},
+                    headers=_DESKTOP)
+        dv_events = [e for e in events if e[0] == "declared_vote_changed"]
+        assert len(dv_events) == 2
+        assert dv_events[1][1]["fields_off"] == ["pbase"]
+
+    def test_activate_with_vote_installs_and_emits(self, env, client,
+                                                   monkeypatch):
+        uid, tid, _stub = self._analisado(client, monkeypatch)
+        events: list[tuple[str, dict]] = []
+        monkeypatch.setattr(
+            main.kernel, "emit_event",
+            lambda etype, payload=None, **kw: events.append((etype, payload)))
+        client.post(f"/admin/kanban-templates/{tid}/spec",
+                    json={"spec": self._spec_with_vote(tid)},
+                    headers=_DESKTOP)
+        r = client.post(f"/admin/kanban-templates/{tid}/activate",
+                        headers=_DESKTOP)
+        assert r.status_code == 200, r.text
+        name = f"u{uid}_corte_esposende"
+        assert reg.TEMPLATES[name].declared_cross["pbase"].vote is True
+        acts = [e for e in events
+                if e[0] == "declared_vote_changed"
+                and (e[1] or {}).get("action") == "activate"]
+        assert acts and acts[0][1]["fields_on"] == ["pbase"]
+
+    def test_admin_tab_shows_vote_pill(self, env, client, monkeypatch):
+        _, tid, _stub = self._analisado(client, monkeypatch)
+        monkeypatch.setattr(main.kernel, "emit_event",
+                            lambda *a, **kw: None)
+        client.post(f"/admin/kanban-templates/{tid}/spec",
+                    json={"spec": self._spec_with_vote(tid)},
+                    headers=_DESKTOP)
+        page = client.get("/admin/kanbans", headers=_DESKTOP)
+        assert page.status_code == 200
+        assert "vota" in page.text
+        # env default off ⇒ pill marca "(inativo)"
+        assert "vota (inativo)" in page.text
+
+
 class TestDelete:
     def test_delete_without_sheets(self, env, client):
         uid, r = _create(client)

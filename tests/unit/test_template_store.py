@@ -139,6 +139,95 @@ class TestSpecRoundtrip:
         assert spec.source == "db"
 
 
+class TestDeclaredCrossSpec:
+    """Cross declarado (fase A) — spec_json ↔ TemplateSpec."""
+
+    _DECLARED = {"pbase": {"ref": "plan", "column": "pbase",
+                           "cmp": "num", "tol": 2.0}}
+
+    def test_roundtrip_with_declared(self):
+        spec = _mk_spec(row_fields=["of", "modelo", "pbase"],
+                        declared_cross=self._DECLARED)
+        assert spec.declared_cross == {
+            "pbase": reg.DeclaredRef(column="pbase", cmp="num", tol=2.0)}
+        d = template_store.spec_to_dict(spec)
+        assert d["declared_cross"] == self._DECLARED
+        again = template_store.spec_from_dict(d, unidade_id=2, db_id=9)
+        assert again == spec
+
+    def test_old_spec_without_key_defaults_empty(self):
+        spec = template_store.spec_from_dict(
+            {"name": "u1_x", "row_fields": ["of"]})
+        assert spec.declared_cross == {}
+        assert template_store.spec_to_dict(spec)["declared_cross"] == {}
+
+    def test_malformed_declared_discarded_not_raised(self):
+        # reload_registry nunca pode perder um template por uma chave
+        # acessória: entradas partidas são descartadas silenciosamente.
+        spec = template_store.spec_from_dict({
+            "name": "u1_x", "row_fields": ["of", "pbase", "obs"],
+            "declared_cross": {
+                "pbase": {"column": "pbase", "cmp": "fuzzy"},   # cmp inválido
+                "obs": {"cmp": "text"},                          # sem column
+                "ok": {"column": "destino", "cmp": "text"},
+            },
+        })
+        assert spec.declared_cross == {
+            "ok": reg.DeclaredRef(column="destino", cmp="text", tol=None)}
+        spec2 = template_store.spec_from_dict(
+            {"name": "u1_x", "row_fields": ["of"],
+             "declared_cross": ["nao", "dict"]})
+        assert spec2.declared_cross == {}
+
+    def test_text_never_carries_tol(self):
+        spec = template_store.spec_from_dict({
+            "name": "u1_x", "row_fields": ["obs"],
+            "declared_cross": {"obs": {"column": "destino", "cmp": "text",
+                                       "tol": 3.0}}})
+        assert spec.declared_cross["obs"].tol is None
+
+    def test_vote_roundtrip_and_strict_parse(self):
+        # round-trip com vote=true
+        spec = _mk_spec(row_fields=["of", "pbase"],
+                        declared_cross={"pbase": {
+                            "column": "pbase", "cmp": "num",
+                            "tol": 2.0, "vote": True}})
+        assert spec.declared_cross["pbase"].vote is True
+        d = template_store.spec_to_dict(spec)
+        assert d["declared_cross"]["pbase"]["vote"] is True
+        again = template_store.spec_from_dict(d, unidade_id=2, db_id=9)
+        assert again == spec
+
+    def test_vote_omitted_when_false(self):
+        # specs sem voto ficam byte-idênticos (chave omitida)
+        spec = _mk_spec(row_fields=["of", "pbase"],
+                        declared_cross=self._DECLARED)
+        d = template_store.spec_to_dict(spec)
+        assert "vote" not in d["declared_cross"]["pbase"]
+
+    @pytest.mark.parametrize("raw", ["sim", 1, "true", [True]])
+    def test_vote_truthy_strings_never_enable(self, raw):
+        # parse ESTRITO-para-True: spec_json malformado nunca liga um voto
+        spec = template_store.spec_from_dict({
+            "name": "u1_x", "row_fields": ["pbase"],
+            "declared_cross": {"pbase": {"column": "pbase", "cmp": "num",
+                                         "vote": raw}}})
+        assert spec.declared_cross["pbase"].vote is False
+
+    def test_runtime_declared_columns_union(self):
+        reg.set_runtime_templates([
+            _mk_spec(row_fields=["of", "pbase"],
+                     declared_cross=self._DECLARED),
+            _mk_spec(name="u2_outro", aliases=("OUTRO",),
+                     row_fields=["of", "obs"],
+                     declared_cross={"obs": {"column": "destino",
+                                             "cmp": "text"}}),
+        ])
+        assert reg.runtime_declared_columns() == frozenset({"pbase", "destino"})
+        reg.set_runtime_templates([])
+        assert reg.runtime_declared_columns() == frozenset()
+
+
 class TestValidateSpecPayload:
     def test_ok(self):
         errors, warnings = template_store.validate_spec_payload({
@@ -183,6 +272,126 @@ class TestValidateSpecPayload:
             "name": "u2_c", "setor_aliases": ["X"],
             "row_fields": ["of", "of"]})
         assert any("duplicado" in e for e in errors)
+
+    # ---- cross declarado (fase A) ----
+
+    @staticmethod
+    def _declared_payload(**over):
+        d = {
+            "name": "u2_c", "setor_aliases": ["X"],
+            "row_fields": ["of", "pbase"],
+            "declared_cross": {"pbase": {"ref": "plan", "column": "pbase",
+                                         "cmp": "num", "tol": 2.0}},
+        }
+        d.update(over)
+        return d
+
+    def test_declared_ok(self):
+        errors, warnings = template_store.validate_spec_payload(
+            self._declared_payload())
+        assert errors == []
+        # campo custom continua a avisar (comportamento pré-existente)
+        assert any("pbase" in w and "canónico" in w for w in warnings)
+
+    def test_declared_must_be_in_rows(self):
+        errors, _ = template_store.validate_spec_payload(
+            self._declared_payload(row_fields=["of"]))
+        assert any("pbase" in e and "campos da tabela" in e for e in errors)
+
+    def test_declared_rejects_crossable_field(self):
+        errors, _ = template_store.validate_spec_payload(
+            self._declared_payload(declared_cross={
+                "of": {"column": "of", "cmp": "text"}}))
+        assert any("'of'" in e and "cross-check normal" in e for e in errors)
+
+    def test_declared_rejects_known_non_crossable_field(self):
+        # qtd tem regra local própria — declarado é só para campos custom
+        errors, _ = template_store.validate_spec_payload(
+            self._declared_payload(
+                row_fields=["of", "qtd"],
+                declared_cross={"qtd": {"column": "quanttrp", "cmp": "num"}}))
+        assert any("'qtd'" in e and "regra própria" in e for e in errors)
+
+    def test_declared_rejects_non_plan_ref(self):
+        errors, _ = template_store.validate_spec_payload(
+            self._declared_payload(declared_cross={
+                "pbase": {"ref": "sap", "column": "pbase", "cmp": "num"}}))
+        assert any("'sap'" in e for e in errors)
+
+    def test_declared_column_must_be_lowercase(self):
+        errors, _ = template_store.validate_spec_payload(
+            self._declared_payload(declared_cross={
+                "pbase": {"column": "PBase", "cmp": "num"}}))
+        assert any("coluna do plano inválida" in e for e in errors)
+
+    def test_declared_column_required(self):
+        errors, _ = template_store.validate_spec_payload(
+            self._declared_payload(declared_cross={
+                "pbase": {"column": "", "cmp": "num"}}))
+        assert any("coluna do plano inválida" in e for e in errors)
+
+    def test_declared_bad_cmp(self):
+        errors, _ = template_store.validate_spec_payload(
+            self._declared_payload(declared_cross={
+                "pbase": {"column": "pbase", "cmp": "fuzzy"}}))
+        assert any("fuzzy" in e for e in errors)
+
+    def test_declared_tol_with_text_rejected(self):
+        errors, _ = template_store.validate_spec_payload(
+            self._declared_payload(declared_cross={
+                "pbase": {"column": "pbase", "cmp": "text", "tol": 2.0}}))
+        assert any("tolerância" in e for e in errors)
+
+    @pytest.mark.parametrize("tol", [0, -1, "abc"])
+    def test_declared_bad_tol(self, tol):
+        errors, _ = template_store.validate_spec_payload(
+            self._declared_payload(declared_cross={
+                "pbase": {"column": "pbase", "cmp": "num", "tol": tol}}))
+        assert any("tolerância inválida" in e for e in errors)
+
+    def test_declared_num_without_tol_is_exact_match(self):
+        errors, _ = template_store.validate_spec_payload(
+            self._declared_payload(declared_cross={
+                "pbase": {"column": "pbase", "cmp": "num"}}))
+        assert errors == []
+
+    def test_declared_warns_when_column_missing_from_plan(self):
+        _, warnings = template_store.validate_spec_payload(
+            self._declared_payload(),
+            plan_headers=["of", "cliente", "destino"])
+        assert any("não existe no último plano" in w for w in warnings)
+
+    def test_declared_no_warning_without_plan(self):
+        _, warnings = template_store.validate_spec_payload(
+            self._declared_payload(), plan_headers=None)
+        assert not any("não existe no último plano" in w for w in warnings)
+
+    def test_declared_not_dict_is_error(self):
+        errors, _ = template_store.validate_spec_payload(
+            self._declared_payload(declared_cross=["pbase"]))
+        assert any("declared_cross inválido" in e for e in errors)
+
+    def test_vote_non_bool_is_error(self):
+        errors, _ = template_store.validate_spec_payload(
+            self._declared_payload(declared_cross={
+                "pbase": {"column": "pbase", "cmp": "num", "vote": "sim"}}))
+        assert any("vote inválido" in e for e in errors)
+
+    def test_vote_with_env_off_warns_but_accepts(self):
+        errors, warnings = template_store.validate_spec_payload(
+            self._declared_payload(declared_cross={
+                "pbase": {"column": "pbase", "cmp": "num", "vote": True}}),
+            declared_vote_env="off")
+        assert errors == []
+        assert any("CROSS_DECLARED_VOTE" in w for w in warnings)
+
+    @pytest.mark.parametrize("env", [None, "on", "shadow"])
+    def test_vote_no_warning_when_env_not_off(self, env):
+        _, warnings = template_store.validate_spec_payload(
+            self._declared_payload(declared_cross={
+                "pbase": {"column": "pbase", "cmp": "num", "vote": True}}),
+            declared_vote_env=env)
+        assert not any("CROSS_DECLARED_VOTE" in w for w in warnings)
 
 
 class TestReloadRegistry:

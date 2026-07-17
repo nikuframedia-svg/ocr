@@ -149,15 +149,24 @@ def _neutralize_of_consumption() -> None:
 
 
 def _winner_of(engine, row: dict, refs: dict, idx: dict, tpl: str | None,
-               extra_bias: dict | None = None):
+               extra_bias: dict | None = None,
+               declared_vote: dict | None = None):
     """Winner de UMA linha pelo caminho do próprio motor. Devolve
     (of_normalizada, margem_bits|None, bits|None, winner_dict|None) —
-    R247: o dict é preciso para pontuar MODEL_* (designação escolhida)."""
+    R247: o dict é preciso para pontuar MODEL_* (designação escolhida).
+    dv: `declared_vote` só é passado quando não-None (modo --dv-mode
+    candidate) — o fallback TypeError NUNCA pode apanhar a chamada com
+    extra_bias de um motor R242+ (perderia a simetria do prior, R253/F0)."""
     select = getattr(engine, "select_winner", None)
     if callable(select):  # R236+ — caminho encapsulado do candidato
         try:
-            winner = select(row, refs, template_name=tpl,
-                            extra_bias=extra_bias)
+            if declared_vote is not None:
+                winner = select(row, refs, template_name=tpl,
+                                extra_bias=extra_bias,
+                                declared_vote=declared_vote)
+            else:
+                winner = select(row, refs, template_name=tpl,
+                                extra_bias=extra_bias)
         except TypeError:  # motor sem R242 (sem extra_bias)
             winner = select(row, refs, template_name=tpl)
         of = engine.normalize_of(
@@ -293,6 +302,17 @@ def main() -> None:
                     default=Path("reports/backtest_winner"))
     ap.add_argument("--calibrate", action="store_true",
                     help="fitar T/s_ood e gravar em lexicons/cross_params.json")
+    # dv — voto declarado (fase C-lite): spec JSON {"fields": {campo:
+    # {"column","cmp","tol","vote","m"}}} instala um template-sonda no
+    # registry ANTES do mine (o watcher mina os `extra` pelo caminho de
+    # produção); "candidate" liga o termo SÓ no candidato (medição do delta
+    # DO termo, com verdade humana + gate GOOD inviolável).
+    ap.add_argument("--declared-spec", type=Path, default=None)
+    ap.add_argument("--dv-mode", choices=("off", "candidate"), default="off")
+    ap.add_argument("--dv-synthetic", choices=("truth", "rival"), default=None,
+                    help="injeta o valor declarado nos rows: da entry-VERDADE"
+                         " (teto de utilidade) ou de uma entry RIVAL"
+                         " (adversarial — GOOD tem de se manter)")
     args = ap.parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -300,6 +320,32 @@ def main() -> None:
     import app.pipeline.scoring_engine as cand
     base = _load_engine_from_ref(args.baseline_ref, args.out_dir)
     from app.cross_check.ref_watcher import _mine_from_excel
+
+    # dv — template-sonda no registry runtime (via caminho de produção).
+    dv_fields_cfg: dict[str, dict] = {}
+    if args.declared_spec:
+        from app.templates_registry import (
+            DeclaredRef, TemplateSpec, set_runtime_templates,
+        )
+        raw_spec = json.loads(
+            args.declared_spec.expanduser().read_text(encoding="utf-8"))
+        dv_fields_cfg = dict(raw_spec.get("fields") or {})
+        probe = TemplateSpec(
+            name="bt_declared_probe", tpl_code="TPL103", phase="Produção",
+            setor_aliases=("BT DECLARED PROBE",),
+            row_fields=tuple(["of"] + sorted(dv_fields_cfg)),
+            declared_cross={
+                f: DeclaredRef(
+                    column=str(cfg.get("column") or f),
+                    cmp=str(cfg.get("cmp") or "text"),
+                    tol=(float(cfg["tol"]) if cfg.get("tol") else None),
+                    vote=cfg.get("vote") is True,
+                )
+                for f, cfg in dv_fields_cfg.items()
+            },
+            source="db",
+        )
+        set_runtime_templates([probe])
 
     refs = _mine_from_excel(args.sap.expanduser(), args.plan.expanduser())
     refs.setdefault("loaded_at", "backtest")
@@ -340,6 +386,55 @@ def main() -> None:
     _ab = float(q6.get("production_prior_bits") or 2.0)
     _ib = float(q6.get("production_prior_inactive_bits") or -1.77)
     _bias_cache: dict[str, dict | None] = {}
+
+    # dv — termo do candidato (o harness é o gate; ignora o env de propósito)
+    dv_arg = None
+    if args.dv_mode == "candidate" and dv_fields_cfg:
+        dv_specs = tuple(
+            (f, str(cfg.get("column") or f), str(cfg.get("cmp") or "text"),
+             float(cfg.get("tol") or 0.0),
+             min(max(float(cfg.get("m") or 0.5), 0.05), 0.95))
+            for f, cfg in dv_fields_cfg.items() if cfg.get("vote") is True
+        )
+        if dv_specs:
+            dv_arg = {"specs": dv_specs, "cap": 2.0}
+    _rival_cache: dict[tuple[str, str], str | None] = {}
+
+    def _dv_inject(row: dict, t_of: str) -> dict:
+        """dv-synthetic (sensitivity analysis, não verdade real): injeta o
+        valor da coluna declarada no row — da entry-VERDADE (teto de
+        utilidade) ou de uma entry RIVAL determinística (adversarial)."""
+        entries = refs.get("of_to_entries") or {}
+        out = dict(row)
+        for f, cfg in dv_fields_cfg.items():
+            col = str(cfg.get("column") or f)
+            val: str | None = None
+            if args.dv_synthetic == "truth":
+                for e in entries.get(t_of) or []:
+                    s = cand._declared_raw_str((e.get("extra") or {}).get(col))
+                    if s:
+                        val = s
+                        break
+            else:  # rival — 1ª OF != verdade com a coluna preenchida
+                key = (t_of, col)
+                if key not in _rival_cache:
+                    found: str | None = None
+                    for k in sorted(entries):
+                        if k == t_of:
+                            continue
+                        for e in entries[k]:
+                            s = cand._declared_raw_str(
+                                (e.get("extra") or {}).get(col))
+                            if s:
+                                found = s
+                                break
+                        if found:
+                            break
+                    _rival_cache[key] = found
+                val = _rival_cache[key]
+            if val:
+                out[f] = val
+        return out
 
     def _prod_bias_for(day: str) -> dict | None:
         if not day or len(day) < 10:
@@ -394,8 +489,11 @@ def main() -> None:
             margins_ok: list[float] = []
             margins_bad: list[float] = []
             shift_detail: list[tuple[str, bool, bool]] = []
+            dv_ws_bad = 0  # dv — winner ERRADO promovido weak→strong pelo termo
             for rec in S:
                 sid, i, tpl, row, t_of = rec[:5]  # SHIFT traz a coluna-fonte em rec[5]
+                if args.dv_synthetic and dv_fields_cfg:
+                    row = _dv_inject(row, t_of)
                 try:
                     # R253/F0 — o MESMO extra_bias nos dois lados: dar o prior
                     # de produção só ao candidato inflava-o ~+1.1pp TOTAL /
@@ -407,7 +505,8 @@ def main() -> None:
                     b_of, _bm, _bb, b_w = _winner_of(
                         base, row, refs, idx_b, tpl, extra_bias=prod_bias)
                     c_of, mg, cb, c_w = _winner_of(
-                        cand, row, refs, idx_c, tpl, extra_bias=prod_bias)
+                        cand, row, refs, idx_c, tpl, extra_bias=prod_bias,
+                        declared_vote=dv_arg)
                 except Exception as exc:
                     errs += 1
                     print(f"  ERRO s{sid} r{i}: {exc}", file=sys.stderr)
@@ -500,6 +599,13 @@ def main() -> None:
                 b_only += B and not C
                 c_only += C and not B
                 neither += not B and not C
+                # dv — métrica do quadrante perigoso (§5 do desenho): winner
+                # ERRADO cuja margem passou de <4 (baseline) a >=4 com o
+                # termo — strong indevido comprado pelo declarado.
+                if (dv_arg is not None and not C and mg is not None
+                        and float(mg) >= 4.0
+                        and _bm is not None and float(_bm) < 4.0):
+                    dv_ws_bad += 1
                 if mg is not None:
                     (margins_ok if C else margins_bad).append(float(mg))
                 if not is_model and B != C:
@@ -528,6 +634,8 @@ def main() -> None:
                 "cand_margin_bad_p25_p50_p75": [
                     _q(margins_bad, .25), _q(margins_bad, .5), _q(margins_bad, .75)],
             }
+            if dv_arg is not None:
+                summary["sets"][name]["dv_weak_to_strong_bad"] = dv_ws_bad
             if shift_detail:
                 by_src: dict[str, list[tuple[bool, bool]]] = defaultdict(list)
                 for src, okb, okc in shift_detail:

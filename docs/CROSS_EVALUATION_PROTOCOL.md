@@ -176,3 +176,38 @@ baixa confianca deixam de sobrescrever o valor correto do operador.
 
 O criterio e sempre o mesmo: melhorar o valor final validado, nao apenas mudar
 a cor.
+
+## Voto declarado (feature de variante "+dv", fase C-lite)
+
+Campos declarados de templates do wizard podem votar na escolha da linha do
+plano (spec `vote=true` + env `CROSS_DECLARED_VOTE`). O termo e one-sided e
+capado (<=2 bits, log2(m/u) com u medido do plano), subtraido no posterior
+(padrao id_infl) e OFF no realinhamento — um flip do termo nunca sai
+"strong" (cap < margem decisiva). Regras deste protocolo para o ligar:
+
+1. **Etiqueta composta**: o soak corre com `CROSS_DECLARED_VOTE=shadow` +
+   `CROSS_SHADOW_VARIANT=<base>+dv` (ex.: `v30+dv`). Os consumidores
+   calibrados do motor comparam a BASE da etiqueta (`_variant_base`) — uma
+   feature de sombra nunca ativa o caminho next/v30cal por engano
+   (classe de bug do fix R257). Sentinela: variante `+dv` sem campos
+   votantes tem de ser byte-identica a base (teste fixo).
+2. **Nunca sobrepor soaks**: um de cada vez; o `+dv` soaka sobre a base que
+   estiver em producao.
+3. **Criterios de ACCEPT do dv** (todos): SPRT ACCEPT nos 2 bracos ∧ 0
+   violacoes do INVARIANTE DO CAP (flip de winner com margem de producao
+   > 2.0 bits = cap furado = bug, abort imediato) ∧ >=300 folhas com sombra
+   ∧ >=100 folhas de templates com campo votante escrito ∧ 100% dos flips
+   triados ∧ braco de utilidade: melhorias >= 2x pioras com >=10 flips
+   decidiveis (senao: "SAFE, utilidade nao provada" — fica em shadow).
+4. **Backtest**: `--declared-spec spec.json` instala um template-sonda no
+   registry (o watcher mina os `extra` pelo caminho de producao);
+   `--dv-mode candidate` liga o termo so no candidato; `--dv-synthetic
+   truth|rival` e sensitivity analysis (nao verdade real) — o gate que
+   interessa e mensuravel hoje: GOOD 110/110 com extra adversarial no
+   rival, e `dv_weak_to_strong_bad` = 0 nos conjuntos rotulados.
+5. **Flip**: 1 commit isolado — default `cross_declared_vote="on"` +
+   `declared_vote` fitted em cross_params (`eval_declared --write-params`,
+   pisos n>=500 / NA<30% / m>=2u) + BUMP ENGINE_VERSION. Reversao: env off
+   (sem deploy) → deactivate do template → git revert.
+6. **Cada campo votante NOVO repete o mini-soak** — o ACCEPT de um campo
+   nao transfere para outro (m/u proprios, coluna propria).

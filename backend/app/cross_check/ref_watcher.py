@@ -90,6 +90,9 @@ def _empty_refs() -> dict[str, Any]:
         # Cliente aliases are shared with the snap layer so cross-check uses
         # the same canonical customer shortcuts during reprocessing.
         "cliente_aliases": {},
+        # Cross declarado (fase A) — headers do plano (lower-case) para o
+        # wizard listar as colunas declaráveis.
+        "plan_headers": [],
         "loaded_at": None,
         "sap_path": "",
         "sap_sha256": "",
@@ -427,6 +430,15 @@ def _mine_from_excel(
 
     # ---- plan_colunas: cliente, ov, of, designacao, quanttrp, bf, esp, lbase, ltopo, ltotal, comp, dbase, dtopo, ...
     of_to_entries: dict[str, list[dict]] = {}
+    # Cross declarado (fase A) — colunas extra a minerar, declaradas pelos
+    # templates ATIVOS (registry runtime). Import lazy: o watcher corre
+    # também em scripts standalone (backtest) sem registry da BD — aí o set
+    # fica vazio e o mining é byte-idêntico ao histórico.
+    try:
+        from app.templates_registry import runtime_declared_columns
+        declared_cols = runtime_declared_columns()
+    except Exception:
+        declared_cols = frozenset()
     if plan_path.exists():
         refs["plan_size"] = plan_path.stat().st_size
         refs["plan_sha256"] = file_sha256(plan_path)
@@ -440,6 +452,7 @@ def _mine_from_excel(
                     if h:
                         hdrs[str(h).strip().lower()] = j
                 phase_cols = _phase_columns(hdrs)
+                refs["plan_headers"] = sorted(hdrs)
                 continue
             # R134 — não terminar no primeiro col-0 vazio: a coluna 0 é
             # `cliente`, que pode vir em branco a meio do plano (linhas de
@@ -493,6 +506,16 @@ def _mine_from_excel(
                 "fases": fases,
                 "fase_incompleta": _fase_incompleta(quanttrp, fases),
             }
+            # Cross declarado — colunas extra APENAS quando declaradas (a
+            # entry mantém-se byte-idêntica com a feature não usada; guardar
+            # o xlsx todo violaria a disciplina de memória R225). Tem de ser
+            # AQUI, antes de _derive_plan_indexes: os índices invertidos
+            # fazem cópia shallow da entry e propagam o `extra` ao caminho
+            # holístico de graça.
+            if declared_cols:
+                extra = {c: r[hdrs[c]] for c in declared_cols if c in hdrs}
+                if extra:
+                    entry["extra"] = extra
             of_to_entries.setdefault(normalize_of(of_int), []).append(entry)
         wb.close()
         refs["stats"]["n_ofs_file"] = len(of_to_entries)

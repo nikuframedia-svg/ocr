@@ -20,7 +20,7 @@ def log_path(tmp_path, monkeypatch):
     return tmp_path / "refs_uploads.json"
 
 
-def _write_plan(path, rows):
+def _write_plan(path, rows, extra_cols=()):
     wb = Workbook()
     ws = wb.active
     ws.title = "plan_colunas_cpis"
@@ -28,6 +28,7 @@ def _write_plan(path, rows):
         "cliente", "ov", "of", "designacao", "quanttrp",
         "bf", "c", "q", "s", "r", "a", "exp",
         "esp", "lbase", "ltopo", "comp",
+        *extra_cols,
     ])
     for row in rows:
         ws.append(row)
@@ -1290,6 +1291,99 @@ def test_update_script_protects_all_uploaded_refs():
     assert "kanban_refs/04_Documentacao/StockSAP.xlsx" in script
     assert "kanban_refs/04_Documentacao/maquinas.xlsx" in script
     assert "kanban_refs/04_Documentacao/ListaColaboradores.xlsx" in script
+
+
+# --- cross declarado (fase A) — plan_headers + entry["extra"] ---------------
+
+@pytest.fixture()
+def _clean_registry():
+    """Deixa o registry byte-idêntico aos builtins no fim."""
+    from app import templates_registry as reg
+    yield reg
+    reg.set_runtime_templates([])
+
+
+def _declared_spec(column="pbase"):
+    from app.web import template_store
+    return template_store.spec_from_dict({
+        "name": "u2_teste_declared",
+        "setor_aliases": ["TESTE DECLARED"],
+        "row_fields": ["of", "pbase"],
+        "declared_cross": {"pbase": {"ref": "plan", "column": column,
+                                     "cmp": "num", "tol": 2.0}},
+    }, unidade_id=2, db_id=9)
+
+
+_PLAN_ROW_PBASE = ["A", "2603977", "263348", "CAC4E10B", 1,
+                   0, 0, 0, 0, 0, 0, 0, 4, 659, 242, 11050, 250.0]
+
+
+def test_plan_headers_always_published(tmp_path):
+    doc_dir = tmp_path / "docs"
+    doc_dir.mkdir()
+    _write_plan(doc_dir / "plan_colunas_cpis.xlsx", [
+        ["A", "2603977", "263348", "CAC4E10B", 1, 0, 0, 0, 0, 0, 0, 0, 4, 659, 242, 11050],
+    ])
+    watcher = ref_watcher.RefWatcher(doc_dir=doc_dir, repo_root=tmp_path)
+    refs = watcher.force_reload()
+    assert "of" in refs["plan_headers"]
+    assert "comp" in refs["plan_headers"]
+    assert refs["plan_headers"] == sorted(refs["plan_headers"])
+
+
+def test_entry_extra_only_with_declared_templates(tmp_path, _clean_registry):
+    reg = _clean_registry
+    doc_dir = tmp_path / "docs"
+    doc_dir.mkdir()
+    plan = doc_dir / "plan_colunas_cpis.xlsx"
+    _write_plan(plan, [_PLAN_ROW_PBASE], extra_cols=("pbase",))
+
+    # SEM templates declarados: entry byte-idêntica (sem chave "extra")
+    watcher = ref_watcher.RefWatcher(doc_dir=doc_dir, repo_root=tmp_path)
+    refs = watcher.force_reload()
+    entry = refs["of_to_entries"]["263348"][0]
+    assert "extra" not in entry
+
+    # COM template declarado instalado: re-mine apanha a coluna
+    reg.set_runtime_templates([_declared_spec()])
+    refs = watcher.force_reload()
+    entry = refs["of_to_entries"]["263348"][0]
+    assert entry["extra"] == {"pbase": 250.0}
+    # só as colunas declaradas entram (disciplina de memória R225)
+    assert set(entry["extra"]) == {"pbase"}
+
+
+def test_entry_extra_propagates_to_inverted_indexes(tmp_path, _clean_registry):
+    """Os índices invertidos (plan_by_cliente/ov) fazem cópia shallow da
+    entry — o `extra` tem de viajar com eles (caminho holístico)."""
+    reg = _clean_registry
+    reg.set_runtime_templates([_declared_spec()])
+    doc_dir = tmp_path / "docs"
+    doc_dir.mkdir()
+    _write_plan(doc_dir / "plan_colunas_cpis.xlsx",
+                [_PLAN_ROW_PBASE], extra_cols=("pbase",))
+    watcher = ref_watcher.RefWatcher(doc_dir=doc_dir, repo_root=tmp_path)
+    refs = watcher.force_reload()
+
+    by_cliente = refs["plan_by_cliente"].get("A") or []
+    assert by_cliente and by_cliente[0].get("extra") == {"pbase": 250.0}
+    by_ov = refs["plan_by_ov"].get("2603977") or []
+    assert by_ov and by_ov[0].get("extra") == {"pbase": 250.0}
+
+
+def test_declared_column_absent_from_plan_no_extra(tmp_path, _clean_registry):
+    """Coluna declarada que não existe no plano → sem chave extra (NA em
+    runtime), nada parte."""
+    reg = _clean_registry
+    reg.set_runtime_templates([_declared_spec(column="inexistente")])
+    doc_dir = tmp_path / "docs"
+    doc_dir.mkdir()
+    _write_plan(doc_dir / "plan_colunas_cpis.xlsx", [
+        ["A", "2603977", "263348", "CAC4E10B", 1, 0, 0, 0, 0, 0, 0, 0, 4, 659, 242, 11050],
+    ])
+    watcher = ref_watcher.RefWatcher(doc_dir=doc_dir, repo_root=tmp_path)
+    refs = watcher.force_reload()
+    assert "extra" not in refs["of_to_entries"]["263348"][0]
 
 
 # --- R134 — robustez do upload do plano -----------------------------------

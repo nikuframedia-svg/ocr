@@ -359,6 +359,14 @@ _FS_VETO_VALID_OF = -3.3
 _FS_MARGIN_DECISIVE = 4.0
 # Rivais da guarda de ambiguidade R219 (por campo): entries a <= isto do topo.
 _FS_RIVAL_MARGIN_BITS = 1.0
+# Fase C-lite ("dv") — cap do voto de campos DECLARADOS: termo one-sided
+# somado ao ranking no espírito do extra_bias R242 (quebra empates, nunca
+# vence evidência real). INVARIANTE estrutural (fixado por teste):
+# _DECLARED_VOTE_CAP_BITS < _FS_MARGIN_DECISIVE ⇒ um flip causado pelo
+# declarado sai sempre weak_guess (vermelho, revisão humana).
+_DECLARED_VOTE_CAP_BITS = 2.0
+# m default conservador até a fase B medir (eval_declared --write-params).
+_DECLARED_VOTE_M_DEFAULT = 0.5
 # Dims que pontuam o winner via plano (larg_mm NÃO tem coluna no plano —
 # valida-se só por SAP-lote; incluí-la daria offset constante, nunca sinal).
 _FS_DIM_FIELDS = ("comp_mm", "lbase", "ltopo", "esp", "dbase", "dtopo")
@@ -872,6 +880,23 @@ def set_scoring_variant(name: str):
 def scoring_variant() -> str:
     return SCORING_VARIANT.get()
 
+
+def _variant_base(variant: str | None = None) -> str:
+    """Etiquetas compostas 'base+feat1+feat2' (ex. 'v30+dv') — devolve a
+    BASE. Os consumidores calibrados (posterior/Platt/decision_confidence)
+    comparam a base, para uma feature de sombra não ativar acidentalmente o
+    caminho next/v30cal (a classe de bug do fix R257)."""
+    v = variant if variant is not None else SCORING_VARIANT.get()
+    return v.split("+", 1)[0]
+
+
+def _variant_features(variant: str | None = None) -> frozenset[str]:
+    """Sufixos de feature da etiqueta composta (ex. 'v30+dv' → {'dv'})."""
+    v = variant if variant is not None else SCORING_VARIANT.get()
+    parts = v.split("+")[1:]
+    return frozenset(p for p in parts if p)
+
+
 _FERRAMENTA_REF_LABEL = f"{'/'.join(sorted(ALLOWED_FERRAMENTA_TEXT))} ou número"
 _PRI_RE = re.compile(r"^(?:[A-Z]?\d{1,3}|P\.?\d|REP\.?\s?C?\d+)$")
 
@@ -927,6 +952,18 @@ def _num(v: Any) -> float | None:
         return float(str(v).replace(",", ".").strip())
     except (ValueError, TypeError):
         return None
+
+
+def _declared_raw_str(raw: Any) -> str:
+    """Valor cru de uma coluna declarada do plano → string estável.
+
+    Helper ÚNICO usado no índice (extra_freq) E na comparação por entry —
+    o evento de concordância tem de ser o mesmo evento contado no u.
+    Normaliza o artefacto openpyxl 250.0 → "250" (o mesmo fix do braço
+    informativo _apply_declared_to_field)."""
+    if isinstance(raw, float) and raw.is_integer():
+        raw = int(raw)
+    return str(raw).strip() if raw is not None else ""
 
 
 def _num_variants(field: str, value: Any) -> list[float]:
@@ -1495,11 +1532,14 @@ def _fs_value_weight(field: str, entry: dict, idx: dict) -> float:
 
 
 def _fs_row_context(row: dict, idx: dict, score_fields=None,
-                    extra_bias: dict | None = None) -> dict:
+                    extra_bias: dict | None = None,
+                    declared_vote: dict | None = None) -> dict:
     """R236 — contexto por-linha do scoring FS (calculado 1x por linha):
     valores de dims presentes, conjuntos de entry-ids dentro da tolerância
     (janelas ±tol via bisect), validade da OF escrita, e memo do peso
-    conjunto por subconjunto de dims concordantes."""
+    conjunto por subconjunto de dims concordantes. `declared_vote` (fase
+    C-lite "dv") arma os votos de campos declarados: w pré-computado por
+    valor escrito, u medido do plano (extra_freq/extra_sorted)."""
     allowed = set(score_fields) if score_fields is not None else None
     dims: dict[str, float] = {}
     sets: dict[str, frozenset[int]] = {}
@@ -1549,7 +1589,10 @@ def _fs_row_context(row: dict, idx: dict, score_fields=None,
     # u conjunto por interseção. None = campo vazio/ilegível ou valor fora
     # dos índices (fica no caminho por-campo antigo). A variante é resolvida
     # 1× por linha (ContextVar.get() em cada entry custaria ~7 ms/folha).
-    variant = scoring_variant()
+    # Guarda-se a BASE (etiqueta composta 'v30+dv' → 'v30'): os consumidores
+    # do ctx comparam semântica de base — uma feature de sombra nunca pode
+    # ativar o caminho next/v30cal por engano (classe de bug do fix R257).
+    variant = _variant_base()
     id_sets: dict[str, frozenset[int] | None] = {}
     id_keys: dict[str, tuple[str, ...]] = {}
     if variant != "v30":
@@ -1579,6 +1622,41 @@ def _fs_row_context(row: dict, idx: dict, score_fields=None,
                     members |= s
                     found = True
             id_sets[field] = frozenset(members) if found else None
+
+    # Fase C-lite ("dv") — votos declarados armados 1× por linha: o w é
+    # constante por linha (depende do valor ESCRITO, não da entry) —
+    # w = clamp(log2(m/u), 0, cap), u medido do plano (valores comuns ⇒ w≈0,
+    # auto-protetor). Só campos vote=true com valor OCR legível.
+    dv_ctx: dict | None = None
+    if declared_vote:
+        n_corpus = max(int(idx.get("fs_n") or 0), _FS_U_MIN_CORPUS)
+        votes: list[tuple] = []
+        for (campo, col, cmp_, tol, m) in declared_vote["specs"]:
+            raw_dv = str(row.get(campo) or "").strip()
+            if not raw_dv or _is_missing_ocr(raw_dv):
+                continue
+            if cmp_ == "num":
+                v_dv = _num(raw_dv)
+                if v_dv is None:
+                    continue
+                vals_dv = (idx.get("extra_sorted") or {}).get(col)
+                if not vals_dv:
+                    continue
+                cnt = (bisect_right(vals_dv, v_dv + tol)
+                       - bisect_left(vals_dv, v_dv - tol))
+                target: object = v_dv
+            else:
+                target = _norm_ascii_upper(raw_dv)
+                freq_dv = (idx.get("extra_freq") or {}).get(col)
+                if not target or not freq_dv:
+                    continue
+                cnt = freq_dv.get(target, 0)
+            u = max(cnt, 1) / n_corpus
+            w = min(declared_vote["cap"], max(0.0, math.log2(m / u)))
+            if w > 0.0:
+                votes.append((campo, col, cmp_, tol, target, w))
+        if votes:
+            dv_ctx = {"votes": tuple(votes), "cap": declared_vote["cap"]}
     return {
         "dims": dims,
         "sets": sets,
@@ -1596,6 +1674,8 @@ def _fs_row_context(row: dict, idx: dict, score_fields=None,
         # folha (D2: {"coh_of": {of_key: +bits}, "coh_cliente": {compact:
         # +bits}}). None/{} = sem efeito (testes, arranque sem DB).
         "extra_bias": extra_bias or None,
+        # dv — votos declarados armados (None = inativo/sem votos legíveis)
+        "declared": dv_ctx,
         # Denominador do peso conjunto com o prior de corpus (ver
         # _FS_U_MIN_CORPUS): inerte no plano real, evita margens colapsadas
         # em planos minúsculos.
@@ -1860,6 +1940,24 @@ def _entry_bits_score(
             cli_c = _cliente_compact(entry.get("cliente"))
             if cli_c:
                 bits += coh_cli.get(cli_c, 0.0)
+
+    # Fase C-lite ("dv") — voto de campos DECLARADOS: bónus one-sided capado
+    # (<=2 bits, espírito extra_bias) quando o valor escrito bate na coluna
+    # declarada DESTA entry. Só ranking: a inflação fica em ctx["dv_infl"]
+    # e é subtraída no posterior (padrão id_infl R250) — a calibração
+    # T/b_H0/Platt, fitted sem o termo, continua válida.
+    dv = ctx.get("declared")
+    if dv:
+        dv_bonus, _ = _declared_entry_votes(entry, dv)
+        if dv_bonus > 0.0:
+            bits += dv_bonus
+            dv_eid = (idx.get("fs_id_by_key") or {}).get(_entry_key(entry))
+            if dv_eid is not None:
+                d = ctx.setdefault("dv_infl", {})
+                # max: irmãs com a mesma _entry_key partilham eid — subtrair
+                # o maior bónus é a direção conservadora (posterior nunca
+                # fica inflacionado), a mesma característica do id_infl.
+                d[dv_eid] = max(d.get(dv_eid, 0.0), dv_bonus)
     return bits
 
 
@@ -1947,6 +2045,14 @@ def _get_indices(refs: dict) -> dict:
     # R251 — token-código → nº de entries que o contêm.
     fs_token_counts: dict[str, int] = {}
     fs_n = 0
+    # Fase C-lite ("dv") — frequências das colunas DECLARADAS (entry["extra"],
+    # populadas pelo ref_watcher só para colunas declaradas por templates
+    # ativos). É o u medido do próprio plano: texto por valor normalizado,
+    # número por lista ordenada (janelas ±tol via bisect, molde das dims).
+    # Indexar tudo o que está em `extra` (agnóstico ao vote) evita reload ao
+    # ligar/desligar o voto; custo ~1 dict + 1 lista por coluna (R225 ok).
+    extra_freq: dict[str, dict[str, int]] = {}
+    extra_num: dict[str, list[float]] = {}
 
     for of_key, entries in of_to_entries.items():
         for e in entries:
@@ -2003,9 +2109,23 @@ def _get_indices(refs: dict) -> dict:
                 v = _num(e.get(_PLAN_ATTR_BY_FIELD[field]))
                 if v is not None:
                     fs_dim_values[field].append((v, eid))
+            # dv — frequências das colunas declaradas (u do plano)
+            for col, raw in (e.get("extra") or {}).items():
+                s = _declared_raw_str(raw)
+                if not s:
+                    continue
+                t = _norm_ascii_upper(s)
+                if t:
+                    cf = extra_freq.setdefault(col, {})
+                    cf[t] = cf.get(t, 0) + 1
+                nv = _num(s)
+                if nv is not None:
+                    extra_num.setdefault(col, []).append(nv)
 
     for field in _FS_DIM_FIELDS:
         fs_dim_values[field].sort()
+    for _col in extra_num:
+        extra_num[_col].sort()
     fs_dim_sorted = {
         f: ([v for v, _ in pairs], [i for _, i in pairs])
         for f, pairs in fs_dim_values.items()
@@ -2048,6 +2168,9 @@ def _get_indices(refs: dict) -> dict:
         "fs_token_buckets": fs_token_buckets,
         "fs_uhat": {},
         "fs_id_uhat": {},
+        # dv — u das colunas declaradas, medido do próprio plano
+        "extra_freq": extra_freq,
+        "extra_sorted": extra_num,
     }
     if loaded_at:
         _INDEX_CACHE[key] = indices
@@ -2350,6 +2473,7 @@ def _best_scored_entry(
     trace: dict | None = None,
     idx: dict | None = None,
     extra_bias: dict | None = None,
+    declared_vote: dict | None = None,
 ) -> dict | None:
     """Escolhe a melhor entry do plan por EVIDÊNCIA EM BITS (R236 —
     Fellegi-Sunter com parâmetros medidos; ver `_entry_bits_score`).
@@ -2375,7 +2499,8 @@ def _best_scored_entry(
     # os do vencedor no fim. Poupa ~1,7M dicts/folha no caso de produção.
     _want_reasons = trace is not None
     idx = idx or _get_indices(refs)
-    fs_ctx = _fs_row_context(row, idx, score_fields, extra_bias=extra_bias)
+    fs_ctx = _fs_row_context(row, idx, score_fields, extra_bias=extra_bias,
+                             declared_vote=declared_vote)
     eligible: list[tuple] = []
     for order, (k, e) in enumerate(entries_by_key.items()):
         if "_of" not in e:
@@ -2497,6 +2622,26 @@ def _best_scored_entry(
     if rivals:
         winner["_rivals"] = rivals
 
+    # dv — telemetria autoritativa do voto declarado no winner (persiste no
+    # JSON do cross via row_out e fica auditável no trace do harness).
+    dv_ctx = fs_ctx.get("declared")
+    if dv_ctx:
+        dv_bonus, dv_detail = _declared_entry_votes(
+            winner, dv_ctx, with_detail=True)
+        winner["_declared_vote"] = dv_detail
+        winner["_declared_vote_bits"] = round(dv_bonus, 2)
+        # reasons dos votos concordantes: APPEND pós-slice do top-6 — a
+        # unidade é BITS (≠ points holísticos ≤~0.5); entrar na ordenação
+        # evictaria reasons canónicos por |points|.
+        for d in dv_detail or ():
+            if d["agree"]:
+                winner["_score_reasons"].append({
+                    "field": f"declared:{d['field']}",
+                    "sim": 1.0,
+                    "weight": d["w_bits"],
+                    "points": d["w_bits"],
+                })
+
     # R252 — POSTERIOR softmax + H0 explícito (TELEMETRIA até ao flip R252b;
     # não decide nada). P(e_i|obs) ∝ 2^{b_i/T} sobre TODO o pool avaliado +
     # H0 com odds π_H0(idade do plano — quant7 operacionalizado) + cauda do
@@ -2518,14 +2663,22 @@ def _best_scored_entry(
     odds_h0 = pi / max(1.0 - pi, 1e-9)
     # R250 — o posterior usa os bits CORRIGIDOS da dupla contagem da
     # identidade (bits − inflação por entry; o ranking fica nas somas v30).
+    # dv — o bónus do voto declarado também é subtraído aqui (mesmo padrão):
+    # T/b_H0/Platt foram fitted sem o termo; o posterior fica na evidência
+    # canónica pura. Num flip declarado, o _p_of honesto (menor) alinha com
+    # o weak_guess do flip.
     id_infl: dict[int, float] = fs_ctx.get("id_infl") or {}
+    dv_infl: dict[int, float] = fs_ctx.get("dv_infl") or {}
     fs_ids = idx.get("fs_id_by_key") or {}
-    if id_infl:
-        corr_list = [
-            float(cand[15]) - id_infl.get(
-                fs_ids.get(_entry_key(cand[7] or {})), 0.0)
-            for cand in eligible
-        ]
+    if id_infl or dv_infl:
+        corr_list = []
+        for cand in eligible:
+            cand_eid = fs_ids.get(_entry_key(cand[7] or {}))
+            corr_list.append(
+                float(cand[15])
+                - id_infl.get(cand_eid, 0.0)
+                - dv_infl.get(cand_eid, 0.0)
+            )
         b_max = max(corr_list)
     else:
         corr_list = None
@@ -3259,6 +3412,7 @@ def _find_winner_entry(
     force_top1: bool = True,
     trace: dict | None = None,
     extra_bias: dict | None = None,
+    declared_vote: dict | None = None,
 ) -> dict | None:
     """R223 — votação holística sobre um pool LARGO de candidatos (todos os
     top-K de cada campo). Full-scan do plano só como fallback se o pool não
@@ -3266,7 +3420,8 @@ def _find_winner_entry(
     pool = _candidate_entries_by_key(candidates_by_field, score_fields)
     winner = (
         _best_scored_entry(pool, row, refs, current_phase, score_fields,
-                           trace=trace, idx=idx, extra_bias=extra_bias)
+                           trace=trace, idx=idx, extra_bias=extra_bias,
+                           declared_vote=declared_vote)
         if pool else None
     )
 
@@ -3280,6 +3435,7 @@ def _find_winner_entry(
             winner = _best_scored_entry(
                 entries_by_key, row, refs, current_phase, score_fields,
                 trace=trace, idx=idx, extra_bias=extra_bias,
+                declared_vote=declared_vote,
             )
             if trace is not None:
                 trace["fallback_full_scan"] = True
@@ -3302,7 +3458,7 @@ def _find_winner_entry(
         # posterior softmax (mesma semântica OF-level do R243, agora com
         # irmãos/empates/H0 no denominador); a logística de 1 rival fica
         # como telemetria de transição.
-        if scoring_variant() != "v30" and winner.get("_p_of") is not None:
+        if _variant_base() != "v30" and winner.get("_p_of") is not None:
             winner["_p_top_logistic"] = winner["_p_top"]
             # R253.5 — leitura calibrada (Platt); a marginal crua fica em
             # _p_of para a abstenção e telemetria.
@@ -3337,6 +3493,7 @@ def select_winner(
     template_name: str | None = None,
     current_phase: str | None = None,
     extra_bias: dict | None = None,
+    declared_vote: dict | None = None,
 ) -> dict | None:
     """R236 — caminho público de seleção de winner para UMA linha (o mesmo
     que `_score_row` usa: alinhamento por hipóteses → candidatos → winner).
@@ -3349,7 +3506,7 @@ def select_winner(
     )
     return _find_winner_entry(
         candidates_by_field, row2, refs, idx, current_phase, None,
-        force_top1=True, extra_bias=extra_bias,
+        force_top1=True, extra_bias=extra_bias, declared_vote=declared_vote,
     )
 
 
@@ -3469,7 +3626,7 @@ def _mark_winner_cell(cell: dict, winner: dict | None) -> dict:
     # modelo incerto — substitui o p_top OF-level uniforme do R243.
     if winner.get("_p_top") is not None:
         conf = winner.get("_p_top")
-        if scoring_variant() != "v30":
+        if _variant_base() != "v30":
             pf = winner.get("_p_field") or {}
             af = winner.get("_active_field")
             if af in pf:
@@ -3592,6 +3749,142 @@ def _score_no_ref_row_cell(
         "syntax",
         match_kind="MATCH_REGRA",
     )
+
+
+def _apply_declared_to_field(
+    ocr_value: str,
+    winner: dict | None,
+    ref,
+    voted: bool = False,
+) -> dict:
+    """Cross DECLARADO (fase A) — informativo puro, pós-winner.
+
+    `ref` é um DeclaredRef (duck-typed: .column/.cmp/.tol) declarado no spec
+    do template; o valor de referência vem de winner["extra"][column],
+    minerado pelo ref_watcher. Contrato de segurança (fixado por teste):
+    - `value` é SEMPRE o OCR (ao contrário dos canónicos R134/R135, que põem
+      o valor do plano porque auto-aplicam); o plano vai só em `proposed`.
+    - source e ref_source = "declared_plan" — fora de concrete_sources E
+      concrete_ref_sources do _maybe_apply_snap ⇒ no-write por construção.
+    - Nunca emite "snapped" (a única porta de escrita incondicional).
+    """
+    src = "declared_plan"
+    ref_str = _declared_raw_str(
+        ((winner or {}).get("extra") or {}).get(ref.column))
+    if winner is None or not ref_str or not ocr_value:
+        return _make_cell(ocr_value, "NA", src, ref_source=src)
+    sim: float | None = None
+    if ref.cmp == "num":
+        got, want = _num(ocr_value), _num(ref_str)
+        if want is None:
+            # Declaração "num" numa coluna com texto — desalinhada (o
+            # registo já avisou); NA em vez de vermelho enganoso.
+            return _make_cell(ocr_value, "NA", src, ref_source=src)
+        if got is None:
+            return _make_cell(
+                ocr_value, "very_different", src,
+                proposed=ref_str, ref_source=src,
+            )
+        agree = abs(got - want) <= float(ref.tol or 0.0)
+    else:
+        a, b = _norm_ascii_upper(ocr_value), _norm_ascii_upper(ref_str)
+        sim = _str_sim(a, b) / 100.0
+        agree = a == b or sim >= _AGREE_THRESHOLD
+    cell = _make_cell(
+        ocr_value,
+        "confirmed" if agree else "very_different",
+        src,
+        proposed=ref_str,
+        ref_source=src,
+    )
+    if sim is not None:
+        cell["score"] = round(sim, 3)  # diagnóstico p/ eval_declared (fase B)
+    if voted:
+        # dv — este campo estava ARMADO no voto da escolha da linha (fase
+        # C-lite). A cor/contrato da célula não mudam; o marcador distingue
+        # o texto na fila de revisão e alimenta a auditoria/fase B.
+        cell["vote"] = True
+    return cell
+
+
+def _declared_vote_specs(declared, template_name=None) -> dict | None:
+    """Fase C-lite ("dv") — specs dos campos declarados VOTANTES, ou None.
+
+    Ativo sse houver campos vote=true no template E:
+      - CROSS_DECLARED_VOTE=on (produção), OU
+      - CROSS_DECLARED_VOTE=shadow E a variante do contexto tem a feature
+        "dv" (thread de sombra com CROSS_SHADOW_VARIANT=v30+dv) — soak.
+    m por campo vem do bloco declared_vote de cross_params COM fingerprint
+    (column/cmp/tol têm de bater com o DeclaredRef atual do spec — o admin
+    pode ter mudado a coluna depois do fit); senão m_default conservador.
+    O cap do ficheiro só pode APERTAR o cap de código, nunca alargar.
+    """
+    if not declared:
+        return None
+    voting = {f: r for f, r in declared.items() if getattr(r, "vote", False)}
+    if not voting:
+        return None
+    try:
+        from app.config import get_settings
+        mode = str(get_settings().cross_declared_vote or "off").strip().lower()
+    except Exception:
+        mode = "off"
+    if mode == "on":
+        pass
+    elif mode == "shadow" and "dv" in _variant_features():
+        pass
+    else:
+        return None
+    p = _load_cross_params().get("declared_vote") or {}
+    cap = min(_DECLARED_VOTE_CAP_BITS,
+              float(p.get("cap_bits") or _DECLARED_VOTE_CAP_BITS))
+    m_default = min(max(float(p.get("m_default")
+                              or _DECLARED_VOTE_M_DEFAULT), 0.05), 0.95)
+    fitted = (p.get("by_template") or {}).get(str(template_name or "")) or {}
+    specs = []
+    for field, r in voting.items():
+        m = m_default
+        e = fitted.get(field) or {}
+        if (e.get("m")
+                and str(e.get("column") or "") == r.column
+                and str(e.get("cmp") or "") == r.cmp
+                and (e.get("tol") or None) == (r.tol or None)):
+            m = min(max(float(e["m"]), 0.05), 0.95)
+        specs.append((field, r.column, r.cmp, float(r.tol or 0.0), m))
+    return {"specs": tuple(specs), "cap": cap}
+
+
+def _declared_entry_votes(
+    entry: dict,
+    dv: dict,
+    with_detail: bool = False,
+) -> tuple[float, list[dict] | None]:
+    """Bónus dv de UMA entry: (bónus capado, detalhe opcional p/ telemetria).
+
+    Comparação EXATA (text: _norm_ascii_upper igual; num: |Δ|<=tol) — o
+    mesmo evento contado no u do índice. One-sided: discordância/coluna
+    vazia = 0, nunca penaliza. Comparação direta ao `extra` da PRÓPRIA
+    entry (não por eid-sets — evita o aliasing do _entry_key entre irmãs).
+    """
+    bonus = 0.0
+    detail: list[dict] | None = [] if with_detail else None
+    ex = entry.get("extra") or {}
+    for (campo, col, cmp_, tol, target, w) in dv["votes"]:
+        s = _declared_raw_str(ex.get(col))
+        if s:
+            if cmp_ == "num":
+                ev = _num(s)
+                agree = ev is not None and abs(ev - target) <= tol
+            else:
+                agree = _norm_ascii_upper(s) == target
+        else:
+            agree = False
+        if agree:
+            bonus += w
+        if detail is not None:
+            detail.append({"field": campo, "column": col,
+                           "w_bits": round(w, 2), "agree": agree})
+    return min(bonus, dv["cap"]), detail
 
 
 def _finish_cell(
@@ -4126,7 +4419,7 @@ def _apply_winner_to_field(
         # JÁ desconta os irmãos (é a soma só das entries com este valor);
         # substitui a aproximação p_top × _sibling_p do R248.
         pf_modelo = (winner.get("_p_field") or {}).get("modelo")
-        if scoring_variant() != "v30" and pf_modelo is not None:
+        if _variant_base() != "v30" and pf_modelo is not None:
             # R253.5/.6 — leitura calibrada (Platt por campo → global).
             conf = round(float(_platt_calibrate(pf_modelo, "modelo")), 3)
         else:
@@ -4268,12 +4561,18 @@ def _score_row(
     force_top1: bool = True,
     trace_sink: list | None = None,
     extra_bias: dict | None = None,
+    declared: dict | None = None,
+    declared_vote: dict | None = None,
 ) -> tuple[dict, int, int, int, int, int]:
     """R123 / R125 — itera os `row_fields` do template (não os 10 fixos
     do bobine).
 
-    Cada campo cai num de três tratamentos:
+    Cada campo cai num de quatro tratamentos:
       - campo com referência no plan/SAP (_ROW_FIELDS) → winner/candidatos;
+      - campo custom DECLARADO (`declared`, do spec do template) → comparação
+        informativa contra winner["extra"] — pós-winner; com `declared_vote`
+        armado (fase C-lite) os campos vote=true somam um bónus capado ao
+        RANKING do winner (nunca ao realinhamento, nunca à célula);
       - campo sem referência (_NO_REF_FIELDS: pri, qtd, ...) → regra local;
       - campo próprio do template sem referência (cesta_n, m2, sobras, ...) →
         regra local, para não deixar valores preenchidos neutros.
@@ -4309,6 +4608,9 @@ def _score_row(
         force_top1=force_top1,
         trace=wt,
         extra_bias=extra_bias,
+        # dv — só o winner; o realinhamento acima NÃO vê o termo (custos de
+        # hipótese ~1.5 bits ≈ escala do cap ⇒ alinhamento byte-idêntico).
+        declared_vote=declared_vote,
     )
 
     obra_concluida = _all_eligible_phase_full(
@@ -4317,6 +4619,12 @@ def _score_row(
 
     fields_out: dict[str, dict] = {}
     snapped = confirmed = na = very_diff = 0
+    # dv — campos que estavam armados para votar nesta linha (marcador da
+    # célula; a cor/contrato não mudam).
+    dv_fields = (
+        frozenset(s[0] for s in declared_vote["specs"])
+        if declared_vote else frozenset()
+    )
 
     def _tally(st: str) -> None:
         nonlocal snapped, confirmed, na, very_diff
@@ -4340,6 +4648,14 @@ def _score_row(
                 _has_field_reference_pool(field, refs, idx, row),
                 template_name=template_name,
                 idx=idx,
+            )
+        elif declared and field in declared:
+            # Cross declarado (fase A) — pós-winner, informativo puro.
+            result = _apply_declared_to_field(
+                ocr_value, winner, declared[field],
+                voted=bool(
+                    field in dv_fields and ocr_value and winner is not None
+                ),
             )
         elif field in _NO_REF_FIELDS:
             result = _score_no_ref_row_cell(
@@ -4439,6 +4755,11 @@ def _score_row(
         ),
         "winner_score_reasons": (winner or {}).get("_score_reasons") if winner else None,
         "winner_mode": (winner or {}).get("_winner_mode") if winner else None,
+        # dv — voto declarado no winner (auditoria; persiste no JSON do cross)
+        "winner_declared_vote": (winner or {}).get("_declared_vote") if winner else None,
+        "winner_declared_vote_bits": (
+            (winner or {}).get("_declared_vote_bits") if winner else None
+        ),
         "identity_conflict": False,
         "obra_concluida": obra_concluida,
     }
@@ -4885,6 +5206,13 @@ def shadow_score(
     row_fields = template.row_fields
     cross_check_fields = template.cross_check_fields
     canonical_template_name = template.name
+    # Cross declarado (fase A) — getattr pelo mesmo motivo do
+    # has_production_rows abaixo (fakes de teste sem o atributo).
+    declared_cross = getattr(template, "declared_cross", None) or {}
+    # Fase C-lite ("dv") — voto declarado, armado 1×/folha: None a menos que
+    # haja campos vote=true E o gate env/variante permita (ver
+    # _declared_vote_specs). Passa aos DOIS passes de _score_row.
+    declared_vote = _declared_vote_specs(declared_cross, canonical_template_name)
     # R125 — fase em curso (bf/c/q/...) derivada do setor da máquina;
     # usada para desempatar o winner e detectar obra concluída.
     current_phase = _current_phase(sheet_data, refs)
@@ -4935,6 +5263,8 @@ def shadow_score(
             force_top1=getattr(template, "has_production_rows", True),
             trace_sink=trace_sink,
             extra_bias=prod_bias,
+            declared=declared_cross,
+            declared_vote=declared_vote,
         )
         out_rows.append(row_out)
         row_tallies.append((s, c, n, vd))
@@ -4981,6 +5311,8 @@ def shadow_score(
                 force_top1=getattr(template, "has_production_rows", True),
                 trace_sink=trace_sink,
                 extra_bias=bias2,
+                declared=declared_cross,
+                declared_vote=declared_vote,
             )
             out_rows[i] = row_out
             row_tallies[i] = (s, c, n, vd)
@@ -5122,7 +5454,7 @@ def _to_legacy_cell(v5_cell: dict, ref_value: str | None = None) -> dict:
     if v5_cell.get("match_kind"):
         out["match_kind"] = v5_cell.get("match_kind")
     for key in ("winner_mode", "score_reasons", "forced_from_status", "warning",
-                "empty_ok", "decision_confidence", "decision_reason"):
+                "empty_ok", "decision_confidence", "decision_reason", "vote"):
         if key in v5_cell:
             out[key] = v5_cell[key]
     # Ref para tooltip de referência: prioriza `proposed`,
@@ -5179,6 +5511,17 @@ def cross_check_sheet(
         has_ref = bool(legacy_cell.get("ref"))
         if ref_source == "ferramenta":
             reason = "Valor não permitido no vocabulário de ferramenta/CONI"
+        elif ref_source == "declared_plan":
+            # Cross declarado — ANTES do has_ref: as células declaradas têm
+            # `ref` preenchido e cairiam no texto genérico do motor. Com
+            # voto (dv), o vermelho significa "a linha ganhou APESAR deste
+            # campo discordar" (one-sided: discordar não veta) — o operador
+            # deve olhar com MAIS atenção, não menos.
+            if legacy_cell.get("vote"):
+                reason = ("Plano (cross declarado) difere do OCR — este "
+                          "campo contou para a escolha da linha")
+            else:
+                reason = "Plano (cross informativo) tem valor diferente do OCR"
         elif has_ref:
             reason = "Motor propõe valor muito diferente do OCR"
         elif ref_source == "syntax":
@@ -5244,7 +5587,7 @@ def cross_check_sheet(
                 summary["na"] += 1
             summary["total"] += 1
 
-        legacy_rows.append({
+        legacy_row = {
             "row_index": r.get("row_index", 0),
             "fields": legacy_fields,
             "summary": row_summary,
@@ -5254,10 +5597,20 @@ def cross_check_sheet(
             "winner_combined": r.get("winner_combined"),
             "winner_score_reasons": r.get("winner_score_reasons"),
             "winner_mode": r.get("winner_mode"),
+            # dv — a margem persiste no JSON: o invariante do cap do soak
+            # (flip de winner com margem prod > cap = bug) mede-se daqui.
+            "winner_margin_bits": r.get("winner_margin_bits"),
             "identity_conflict": r.get("identity_conflict", False),
             # R125 — bandeira propagada para UI / auto-overwrites
             "obra_concluida": r.get("obra_concluida", False),
-        })
+        }
+        # dv — auditoria do voto declarado (só quando existiu, para não
+        # poluir os JSONs de folhas sem campos votantes).
+        if r.get("winner_declared_vote") is not None:
+            legacy_row["winner_declared_vote"] = r.get("winner_declared_vote")
+            legacy_row["winner_declared_vote_bits"] = r.get(
+                "winner_declared_vote_bits")
+        legacy_rows.append(legacy_row)
 
     legacy_header = {k: _to_legacy_cell(v) for k, v in scoring.get("header", {}).items()}
     legacy_footer = {k: _to_legacy_cell(v) for k, v in scoring.get("footer", {}).items()}

@@ -44,6 +44,11 @@
               {% else %}
               <span class="pill neutral">{{ t.status }}</span>
               {% endif %}
+              {% if t.n_vote %}
+              <span class="pill {{ 'info' if declared_vote_env != 'off' else 'neutral' }}"
+                    title="{{ t.n_vote }} campo(s) declarado(s) com voto na escolha da linha{{ '' if declared_vote_env != 'off' else ' — inativo: CROSS_DECLARED_VOTE desligado' }}">
+                vota{{ '' if declared_vote_env != 'off' else ' (inativo)' }}</span>
+              {% endif %}
             </td>
             <td class="muted tiny">{{ (t.created_at | string)[:16] }}</td>
             <td style="text-align:right; white-space:nowrap;">
@@ -185,8 +190,11 @@
             </div>
             <table class="tbl">
               <thead><tr><th>Label no papel</th><th>Campo</th><th>Cross-check</th><th></th></tr></thead>
-              <tbody>
-                <template x-for="(f, i) in fields" :key="i">
+              {# Cross declarado — um <tbody> por campo (raiz única exigida
+                 pelo x-for) para a sub-linha da declaração viver junto do
+                 campo. Multi-<tbody> é HTML válido. #}
+              <template x-for="(f, i) in fields" :key="i">
+                <tbody>
                   <tr>
                     <td><input type="text" x-model="f.label" style="width:140px;"></td>
                     <td>
@@ -196,8 +204,12 @@
                             x-text="knownFields.includes(f.field) ? 'canónico' : 'custom'"></span>
                     </td>
                     <td style="text-align:center;">
+                      {# canónicos cruzáveis → cross normal; custom → cross
+                         declarado (informativo); canónicos não-cruzáveis
+                         (qtd, pri, coni…) continuam bloqueados. #}
                       <input type="checkbox" x-model="f.cross"
-                             :disabled="!crossableFields.includes(f.field)">
+                             :disabled="!(f.field || '').trim() || (knownFields.includes(f.field) && !crossableFields.includes(f.field))"
+                             @change="ensureDeclared(f)">
                     </td>
                     <td style="white-space:nowrap; text-align:right;">
                       <button class="btn" type="button" @click="moveField(i, -1)" :disabled="i === 0">↑</button>
@@ -205,14 +217,52 @@
                       <button class="btn" type="button" @click="fields.splice(i, 1)">✕</button>
                     </td>
                   </tr>
-                </template>
-              </tbody>
+                  <tr x-show="f.cross && isDeclared(f)" x-cloak>
+                    <td></td>
+                    <td colspan="3" class="tiny" style="padding-bottom:8px;">
+                      <span class="muted">cross informativo — coluna do plano:</span>
+                      <template x-if="planHeaders.length">
+                        <select x-model="f.declared.column"
+                                style="font-family:var(--font-mono); font-size:12px;">
+                          <option value="">—</option>
+                          <template x-for="h in planHeaders" :key="h">
+                            <option :value="h" x-text="h"></option>
+                          </template>
+                        </select>
+                      </template>
+                      <template x-if="!planHeaders.length">
+                        <input type="text" x-model="f.declared.column" placeholder="header do plano"
+                               style="width:130px; font-family:var(--font-mono); font-size:12px;">
+                      </template>
+                      <select x-model="f.declared.cmp">
+                        <option value="text">texto</option>
+                        <option value="num">número</option>
+                      </select>
+                      <template x-if="f.declared.cmp === 'num'">
+                        <span>± <input type="number" step="any" min="0" x-model="f.declared.tol"
+                                       placeholder="tol" style="width:70px;"></span>
+                      </template>
+                      {# dv — voto na escolha da linha: dupla porta (este
+                         toggle do admin × env CROSS_DECLARED_VOTE do dono). #}
+                      <label style="margin-left:10px; white-space:nowrap;"
+                             title="Quando a coluna do plano bate com o valor lido, essa concordância ajuda a escolher a linha do plano (até 2 bits — desempata, nunca vence a evidência dos campos canónicos). Nunca substitui o valor do OCR: a célula continua só sinalização.">
+                        <input type="checkbox" x-model="f.declared.vote">
+                        contar para a escolha da linha <span class="muted">(beta)</span>
+                      </label>
+                      <span x-show="f.declared.vote && declaredVoteEnv === 'off'" x-cloak
+                            style="color:var(--warn);">
+                        ⚠ gravado mas inativo — CROSS_DECLARED_VOTE desligado no servidor
+                      </span>
+                    </td>
+                  </tr>
+                </tbody>
+              </template>
             </table>
             <datalist id="known-fields">
               {% for f in known_row_fields %}<option value="{{ f }}">{% endfor %}
             </datalist>
             <button class="btn" type="button" style="margin-top:6px;"
-                    @click="fields.push({label: '', field: '', cross: false})">+ Adicionar campo</button>
+                    @click="fields.push({label: '', field: '', cross: false, declared: newDeclared()})">+ Adicionar campo</button>
           </div>
 
           <div style="flex:1; min-width:260px;">
@@ -317,7 +367,7 @@ function kanbanWizard() {
     templateId: null,
     templateName: '',
     queuePosition: '…',
-    fields: [],            // [{label, field, cross}]
+    fields: [],            // [{label, field, cross, declared:{column,cmp,tol}}]
     aliasesText: '',
     warnings: [],
     conflicts: [],
@@ -333,7 +383,27 @@ function kanbanWizard() {
     _lastPos: undefined,
     knownFields: {{ known_row_fields | tojson }},
     crossableFields: {{ crossable_fields | tojson }},
+    planHeaders: {{ (plan_headers or []) | tojson }},
+    declaredVoteEnv: {{ (declared_vote_env or 'off') | tojson }},
 
+    newDeclared() {
+      return {column: '', cmp: 'text', tol: null, vote: false};
+    },
+    isDeclared(f) {
+      // Campo custom → o cross é declarado (informativo); canónico
+      // cruzável → cross normal, sem sub-linha.
+      const name = (f.field || '').trim();
+      return !!name && !this.crossableFields.includes(name);
+    },
+    ensureDeclared(f) {
+      // Pré-seleção da coluna pelo nome do campo ao marcar a checkbox
+      // (headers do plano podem ter espaços onde o campo tem "_").
+      if (!f.cross || !this.isDeclared(f) || f.declared.column) return;
+      const name = (f.field || '').trim().toLowerCase();
+      const cand = [name, name.replace(/_/g, ' ')]
+        .find(c => this.planHeaders.includes(c));
+      if (cand) f.declared.column = cand;
+    },
     aliasList() {
       return this.aliasesText.split('\n').map(s => s.trim()).filter(Boolean);
     },
@@ -425,12 +495,22 @@ function kanbanWizard() {
       this.warnings = (disc && disc.warnings) || [];
       const labels = spec.field_labels || {};
       const cross = spec.cross_check_fields || [];
+      const declaredMap = spec.declared_cross || {};
       this.fields = (spec.row_fields || []).map(f => ({
         label: labels[f] || f.toUpperCase(),
         field: f,
-        cross: cross.includes(f),
+        // reidratar TAMBÉM o declarado — sem isto, regravar o spec
+        // perderia as declarações (data loss silencioso).
+        cross: cross.includes(f) || !!declaredMap[f],
+        declared: {
+          column: (declaredMap[f] || {}).column || '',
+          cmp: (declaredMap[f] || {}).cmp || 'text',
+          tol: (declaredMap[f] || {}).tol ?? null,
+          // dv — sem esta reidratação, regravar o spec apagaria o voto
+          vote: (declaredMap[f] || {}).vote === true,
+        },
       }));
-      if (!this.fields.length) this.fields = [{label: '', field: '', cross: false}];
+      if (!this.fields.length) this.fields = [{label: '', field: '', cross: false, declared: this.newDeclared()}];
       this.aliasesText = (spec.setor_aliases || []).join('\n');
     },
     async resume(id) {
@@ -454,15 +534,34 @@ function kanbanWizard() {
       const rowFields = this.fields.map(f => (f.field || '').trim()).filter(Boolean);
       const labels = {};
       this.fields.forEach(f => { if (f.field && f.label) labels[f.field.trim()] = f.label.trim(); });
-      return {
+      // Split obrigatório: canónicos cruzáveis → cross_check_fields;
+      // custom com coluna declarada → declared_cross (informativo).
+      // Misturá-los daria 422 na validação do servidor.
+      const declared = {};
+      this.fields.forEach(f => {
+        const name = (f.field || '').trim();
+        if (!f.cross || !name || this.crossableFields.includes(name)) return;
+        const column = ((f.declared || {}).column || '').trim().toLowerCase();
+        if (!column) return;
+        const cfg = {ref: 'plan', column: column, cmp: f.declared.cmp === 'num' ? 'num' : 'text'};
+        const tol = parseFloat(f.declared.tol);
+        if (cfg.cmp === 'num' && tol > 0) cfg.tol = tol;
+        if (f.declared.vote === true) cfg.vote = true;  // dv — omitido quando falso
+        declared[name] = cfg;
+      });
+      const spec = {
         name: this.templateName,
         tpl_code: 'TPL103',
         phase: 'Produção',
         setor_aliases: this.aliasList(),
         row_fields: rowFields,
-        cross_check_fields: this.fields.filter(f => f.cross && f.field).map(f => f.field.trim()),
+        cross_check_fields: this.fields
+          .filter(f => f.cross && f.field && this.crossableFields.includes(f.field.trim()))
+          .map(f => f.field.trim()),
         field_labels: labels,
       };
+      if (Object.keys(declared).length) spec.declared_cross = declared;
+      return spec;
     },
     async saveSpec() {
       this.busy = true; this.specErrors = []; this.conflicts = []; this.flashErr = '';

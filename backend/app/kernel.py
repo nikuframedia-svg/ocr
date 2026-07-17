@@ -68,6 +68,9 @@ EVENT_TYPES = frozenset({
     "shadow_run_completed",
     "sheet_profiled",  # R224 — timing por etapa + resumo do profiling por folha
     "kpi_params_changed",  # Task C E3 — fórmulas de KPI editadas em /admin/kpis
+    # Fase C-lite ("dv") — trilho EN1090 do voto declarado: mudanças ao
+    # conjunto {campo: vote} de um template (spec save/activate).
+    "declared_vote_changed",
 })
 
 
@@ -167,6 +170,12 @@ def _apply_event_to_state(state: dict, event: dict) -> dict:
         new["last_qwen_session_at"] = event.get("at")
     elif etype == "shadow_run_completed":
         counts["shadow_runs"] += 1
+    elif etype == "declared_vote_changed":
+        # dv — só o modo global do env fica no state (para detetar a
+        # transição no arranque); mudanças por-template ficam no jsonl.
+        payload = event.get("payload") or {}
+        if payload.get("scope") == "env":
+            new["declared_vote_mode"] = payload.get("mode")
 
     new["version"] = (state.get("version") or 0) + 1
     new["last_event_at"] = event.get("at")

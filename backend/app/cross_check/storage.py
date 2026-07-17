@@ -107,6 +107,15 @@ def store_cross_check(
     to_analisar = cross_check_result.get("to_analisar", [])
 
     engine_version = cross_check_result.get("engine_version") or _current_engine_version()
+    # dv — estado do motor por folha (auditoria EN1090): o env pode ligar/
+    # desligar o voto declarado SEM mudar engine_version; cada resultado
+    # gravado carrega o modo que o produziu. Leitura tolerante a jusante
+    # (chave ausente em JSONs antigos = off histórico).
+    try:
+        from app.config import get_settings
+        declared_vote_mode = str(get_settings().cross_declared_vote or "off")
+    except Exception:
+        declared_vote_mode = "off"
     payload = {
         "sheet_id": sheet_id,
         "image_path": image_path,
@@ -118,6 +127,7 @@ def store_cross_check(
         "refs_snapshot": cross_check_result.get("refs_snapshot") or {},
         # R123 — versão do motor; o viewer regenera JSONs de versões antigas.
         "engine_version": engine_version,
+        "declared_vote_mode": declared_vote_mode,
         "summary": summary,
         "rows": cross_check_result.get("rows", []),
         # R123 (B9) — header/footer validados passam a ser persistidos

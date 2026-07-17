@@ -55,6 +55,22 @@ from difflib import SequenceMatcher
 
 
 @dataclass(frozen=True)
+class DeclaredRef:
+    """Cross DECLARADO (fase A) — referência informativa de um campo custom
+    contra uma coluna do plano. Nunca vota no winner nem escreve por cima do
+    OCR (source/ref_source "declared_plan" fica fora das portas de escrita do
+    _maybe_apply_snap). Ver docs/PROPOSTA_CROSS_DECLARADO.md."""
+
+    column: str                # header do plano, lower-case (como hdrs do miner)
+    cmp: str = "text"          # "text" | "num"
+    tol: float | None = None   # só com cmp="num"; None+num = igualdade exata
+    # Fase C-lite ("dv") — o campo conta para a escolha da linha do plano:
+    # termo one-sided capado (<=2 bits) no scorer do winner. Só tem efeito
+    # com CROSS_DECLARED_VOTE != off (dupla porta admin × dono).
+    vote: bool = False
+
+
+@dataclass(frozen=True)
 class TemplateSpec:
     """Schema for one kanban template.
 
@@ -125,6 +141,11 @@ class TemplateSpec:
     # prompt_builder.py). Acabamento TPL086 usa para mostrar
     # "REFERÊNCIA / PEÇA" sobre o campo interno `modelo`.
     field_labels: dict[str, str] = dc_field(default_factory=dict)
+
+    # Cross declarado (fase A) — campos custom cruzados contra colunas do
+    # plano em modo INFORMATIVO. Chave = nome do campo em row_fields.
+    # Sempre vazio nos builtins; só templates de wizard declaram.
+    declared_cross: dict[str, DeclaredRef] = dc_field(default_factory=dict)
 
     # Task C E4 — templates registados em runtime (/admin, wizard de
     # kanbans). Builtins ficam com os defaults: source="builtin",
@@ -628,6 +649,18 @@ def set_runtime_templates(specs) -> list[str]:
     TEMPLATES.update(runtime)
     _rebuild_alias_indexes()
     return skipped
+
+
+def runtime_declared_columns() -> frozenset[str]:
+    """Cross declarado — união das colunas do plano declaradas pelos
+    templates instalados (o registry só contém os ativos). O ref_watcher
+    usa isto para saber que colunas extra minerar do xlsx do plano."""
+    cols: set[str] = set()
+    for t in TEMPLATES.values():
+        for ref in (getattr(t, "declared_cross", None) or {}).values():
+            if ref.column:
+                cols.add(ref.column)
+    return frozenset(cols)
 
 
 def alias_conflicts(

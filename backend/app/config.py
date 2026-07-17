@@ -139,6 +139,23 @@ class Settings(BaseSettings):
         ),
     )
 
+    cross_declared_vote: str = Field(
+        default="off",
+        description=(
+            "Fase C-lite ('dv') — voto de campos DECLARADOS na escolha da "
+            "linha do plano: termo one-sided capado (<=2 bits, peso "
+            "log2(m/u) com u medido do próprio plano) somado ao scorer do "
+            "winner para campos com vote=true no spec. Estados: 'off' "
+            "(default) = termo inerte em todo o lado; 'shadow' = ativo "
+            "APENAS na thread de sombra quando a variante tem a feature "
+            "'+dv' (CROSS_SHADOW_VARIANT=v30+dv) — produção intocada, para "
+            "o soak; 'on' = ativo em produção. Valor desconhecido = off. "
+            "'on' requer OK do Luís + gates do protocolo (secção 'Voto "
+            "declarado' do CROSS_EVALUATION_PROTOCOL). Nunca escreve por "
+            "cima do OCR — o voto muda a escolha da linha, não a célula."
+        ),
+    )
+
     cross_shadow_variant: str = Field(
         default="current",
         description=(

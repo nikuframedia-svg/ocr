@@ -3618,6 +3618,439 @@ class TestTemplateCrossCheckContract:
         assert fields["cliente"]["status"] == "confirmed"
 
 
+class TestDeclaredCross:
+    """Cross declarado (fase A) — campos custom cruzados contra colunas
+    extra do plano (winner["extra"]), informativo puro. Contratos fixados:
+    value=OCR sempre; source=ref_source="declared_plan"; nunca "snapped";
+    ranking byte-idêntico com/sem declarado."""
+
+    @staticmethod
+    def _refs(extra):
+        refs = {**_REFS, "of_to_entries": {
+            of: [dict(e) for e in entries]
+            for of, entries in _REFS["of_to_entries"].items()}}
+        refs["of_to_entries"]["262107"][0]["extra"] = extra
+        return refs
+
+    @staticmethod
+    def _install_fake(monkeypatch, declared):
+        import app.templates_registry as registry
+
+        class _FakeTemplate:
+            name = "fake_template"
+            row_fields = ("cliente", "of", "pbase", "obs")
+            cross_check_fields = ("of",)
+            declared_cross = declared
+
+        monkeypatch.setattr(
+            registry, "get_template", lambda _name: _FakeTemplate())
+
+    @staticmethod
+    def _declared(**over):
+        from app.templates_registry import DeclaredRef
+        d = {"pbase": DeclaredRef(column="pbase", cmp="num", tol=2.0),
+             "obs": DeclaredRef(column="obs", cmp="text")}
+        d.update(over)
+        return d
+
+    def _score(self, monkeypatch, row, extra, declared=None):
+        self._install_fake(
+            monkeypatch, self._declared() if declared is None else declared)
+        sheet = {"template_name": "fake_template", "header": {},
+                 "footer": {}, "rows": [row]}
+        scoring, *_ = shadow_score(sheet, None, self._refs(extra))
+        return scoring["rows"][0]["fields"]
+
+    _ROW = {"cliente": "ELECNOR", "of": "262107"}
+    _EXTRA = {"pbase": 250.0, "obs": "REFORÇO X"}
+
+    def _assert_declared_contract(self, cell, ocr_value):
+        assert cell["source"] == "declared_plan"
+        assert cell["ref_source"] == "declared_plan"
+        assert cell["value"] == ocr_value      # NUNCA o valor do plano
+        assert cell["status"] != "snapped"     # nunca a porta de escrita
+
+    def test_num_within_tol_confirmed(self, monkeypatch):
+        fields = self._score(
+            monkeypatch, {**self._ROW, "pbase": "251"}, self._EXTRA)
+        cell = fields["pbase"]
+        assert cell["status"] == "confirmed"
+        assert cell["proposed"] == "250"       # 250.0 do openpyxl → "250"
+        self._assert_declared_contract(cell, "251")
+
+    def test_num_decimal_comma_confirmed(self, monkeypatch):
+        fields = self._score(
+            monkeypatch, {**self._ROW, "pbase": "250,0"}, self._EXTRA)
+        assert fields["pbase"]["status"] == "confirmed"
+
+    def test_num_outside_tol_very_different(self, monkeypatch):
+        fields = self._score(
+            monkeypatch, {**self._ROW, "pbase": "260"}, self._EXTRA)
+        cell = fields["pbase"]
+        assert cell["status"] == "very_different"
+        assert cell["proposed"] == "250"
+        self._assert_declared_contract(cell, "260")
+
+    def test_num_ocr_not_numeric_very_different(self, monkeypatch):
+        fields = self._score(
+            monkeypatch, {**self._ROW, "pbase": "ilegível"}, self._EXTRA)
+        cell = fields["pbase"]
+        assert cell["status"] == "very_different"
+        assert cell["proposed"] == "250"
+
+    def test_num_ref_not_numeric_is_na(self, monkeypatch):
+        # declaração "num" numa coluna com texto — desalinhada, NA
+        fields = self._score(
+            monkeypatch, {**self._ROW, "pbase": "250"},
+            {"pbase": "texto livre"})
+        cell = fields["pbase"]
+        assert cell["status"] == "NA"
+        self._assert_declared_contract(cell, "250")
+
+    def test_text_accent_insensitive_confirmed(self, monkeypatch):
+        fields = self._score(
+            monkeypatch, {**self._ROW, "obs": "reforco x"}, self._EXTRA)
+        cell = fields["obs"]
+        assert cell["status"] == "confirmed"
+        assert cell["proposed"] == "REFORÇO X"
+        self._assert_declared_contract(cell, "reforco x")
+
+    def test_text_garbled_above_threshold_confirmed(self, monkeypatch):
+        fields = self._score(
+            monkeypatch, {**self._ROW, "obs": "REFORQO X"}, self._EXTRA)
+        assert fields["obs"]["status"] == "confirmed"
+        assert fields["obs"]["score"] >= 0.55
+
+    def test_text_unrelated_very_different(self, monkeypatch):
+        fields = self._score(
+            monkeypatch, {**self._ROW, "obs": "AVEIRO"}, self._EXTRA)
+        cell = fields["obs"]
+        assert cell["status"] == "very_different"
+        assert cell["proposed"] == "REFORÇO X"
+
+    def test_no_winner_is_na(self, monkeypatch):
+        fields = self._score(
+            monkeypatch, {"cliente": "", "of": "", "pbase": "250"},
+            self._EXTRA)
+        cell = fields["pbase"]
+        assert cell["status"] == "NA"
+        assert cell["source"] == "declared_plan"
+
+    def test_column_missing_from_extra_is_na(self, monkeypatch):
+        fields = self._score(
+            monkeypatch, {**self._ROW, "pbase": "250"}, {"obs": "X"})
+        assert fields["pbase"]["status"] == "NA"
+
+    def test_empty_ocr_is_na(self, monkeypatch):
+        fields = self._score(
+            monkeypatch, {**self._ROW, "pbase": ""}, self._EXTRA)
+        assert fields["pbase"]["status"] == "NA"
+
+    def test_legacy_funnel_and_review_reason(self, monkeypatch):
+        self._install_fake(monkeypatch, self._declared())
+        sheet = {"template_name": "fake_template", "header": {},
+                 "footer": {},
+                 "rows": [{**self._ROW, "pbase": "260"}]}
+        result = cross_check_sheet(sheet, None, self._refs(self._EXTRA))
+        cell = result["rows"][0]["fields"]["pbase"]
+        assert cell["status"] == "NO_MATCH"
+        assert cell["engine_status"] == "very_different"
+        assert cell["ref"] == "250"
+        assert cell["source"] == "declared_plan"
+        assert cell["ref_source"] == "declared_plan"
+        assert cell["snapped"] is False
+        items = [i for i in result["to_analisar"] if i["field"] == "pbase"]
+        assert items and items[0]["reason"] == (
+            "Plano (cross informativo) tem valor diferente do OCR")
+
+    def test_ranking_byte_identical_with_and_without_declared(
+            self, monkeypatch):
+        """Invariante central: o declarado NÃO altera winner/candidatos —
+        todas as células não-declaradas e a metadata do winner são
+        byte-idênticas com e sem declared_cross no template."""
+        import json
+
+        sheet = {"template_name": "fake_template", "header": {},
+                 "footer": {},
+                 "rows": [{**self._ROW, "pbase": "260", "obs": "AVEIRO"}]}
+        refs = self._refs(self._EXTRA)
+
+        self._install_fake(monkeypatch, self._declared())
+        scoring_with, *_ = shadow_score(sheet, None, refs)
+        self._install_fake(monkeypatch, {})
+        scoring_without, *_ = shadow_score(sheet, None, refs)
+
+        row_with = scoring_with["rows"][0]
+        row_without = scoring_without["rows"][0]
+        # metadata do winner byte-idêntica (tudo menos as células)
+        meta_with = {k: v for k, v in row_with.items() if k != "fields"}
+        meta_without = {k: v for k, v in row_without.items() if k != "fields"}
+        assert json.dumps(meta_with, sort_keys=True, default=str) == \
+            json.dumps(meta_without, sort_keys=True, default=str)
+        # células não-declaradas byte-idênticas
+        for f in ("cliente", "of"):
+            assert json.dumps(row_with["fields"][f], sort_keys=True) == \
+                json.dumps(row_without["fields"][f], sort_keys=True)
+        # sem declarado, o campo custom cai na regra local (não declared)
+        assert row_without["fields"]["pbase"]["source"] != "declared_plan"
+        assert row_with["fields"]["pbase"]["source"] == "declared_plan"
+
+
+class TestDeclaredVote:
+    """Fase C-lite ("dv") — voto de campos declarados na escolha da linha.
+
+    Invariantes de "não piora" por construção: termo one-sided ∈ [0, cap];
+    cap < margem decisiva ⇒ flip nunca sai strong; posterior subtrai o
+    bónus (calibração intacta); realinhamento nunca vê o termo; inativo ⇒
+    byte-idêntico."""
+
+    @staticmethod
+    def _set_env(monkeypatch, mode):
+        import app.config as config
+
+        class _S:
+            cross_declared_vote = mode
+
+        monkeypatch.setattr(config, "get_settings", lambda: _S())
+
+    @staticmethod
+    def _install_fake(monkeypatch, declared):
+        import app.templates_registry as registry
+
+        class _FakeTemplate:
+            name = "fake_dv"
+            row_fields = ("cliente", "ov", "of", "destino_col", "pbase")
+            cross_check_fields = ("of", "ov", "cliente")
+            declared_cross = declared
+
+        monkeypatch.setattr(
+            registry, "get_template", lambda _name: _FakeTemplate())
+
+    @staticmethod
+    def _declared(vote=True):
+        from app.templates_registry import DeclaredRef
+        return {
+            "destino_col": DeclaredRef(column="destino", cmp="text",
+                                       vote=vote),
+            "pbase": DeclaredRef(column="pbase", cmp="num", tol=2.0,
+                                 vote=vote),
+        }
+
+    @staticmethod
+    def _refs():
+        """Duas OFs gémeas (evidência canónica simétrica) que só diferem
+        nas colunas declaradas — o caso de empate que o dv deve decidir."""
+        base = {"cliente": "ELECNOR", "designacao": "OMEGA 1200 H",
+                "comp": 1200, "lbase": 50, "ltopo": 30, "esp": 2.6,
+                "material": "S355"}
+        return {
+            "available": True,
+            "of_to_entries": {
+                "262107": [{**base, "ov": "2410001",
+                            "extra": {"destino": "GUILHOTINA 9M",
+                                      "pbase": 250.0}}],
+                "262108": [{**base, "ov": "2410002",
+                            "extra": {"destino": "LASER 5",
+                                      "pbase": 300.0}}],
+            },
+            "of_to_ovs": {"262107": frozenset({"2410001"}),
+                          "262108": frozenset({"2410002"})},
+            "lotes_sap_full": {},
+            "clientes_plan": frozenset({"ELECNOR"}),
+        }
+
+    def _score(self, monkeypatch, row, *, env="on", vote=True,
+               variant=None):
+        from app.pipeline.scoring_engine import (
+            SCORING_VARIANT, shadow_score,
+        )
+        self._set_env(monkeypatch, env)
+        self._install_fake(monkeypatch, self._declared(vote=vote))
+        sheet = {"template_name": "fake_dv", "header": {}, "footer": {},
+                 "rows": [row]}
+        token = SCORING_VARIANT.set(variant) if variant else None
+        try:
+            scoring, *_ = shadow_score(sheet, None, self._refs())
+        finally:
+            if token is not None:
+                SCORING_VARIANT.reset(token)
+        return scoring["rows"][0]
+
+    # --- invariante estrutural -------------------------------------------
+    def test_cap_below_decisive_margin(self):
+        from app.pipeline.scoring_engine import (
+            _DECLARED_VOTE_CAP_BITS, _FS_MARGIN_DECISIVE,
+        )
+        assert _DECLARED_VOTE_CAP_BITS < _FS_MARGIN_DECISIVE
+
+    # --- T1: inativo ⇒ byte-idêntico --------------------------------------
+    @pytest.mark.parametrize("env,vote,variant", [
+        ("on", False, None),        # sem vote no spec
+        ("off", True, None),        # env off
+        ("shadow", True, None),     # shadow sem feature +dv na variante
+    ])
+    def test_inactive_is_byte_identical(self, monkeypatch, env, vote,
+                                        variant):
+        import json as _json
+        row = {"cliente": "ELECNOR", "destino_col": "GUILHOTINA 9M"}
+        baseline = self._score(monkeypatch, row, env="off", vote=False)
+        candidate = self._score(monkeypatch, row, env=env, vote=vote,
+                                variant=variant)
+        assert _json.dumps(baseline, sort_keys=True, default=str) == \
+            _json.dumps(candidate, sort_keys=True, default=str)
+
+    # --- T2: sentinela da variante composta -------------------------------
+    def test_variant_suffix_neutral_without_votes(self, monkeypatch):
+        import json as _json
+        row = {"cliente": "ELECNOR", "of": "262107"}
+        plain = self._score(monkeypatch, row, env="off", vote=False,
+                            variant="v30")
+        suffixed = self._score(monkeypatch, row, env="off", vote=False,
+                               variant="v30+dv")
+        assert _json.dumps(plain, sort_keys=True, default=str) == \
+            _json.dumps(suffixed, sort_keys=True, default=str)
+
+    def test_variant_helpers(self):
+        from app.pipeline.scoring_engine import (
+            _variant_base, _variant_features,
+        )
+        assert _variant_base("v30+dv") == "v30"
+        assert _variant_base("v30cal+dv") == "v30cal"
+        assert _variant_features("v30+dv") == frozenset({"dv"})
+        assert _variant_features("v30") == frozenset()
+
+    # --- T3: termo one-sided ∈ [0, cap] ------------------------------------
+    def test_entry_votes_bounded_one_sided(self):
+        from app.pipeline.scoring_engine import _declared_entry_votes
+        dv = {"votes": (
+            ("a", "col_a", "text", 0.0, "X", 1.5),
+            ("b", "col_b", "text", 0.0, "Y", 1.5),
+            ("c", "col_c", "num", 2.0, 100.0, 1.5),
+        ), "cap": 2.0}
+        # tudo concorda → soma 4.5 mas cap CONJUNTO = 2.0
+        entry = {"extra": {"col_a": "X", "col_b": "Y", "col_c": 101.0}}
+        bonus, detail = _declared_entry_votes(entry, dv, with_detail=True)
+        assert bonus == 2.0
+        assert all(d["agree"] for d in detail)
+        # mismatch/coluna vazia → 0, nunca negativo
+        for extra in ({}, {"col_a": "ERRADO"}, {"col_a": ""},
+                      {"col_c": 103.0}):
+            bonus, _ = _declared_entry_votes({"extra": extra}, dv)
+            assert bonus == 0.0
+
+    # --- T4 (direção): gap canónico grande ⇒ winner imutável ---------------
+    def test_adversarial_cannot_beat_canonical_evidence(self, monkeypatch):
+        # OV escrita aponta 262108 (evidência forte); o declarado concorda
+        # com a RIVAL 262107 — o winner não pode mudar (gap ≫ cap).
+        row = {"cliente": "ELECNOR", "ov": "2410002",
+               "destino_col": "GUILHOTINA 9M", "pbase": "250"}
+        out = self._score(monkeypatch, row, env="on", vote=True)
+        assert out["winner_of"] == "262108"
+
+    # --- T5: dv decide empates; flip nunca sai strong ----------------------
+    def test_tie_decided_by_vote_is_weak_guess(self, monkeypatch):
+        row = {"cliente": "ELECNOR", "destino_col": "GUILHOTINA 9M"}
+        out = self._score(monkeypatch, row, env="on", vote=True)
+        assert out["winner_of"] == "262107"     # a entry que concorda
+        assert out["winner_mode"] == "weak_guess"
+        assert out["winner_declared_vote_bits"] and \
+            out["winner_declared_vote_bits"] <= 2.0
+        votes = {d["field"]: d for d in out["winner_declared_vote"]}
+        assert votes["destino_col"]["agree"] is True
+        # reason auditável pós-slice
+        assert any(r.get("field") == "declared:destino_col"
+                   for r in out["winner_score_reasons"])
+
+    def test_tie_decided_by_num_vote(self, monkeypatch):
+        row = {"cliente": "ELECNOR", "pbase": "299"}  # ±2 → 300 (262108)
+        out = self._score(monkeypatch, row, env="on", vote=True)
+        assert out["winner_of"] == "262108"
+        assert out["winner_mode"] == "weak_guess"
+
+    # --- T7: posterior/calibração intactos (sem flip) ----------------------
+    def test_posterior_invariant_without_flip(self, monkeypatch):
+        row = {"cliente": "ELECNOR", "ov": "2410002",
+               "destino_col": "LASER 5"}   # declarado concorda com o winner
+        with_dv = self._score(monkeypatch, row, env="on", vote=True)
+        without = self._score(monkeypatch, row, env="off", vote=False)
+        assert with_dv["winner_of"] == without["winner_of"] == "262108"
+        for key in ("winner_p_of", "winner_p_h0", "winner_p_field",
+                    "winner_posterior_entropy_bits"):
+            assert with_dv.get(key) == without.get(key), key
+
+    # --- T8: auto-proteção (u alto ⇒ w=0) -----------------------------------
+    def test_common_value_gets_zero_weight(self, monkeypatch):
+        from app.pipeline.scoring_engine import (
+            _fs_row_context, _get_indices,
+        )
+        # 600 entries com o MESMO destino → u=600/1000=0.6 > m=0.5 → w=0
+        entries = {
+            str(100000 + i): [{"ov": f"24{i:05d}", "cliente": f"C{i}",
+                               "designacao": f"D{i}", "comp": 1000 + i,
+                               "extra": {"destino": "COMUM"}}]
+            for i in range(600)
+        }
+        entries["999999"] = [{"ov": "2499999", "cliente": "Z",
+                              "designacao": "DZ", "comp": 9999,
+                              "extra": {"destino": "RARISSIMO"}}]
+        refs = {"available": True, "of_to_entries": entries,
+                "of_to_ovs": {}, "lotes_sap_full": {},
+                "clientes_plan": frozenset()}
+        idx = _get_indices(refs)
+        dv = {"specs": (("destino_col", "destino", "text", 0.0, 0.5),),
+              "cap": 2.0}
+        ctx = _fs_row_context({"destino_col": "COMUM"}, idx,
+                              declared_vote=dv)
+        assert ctx["declared"] is None          # valor comum não arma voto
+        ctx = _fs_row_context({"destino_col": "RARISSIMO"}, idx,
+                              declared_vote=dv)
+        assert ctx["declared"] is not None      # valor raro arma, capado
+        assert ctx["declared"]["votes"][0][5] <= 2.0
+
+    # --- T9: o dv não cria winners do nada ----------------------------------
+    def test_declared_only_row_has_no_winner(self, monkeypatch):
+        row = {"destino_col": "GUILHOTINA 9M"}
+        out = self._score(monkeypatch, row, env="on", vote=True)
+        assert out["winner_of"] is None
+        assert out["fields"]["destino_col"]["status"] == "NA"
+
+    # --- T10: realinhamento nunca vê o termo --------------------------------
+    def test_alignment_signature_has_no_declared_vote(self):
+        import inspect
+        from app.pipeline.scoring_engine import _choose_row_alignment
+        assert "declared_vote" not in inspect.signature(
+            _choose_row_alignment).parameters
+
+    # --- contrato de segurança da célula com voto ativo ---------------------
+    def test_cell_contract_with_vote_on(self, monkeypatch):
+        from app.pipeline.scoring_engine import cross_check_sheet
+        self._set_env(monkeypatch, "on")
+        self._install_fake(monkeypatch, self._declared(vote=True))
+        sheet = {"template_name": "fake_dv", "header": {}, "footer": {},
+                 "rows": [{"cliente": "ELECNOR", "ov": "2410001",
+                           "destino_col": "VALOR ERRADO"}]}
+        result = cross_check_sheet(sheet, None, self._refs())
+        cell = result["rows"][0]["fields"]["destino_col"]
+        assert cell["value"] == "VALOR ERRADO"      # value = OCR sempre
+        assert cell["engine_status"] == "very_different"
+        assert cell["source"] == "declared_plan"
+        assert cell["snapped"] is False
+        assert cell["vote"] is True                 # marcador do voto
+        items = [i for i in result["to_analisar"]
+                 if i["field"] == "destino_col"]
+        assert items and "contou para a escolha da linha" in items[0]["reason"]
+
+    def test_cell_vote_marker_absent_when_inactive(self, monkeypatch):
+        from app.pipeline.scoring_engine import cross_check_sheet
+        self._set_env(monkeypatch, "off")
+        self._install_fake(monkeypatch, self._declared(vote=True))
+        sheet = {"template_name": "fake_dv", "header": {}, "footer": {},
+                 "rows": [{"cliente": "ELECNOR", "ov": "2410001",
+                           "destino_col": "GUILHOTINA 9M"}]}
+        result = cross_check_sheet(sheet, None, self._refs())
+        assert "vote" not in result["rows"][0]["fields"]["destino_col"]
+
+
 class TestToAnalisarCoverage:
     def test_header_no_match_enters_review_queue(self):
         from app.pipeline.scoring_engine import cross_check_sheet

@@ -62,6 +62,12 @@ fine-tune por operador · 7 LiLT (opcional). Hoje: Fase 0.5 + R104-R106
   campos partilha a fila FIFO do OCR; ativação SEMPRE humana;
   `template_store.reload_registry()` instala os ativos no registry em
   runtime (processo único uvicorn — multi-worker precisaria de sinal)
+- **Cross declarado (informativo)**: campos custom podem declarar
+  `declared_cross` no spec (coluna do plano + text/num±tol) — sinalização
+  verde/vermelho pós-winner, NUNCA vota nem escreve (`declared_plan` fora
+  das portas do `_maybe_apply_snap`); maturação medida por
+  `scripts/diag/eval_declared.py`; promoção a votante = fase C com gates
+  (ver docs/PROPOSTA_CROSS_DECLARADO.md)
 - **KPIs editáveis**: fórmulas em `data/kpi_params.json` (gitignored, como
   todos os dados runtime); defaults em código (`kpi_params.DEFAULT_KPIS`)
   byte-idênticos às fórmulas históricas; avaliador `kpi_expr.py` é um
@@ -86,6 +92,13 @@ fine-tune por operador · 7 LiLT (opcional). Hoje: Fase 0.5 + R104-R106
   (recuperação de runtime); na variante ativa é decisão e corre sempre.
 - `CROSS_WRITE_GATE_MARGINAL` (default OFF; ligar só com OK do Luís): gate de
   gravação por confiança calibrada, limiares sibling-aware.
+- `CROSS_DECLARED_VOTE` (off/shadow/on, default OFF; "on" só com OK do Luís):
+  voto de campos DECLARADOS (spec `vote=true`) na escolha da linha do plano —
+  termo one-sided capado ≤2 bits (log2(m/u), u medido do plano), subtraído no
+  posterior (calibração intacta), OFF no realinhamento; flip nunca sai
+  "strong" (cap < margem decisiva). "shadow" ativa só na sombra com a feature
+  de variante `+dv` (`CROSS_SHADOW_VARIANT=v30+dv`) — é assim que se soaka.
+  Nunca escreve por cima do OCR. m medido via `eval_declared --write-params`.
 - Harness: `scripts/diag/backtest_winner.py` é SIMÉTRICO desde R253 (controlo
   HEAD-vs-HEAD tem de dar delta exatamente 0); validar variantes SEMPRE por lá.
 

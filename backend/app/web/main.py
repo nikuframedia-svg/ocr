@@ -294,6 +294,25 @@ def _startup() -> None:
                   file=sys.stderr)
     except Exception as e:
         print(f"[templates startup] {e}", file=sys.stderr)
+    # dv — trilho da TRANSIÇÃO do modo global (env muda sem commit): compara
+    # com o último modo registado no kernel_state e emite o evento de
+    # policy quando difere (ligar = promoted; desligar/baixar = rolled_back).
+    try:
+        mode = str(get_settings().cross_declared_vote or "off").strip().lower()
+        last = str(kernel.get_state().get("declared_vote_mode") or "off")
+        if mode != last:
+            rank = {"off": 0, "shadow": 1, "on": 2}
+            etype = ("policy_promoted"
+                     if rank.get(mode, 0) > rank.get(last, 0)
+                     else "policy_rolled_back")
+            kernel.emit_event(etype, {
+                "version": f"declared_vote:{mode}",
+                "from": last, "to": mode,
+            })
+            kernel.emit_event("declared_vote_changed",
+                              {"scope": "env", "mode": mode})
+    except Exception as e:
+        print(f"[declared-vote startup] {e}", file=sys.stderr)
     # R71 — boot background OCR worker + recover any sheets stuck in
     # status='pending' from a previous process. The 10s window skips
     # sheets that are about to be enqueued by /upload in flight right now.
@@ -1402,7 +1421,11 @@ def _build_cc_maps(sheet_id: int, *, allow_regen: bool = True) -> tuple[
             "colaboradores": "Colaborador esperado",
             "ferramenta": "Ferramenta esperada",
             "syntax": "Formato esperado",
+            "declared_plan": "Plan (informativo) diz",
         }.get(ref_source, "Referência diz")
+        if ref_source == "declared_plan" and info.get("vote"):
+            # dv — o campo contou para a escolha da linha (fase C-lite)
+            prefix = "Plan (declarado, com voto) diz"
         return f"{prefix}: {ref_text}" if ref_text else ""
 
     for r in cc.get("rows", []):
@@ -2855,6 +2878,12 @@ def admin_page(request: Request, tab: str) -> Response:
                 spec_d = {}
             aliases = spec_d.get("setor_aliases") or []
             t["setor"] = (aliases[0] if aliases else "—")
+            # dv — nº de campos declarados com voto (pill "vota" na tabela)
+            dc = spec_d.get("declared_cross")
+            t["n_vote"] = sum(
+                1 for cfg in (dc or {}).values()
+                if isinstance(cfg, dict) and cfg.get("vote") is True
+            ) if isinstance(dc, dict) else 0
         ctx["kanban_templates"] = registados
         ctx["builtin_templates"] = sorted(
             ({
@@ -2871,6 +2900,11 @@ def admin_page(request: Request, tab: str) -> Response:
         ctx["unidades_ativas"] = db.list_unidades()
         ctx["crossable_fields"] = sorted(template_store.CROSSABLE_FIELDS)
         ctx["known_row_fields"] = sorted(template_store.KNOWN_ROW_FIELDS)
+        # Cross declarado — colunas do último plano para o dropdown do
+        # wizard (vazio quando não há plano → input livre + aviso).
+        ctx["plan_headers"] = _plan_headers_or_none() or []
+        # dv — o wizard avisa quando um voto fica gravado mas inerte.
+        ctx["declared_vote_env"] = get_settings().cross_declared_vote
     elif tab == "kpis":
         state = kpi_params.load_state()
         ctx["kpi_state"] = state
@@ -3102,6 +3136,79 @@ def admin_kanban_template_status(template_id: int) -> JSONResponse:
     })
 
 
+def _plan_headers_or_none() -> list[str] | None:
+    """Headers do último plano carregado, para a validação/wizard do cross
+    declarado. None quando não há plano conhecido (sem avisos falsos)."""
+    try:
+        hdrs = list(get_watcher().get_refs().get("plan_headers") or [])
+        return hdrs or None
+    except Exception:
+        return None
+
+
+def _reload_templates_and_refs() -> dict:
+    """reload_registry + force_reload do watcher QUANDO a união de colunas
+    declaradas muda (ativar/desativar um template com declared_cross não
+    toca em nenhum mtime, logo o watcher não re-minaria o `extra` sozinho;
+    forçar sempre custaria ~2-3s em qualquer mutação não relacionada)."""
+    from app.templates_registry import runtime_declared_columns
+    before = runtime_declared_columns()
+    out = template_store.reload_registry()
+    try:
+        if runtime_declared_columns() != before:
+            get_watcher().force_reload()
+    except Exception as e:
+        # Nunca falhar a mutação do template por causa do re-mine; o
+        # próximo upload de plano apanha as colunas.
+        print(f"[declared-cross reload] {e}", file=sys.stderr)
+    return out
+
+
+def _stamp_declared_votes(new_spec: dict, old_spec: dict, template_name: str) -> None:
+    """dv — trilho EN1090 das mudanças de voto de um template.
+
+    Estampa `vote_decided_at` (ISO UTC, server-side) nas declarações cujo
+    voto LIGOU agora; preserva o carimbo antigo quando o voto se mantém (o
+    wizard reconstrói o spec no cliente e não manda carimbos — sem esta
+    preservação, regravar o spec perdia o trilho). Emite o evento kernel
+    `declared_vote_changed` quando o conjunto {campo: vote} muda."""
+    new_dc = new_spec.get("declared_cross")
+    old_dc = old_spec.get("declared_cross")
+    if not isinstance(new_dc, dict):
+        return
+    if not isinstance(old_dc, dict):
+        old_dc = {}
+    fields_on: list[str] = []
+    fields_off: list[str] = []
+    now_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+    for f, cfg in new_dc.items():
+        if not isinstance(cfg, dict):
+            continue
+        old_cfg = old_dc.get(f)
+        old_vote = isinstance(old_cfg, dict) and old_cfg.get("vote") is True
+        if cfg.get("vote") is True:
+            if not old_vote:
+                cfg["vote_decided_at"] = now_iso
+                fields_on.append(f)
+            elif old_cfg.get("vote_decided_at"):
+                cfg.setdefault("vote_decided_at", old_cfg["vote_decided_at"])
+        elif old_vote:
+            fields_off.append(f)
+    for f, old_cfg in old_dc.items():
+        if (isinstance(old_cfg, dict) and old_cfg.get("vote") is True
+                and f not in new_dc):
+            fields_off.append(f)
+    if fields_on or fields_off:
+        try:
+            kernel.emit_event("declared_vote_changed", {
+                "template": template_name,
+                "fields_on": sorted(fields_on),
+                "fields_off": sorted(fields_off),
+            })
+        except Exception as e:
+            print(f"[declared-vote event] {e}", file=sys.stderr)
+
+
 @app.post("/admin/kanban-templates/{template_id}/spec")
 async def admin_kanban_template_spec(
     template_id: int, request: Request,
@@ -3122,7 +3229,9 @@ async def admin_kanban_template_spec(
     body = await request.json()
     spec = dict(body.get("spec") or {})
     spec["name"] = tpl["name"]  # o nome canónico não muda por aqui
-    errors, warnings = template_store.validate_spec_payload(spec)
+    errors, warnings = template_store.validate_spec_payload(
+        spec, plan_headers=_plan_headers_or_none(),
+        declared_vote_env=get_settings().cross_declared_vote)
     from app.templates_registry import alias_conflicts
     conflicts = alias_conflicts(
         spec.get("setor_aliases") or [], exclude_template=tpl["name"])
@@ -3132,10 +3241,17 @@ async def admin_kanban_template_spec(
         return JSONResponse(
             {"ok": False, "errors": errors, "conflicts": conflicts},
             status_code=422)
+    # dv — trilho EN1090: estampa vote_decided_at nas declarações cujo voto
+    # mudou (server-side; o wizard não manda carimbos) + evento kernel.
+    try:
+        old_spec = json.loads(tpl.get("spec_json") or "{}")
+    except json.JSONDecodeError:
+        old_spec = {}
+    _stamp_declared_votes(spec, old_spec, tpl["name"])
     db.update_kanban_template_spec(
         template_id, json.dumps(spec, ensure_ascii=False))
     if tpl["status"] == "ativo":
-        template_store.reload_registry()
+        _reload_templates_and_refs()
     return JSONResponse({"ok": True, "warnings": warnings,
                          "conflicts": conflicts})
 
@@ -3157,7 +3273,9 @@ def admin_kanban_template_activate(
         spec = json.loads(tpl.get("spec_json") or "{}")
     except json.JSONDecodeError:
         raise HTTPException(422, "spec inválido — volta ao passo dos campos")
-    errors, _warnings = template_store.validate_spec_payload(spec)
+    errors, _warnings = template_store.validate_spec_payload(
+        spec, plan_headers=_plan_headers_or_none(),
+        declared_vote_env=get_settings().cross_declared_vote)
     from app.templates_registry import alias_conflicts
     conflicts = alias_conflicts(
         spec.get("setor_aliases") or [], exclude_template=tpl["name"])
@@ -3167,7 +3285,20 @@ def admin_kanban_template_activate(
             {"ok": False, "errors": errors, "conflicts": conflicts},
             status_code=422)
     db.set_kanban_template_status(template_id, "ativo")
-    template_store.reload_registry()
+    _reload_templates_and_refs()
+    # dv — evento de auditoria: campos votantes deste template ficam VIVOS.
+    voting = sorted(
+        f for f, cfg in (spec.get("declared_cross") or {}).items()
+        if isinstance(cfg, dict) and cfg.get("vote") is True
+    )
+    if voting:
+        try:
+            kernel.emit_event("declared_vote_changed", {
+                "template": tpl["name"], "action": "activate",
+                "fields_on": voting, "fields_off": [],
+            })
+        except Exception as e:
+            print(f"[declared-vote event] {e}", file=sys.stderr)
     return JSONResponse({"ok": True})
 
 
@@ -3182,7 +3313,7 @@ def admin_kanban_template_deactivate(
     if tpl is None:
         raise HTTPException(404, "template não encontrado")
     db.set_kanban_template_status(template_id, "inativo")
-    template_store.reload_registry()
+    _reload_templates_and_refs()
     return JSONResponse({"ok": True})
 
 
@@ -3204,7 +3335,7 @@ def admin_kanban_template_delete(
     if tpl.get("image_path"):
         (_DATA_DIR / tpl["image_path"]).unlink(missing_ok=True)
     db.delete_kanban_template(template_id)
-    template_store.reload_registry()
+    _reload_templates_and_refs()
     return JSONResponse({"ok": True})
 
 

@@ -23,6 +23,7 @@ import unicodedata
 from app.pipeline.prompt_builder import canonical_field_labels
 from app.templates_registry import (
     TEMPLATES,
+    DeclaredRef,
     TemplateSpec,
     set_runtime_templates,
 )
@@ -81,7 +82,46 @@ def spec_to_dict(spec: TemplateSpec) -> dict:
         "csv_block_label": spec.csv_block_label,
         "description": spec.description,
         "field_labels": dict(spec.field_labels),
+        "declared_cross": {
+            f: {"ref": "plan", "column": r.column, "cmp": r.cmp,
+                **({"tol": r.tol} if r.tol is not None else {}),
+                **({"vote": True} if r.vote else {})}
+            for f, r in spec.declared_cross.items()
+        },
     }
+
+
+def _declared_from_dict(raw) -> dict[str, DeclaredRef]:
+    """spec_json["declared_cross"] → dict campo→DeclaredRef. TOLERANTE:
+    entradas malformadas são descartadas (reload_registry nunca pode perder
+    um template inteiro por uma chave acessória); a validação dura vive em
+    validate_spec_payload, que guarda a porta de entrada do wizard."""
+    out: dict[str, DeclaredRef] = {}
+    if not isinstance(raw, dict):
+        return out
+    for field, cfg in raw.items():
+        if not isinstance(cfg, dict):
+            continue
+        column = str(cfg.get("column") or "").strip().lower()
+        cmp = str(cfg.get("cmp") or "text").strip()
+        if not field or not column or cmp not in ("text", "num"):
+            continue
+        tol = None
+        if cmp == "num" and cfg.get("tol") is not None:
+            try:
+                tol = float(cfg["tol"])
+            except (TypeError, ValueError):
+                continue
+            if tol <= 0:
+                continue
+        # vote: parse ESTRITO-para-True — um spec_json malformado ("sim",
+        # 1, "true") nunca liga um voto por engano; a direção segura do
+        # descarte é "inerte". A validação dura vive em validate_spec_payload.
+        out[str(field)] = DeclaredRef(
+            column=column, cmp=cmp, tol=tol,
+            vote=cfg.get("vote") is True,
+        )
+    return out
 
 
 def spec_from_dict(
@@ -110,17 +150,28 @@ def spec_from_dict(
         csv_block_label=str(d.get("csv_block_label") or "TABELA DE PRODUÇÃO"),
         description=str(d.get("description") or ""),
         field_labels={str(k): str(v) for k, v in (d.get("field_labels") or {}).items()},
+        declared_cross=_declared_from_dict(d.get("declared_cross")),
         source="db",
         unidade_id=unidade_id,
         db_id=db_id,
     )
 
 
-def validate_spec_payload(d: dict) -> tuple[list[str], list[str]]:
+def validate_spec_payload(
+    d: dict,
+    *,
+    plan_headers=None,
+    declared_vote_env: str | None = None,
+) -> tuple[list[str], list[str]]:
     """Valida o spec vindo do wizard. Devolve (erros, avisos) em PT-PT.
 
     Erros bloqueiam a gravação; avisos pedem confirmação (campos custom
-    fora do pipeline canónico)."""
+    fora do pipeline canónico). `plan_headers` (opcional) são os headers do
+    último plano carregado — usados só para AVISAR quando uma coluna
+    declarada não existe (None = sem plano conhecido, sem avisos falsos).
+    `declared_vote_env` é o modo CROSS_DECLARED_VOTE do servidor (off/
+    shadow/on; None = desconhecido) — vote=true com env off é ACEITE mas
+    avisado (o admin regista hoje, o dono liga o env na fábrica amanhã)."""
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -157,6 +208,71 @@ def validate_spec_payload(d: dict) -> tuple[list[str], list[str]]:
             errors.append(
                 f"cross-check '{f}' não é validável contra o plano/StockSAP "
                 f"(permitidos: {', '.join(sorted(CROSSABLE_FIELDS))})")
+
+    # Cross declarado (informativo) — só para campos custom; canónicos usam
+    # o cross normal ou têm regra local própria (coni/qtd/pri…).
+    declared = d.get("declared_cross")
+    if declared is not None and not isinstance(declared, dict):
+        errors.append("declared_cross inválido — esperado objeto campo→config")
+        declared = None
+    header_set = set(plan_headers) if plan_headers else None
+    for fld, cfg in (declared or {}).items():
+        fld = str(fld)  # noqa: PLW2901 — normalização do próprio item
+        if not isinstance(cfg, dict):
+            errors.append(f"cross declarado '{fld}': config inválida")
+            continue
+        if fld not in row_fields:
+            errors.append(f"cross declarado '{fld}' não está nos campos da tabela")
+        elif fld in CROSSABLE_FIELDS:
+            errors.append(
+                f"cross declarado '{fld}': é campo canónico — usa o cross-check "
+                "normal")
+        elif fld in KNOWN_ROW_FIELDS:
+            errors.append(
+                f"cross declarado '{fld}': campo canónico com regra própria — "
+                "o cross declarado é só para campos custom")
+        ref = str(cfg.get("ref") or "plan")
+        if ref != "plan":
+            errors.append(
+                f"cross declarado '{fld}': ref '{ref}' não suportada (só 'plan')")
+        column = str(cfg.get("column") or "").strip()
+        if not column or not re.fullmatch(r"[a-z0-9_ ]+", column):
+            errors.append(
+                f"cross declarado '{fld}': coluna do plano inválida — usar o "
+                "header em minúsculas (a-z, 0-9, _, espaço)")
+        elif header_set is not None and column not in header_set:
+            warnings.append(
+                f"cross declarado '{fld}': coluna '{column}' não existe no "
+                "último plano carregado — fica NA até um plano com essa coluna")
+        cmp = str(cfg.get("cmp") or "text")
+        if cmp not in ("text", "num"):
+            errors.append(
+                f"cross declarado '{fld}': comparação '{cmp}' inválida "
+                "(text ou num)")
+        tol = cfg.get("tol")
+        if tol is not None:
+            if cmp != "num":
+                errors.append(
+                    f"cross declarado '{fld}': tolerância só faz sentido com "
+                    "comparação numérica")
+            else:
+                try:
+                    tol_f = float(tol)
+                except (TypeError, ValueError):
+                    tol_f = None
+                if tol_f is None or tol_f <= 0:
+                    errors.append(
+                        f"cross declarado '{fld}': tolerância inválida — "
+                        "número > 0")
+        vote = cfg.get("vote")
+        if vote is not None and not isinstance(vote, bool):
+            errors.append(
+                f"cross declarado '{fld}': vote inválido — true ou false")
+        elif vote is True and declared_vote_env == "off":
+            warnings.append(
+                f"cross declarado '{fld}': voto gravado mas o "
+                "CROSS_DECLARED_VOTE está desligado no servidor — fica "
+                "inerte até o dono o ligar")
 
     return errors, warnings
 

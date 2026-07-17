@@ -208,7 +208,8 @@ class TestMaybeApplySnapProtected:
         finally:
             object.__setattr__(settings, "cross_write_gate_marginal", original)
 
-    @pytest.mark.parametrize("source", [None, "ocr_raw", "syntax", "obra_concluida"])
+    @pytest.mark.parametrize(
+        "source", [None, "ocr_raw", "syntax", "obra_concluida", "declared_plan"])
     def test_very_different_without_concrete_ref_does_not_auto_apply(
         self, tmp_db, source
     ):
@@ -278,6 +279,31 @@ class TestMaybeApplySnapProtected:
         assert applied is True
         sheet = db.get_sheet(sid)
         assert sheet["sheet_data"]["rows"][0]["modelo"] == "CANONICO"
+
+    def test_declared_plan_with_ref_never_auto_applies(self, tmp_db):
+        """Cross declarado (fase A) — a porta do ref_source concreto também
+        tem de ficar fechada: uma célula declarada very_different traz `ref`
+        preenchido (o valor do plano), mas ref_source="declared_plan" está
+        fora de concrete_ref_sources ⇒ nunca escreve por cima do OCR."""
+        sid = db.insert_sheet("test.jpg")
+        sheet_data = {
+            "template_name": "fake_declared", "header": {}, "footer": {},
+            "rows": [{"pbase": "260"}],
+        }
+        db.update_extraction(sid, sheet_data, {}, sheet_data)
+        cell = {
+            "engine_status": "very_different",
+            "value": "260",
+            "source": "declared_plan",
+            "ref_source": "declared_plan",
+            "ref": "250",
+        }
+
+        applied = main._maybe_apply_snap(sid, "rows[0].pbase", cell, frozenset())
+
+        assert applied is False
+        sheet = db.get_sheet(sid)
+        assert sheet["sheet_data"]["rows"][0]["pbase"] == "260"
 
     def test_ferramenta_review_label_is_not_auto_applied(self, tmp_db):
         """CONI inválido expõe uma regra, não um canónico determinístico."""
