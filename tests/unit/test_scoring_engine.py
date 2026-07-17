@@ -20,8 +20,11 @@ from app.pipeline.scoring_engine import (
     _get_indices,
     _is_very_different,
     _lev_distance,
+    _lote_h_correction,
+    _lote_variants,
     _num_sim,
     _realign_misplaced_of,
+    _resolve_row_lote,
     _str_sim,
     cross_check_sheet,
     shadow_score,
@@ -1649,6 +1652,8 @@ class TestShadowScore:
         assert result["to_analisar"][0]["ref_source"] == "sap"
 
     def test_lote_h_prefix_variant_uses_stocksap_for_lote_larg_and_esp(self):
+        # R259 — o H já não fica verde com o valor OCR: as medidas validam a
+        # correção H→M e a célula é SNAPPED para o lote canónico M.
         sheet_data = {
             "template_name": "bobine_formato",
             "header": {},
@@ -1660,6 +1665,9 @@ class TestShadowScore:
         fields = result["rows"][0]["fields"]
 
         assert fields["lote"]["status"] == "MATCH"
+        assert fields["lote"]["value"] == "M26B0307"
+        assert fields["lote"]["snapped"] is True
+        assert fields["lote"]["engine_status"] == "snapped"
         assert fields["lote"]["ref"] == "M26B0307"
         assert fields["lote"]["ref_source"] == "sap"
         assert fields["larg_mm"]["status"] == "MATCH"
@@ -1879,6 +1887,199 @@ class TestShadowScore:
         ):
             assert fields[field]["value"] == ref
             assert fields[field]["status"] == "snapped"
+
+
+class TestLoteHCorrection:
+    """R259 — H e M são códigos diferentes: um lote H nunca confirma verde só
+    porque a variante M existe no StockSAP. A confusão OCR H→M vira correção
+    explícita (snapped para o canónico M) quando as medidas da linha validam
+    a entry SAP, ou revisão sem gravação (no_auto_write) quando divergem."""
+
+    # Espelha o ref_watcher: a linha real sem prefixo e o alias M partilham
+    # a MESMA entry (setdefault com a mesma referência).
+    _ENTRY_26B0473 = {"desc": "S355 BOBINE", "larg": 1320, "esp": 4.8}
+    _REFS_H = {
+        "available": True,
+        "of_to_entries": {},
+        "lotes_sap_full": {
+            "M26B0330": {"desc": "S355 BOBINE", "larg": 1500, "esp": 4},
+            "26B0473": _ENTRY_26B0473,
+            "M26B0473": _ENTRY_26B0473,
+            "H24B1003": {"desc": "S355 BOBINE", "larg": 1000, "esp": 3},
+        },
+        "clientes_plan": frozenset(),
+    }
+
+    def _sheet(self, row: dict) -> dict:
+        return {
+            "template_name": "bobine_formato",
+            "header": {},
+            "footer": {},
+            "rows": [row],
+        }
+
+    def test_lote_h_to_m_accepted_snaps_to_canonical(self):
+        # Caso a — OCR H26B0330, medidas batem com M26B0330 {1500, 4}:
+        # auto-snap para o canónico M; nunca H verde.
+        sheet = self._sheet({"lote": "H26B0330", "larg_mm": "1500", "esp": "4"})
+        scoring, *_ = shadow_score(sheet, None, self._REFS_H)
+        result = cross_check_sheet(sheet, None, self._REFS_H)
+
+        cell = scoring["rows"][0]["fields"]["lote"]
+        assert cell["status"] == "snapped"
+        assert cell["value"] == "M26B0330"
+        assert cell["source"] == "sap"
+        assert cell["decision_reason"] == "lote_h_ocr_confusion"
+
+        legacy = result["rows"][0]["fields"]["lote"]
+        assert legacy["status"] == "MATCH"
+        assert legacy["value"] == "M26B0330"
+        assert legacy["snapped"] is True
+        assert legacy["ref"] == "M26B0330"
+        assert result["to_analisar"] == []
+        assert result["rows"][0]["fields"]["larg_mm"]["status"] == "MATCH"
+        assert result["rows"][0]["fields"]["esp"]["status"] == "MATCH"
+
+    def test_lote_m_exact_confirmed(self):
+        # Caso b — OCR M26B0330: match exato, confirmado sem proposta.
+        sheet = self._sheet({"lote": "M26B0330", "larg_mm": "1500", "esp": "4"})
+        scoring, *_ = shadow_score(sheet, None, self._REFS_H)
+
+        cell = scoring["rows"][0]["fields"]["lote"]
+        assert cell["status"] == "confirmed"
+        assert cell["value"] == "M26B0330"
+        assert cell["source"] == "sap"
+        assert "proposed" not in cell
+
+    def test_lote_h_to_m_rejected_on_measure_divergence(self):
+        # Caso c — OCR H26B0473 com larg 1265/esp 4; SAP só tem 26B0473
+        # {1320, 4.8}: NÃO confirma, NÃO grava; revisão com as divergências.
+        sheet = self._sheet({"lote": "H26B0473", "larg_mm": "1265", "esp": "4"})
+        scoring, *_ = shadow_score(sheet, None, self._REFS_H)
+        result = cross_check_sheet(sheet, None, self._REFS_H)
+
+        cell = scoring["rows"][0]["fields"]["lote"]
+        assert cell["status"] == "very_different"
+        assert cell["value"] == "H26B0473"
+        assert cell["source"] == "ocr_raw"
+        assert cell["proposed"] == "M26B0473"
+        assert cell["no_auto_write"] is True
+
+        legacy = result["rows"][0]["fields"]["lote"]
+        assert legacy["status"] == "NO_MATCH"
+        assert legacy["value"] == "H26B0473"
+        assert legacy["ref"] == "M26B0473"
+        assert legacy["no_auto_write"] is True
+
+        item = next(
+            it for it in result["to_analisar"]
+            if it["field_path"] == "rows[0].lote"
+        )
+        assert item["ref"] == "M26B0473"
+        assert "1265" in item["reason"] and "1320" in item["reason"]
+        assert "4,8" in item["reason"]
+
+        # As medidas do operador NÃO são substituídas pela entry do lote
+        # não confirmado (antes: larg 1265 → 1320 gravada via source=sap).
+        larg = result["rows"][0]["fields"]["larg_mm"]
+        assert larg["value"] == "1265"
+        assert larg["source"] != "sap"
+        assert larg.get("ref", "") == ""
+        esp = result["rows"][0]["fields"]["esp"]
+        assert esp["value"] == "4"
+        assert esp["source"] != "sap"
+
+    def test_lote_no_prefix_alias_confirms_never_h(self):
+        # Caso d — OCR M26B0473 casa o registo SAP 26B0473 via alias M:
+        # confirmado com a forma M, nunca convertido para H.
+        sheet = self._sheet({"lote": "M26B0473", "larg_mm": "1320", "esp": "4,8"})
+        scoring, *_ = shadow_score(sheet, None, self._REFS_H)
+        result = cross_check_sheet(sheet, None, self._REFS_H)
+
+        cell = scoring["rows"][0]["fields"]["lote"]
+        assert cell["status"] == "confirmed"
+        assert cell["value"] == "M26B0473"
+        assert result["rows"][0]["fields"]["larg_mm"]["status"] == "MATCH"
+        assert result["rows"][0]["fields"]["esp"]["status"] == "MATCH"
+        assert result["to_analisar"] == []
+
+    def test_lote_h_to_m_accepted_when_no_measures(self):
+        # Sem larg/esp legíveis a correção aplica-se na mesma (decisão Luís
+        # 2026-07-16): medidas só bloqueiam quando existem E divergem.
+        sheet = self._sheet({"lote": "H26B0330"})
+        scoring, *_ = shadow_score(sheet, None, self._REFS_H)
+
+        cell = scoring["rows"][0]["fields"]["lote"]
+        assert cell["status"] == "snapped"
+        assert cell["value"] == "M26B0330"
+
+    def test_lote_h_literal_in_sap_confirms(self):
+        # Lote H que existe LITERALMENTE no SAP → match exato normal.
+        sheet = self._sheet({"lote": "H24B1003", "larg_mm": "1000", "esp": "3"})
+        scoring, *_ = shadow_score(sheet, None, self._REFS_H)
+
+        cell = scoring["rows"][0]["fields"]["lote"]
+        assert cell["status"] == "confirmed"
+        assert cell["value"] == "H24B1003"
+        assert "proposed" not in cell
+
+    def test_lote_h_without_sap_pool_keeps_current_review(self):
+        # StockSAP indisponível: comportamento atual (revisão sem proposta).
+        refs = {"available": True, "of_to_entries": {}, "lotes_sap_full": {}}
+        sheet = self._sheet({"lote": "H26B0330"})
+        scoring, *_ = shadow_score(sheet, None, refs)
+
+        cell = scoring["rows"][0]["fields"]["lote"]
+        assert cell["status"] == "very_different"
+        assert cell["value"] == "H26B0330"
+        assert cell["source"] == "ocr_raw"
+
+    def test_lote_variants_no_h(self):
+        # A variante H→M saiu das variantes legítimas de confirmação.
+        assert _lote_variants("H26B0330") == ["H26B0330"]
+        assert _lote_variants("26B0473") == ["26B0473", "M26B0473"]
+        assert _lote_variants("M26B0330") == ["M26B0330"]
+        assert _lote_h_correction("H26B0330") == "M26B0330"
+        assert _lote_h_correction("M26B0330") == ""
+        assert _lote_h_correction("26B0473") == ""
+
+    @pytest.mark.parametrize(
+        "row,expected_canonical,expected_kind",
+        [
+            ({"lote": "M26B0330"}, "M26B0330", "exact_or_alias"),
+            ({"lote": "26B0473"}, "26B0473", "exact_or_alias"),
+            (
+                {"lote": "H26B0330", "larg_mm": "1500", "esp": "4"},
+                "M26B0330",
+                "h_correction_accepted",
+            ),
+            (
+                {"lote": "H26B0473", "larg_mm": "1265", "esp": "4"},
+                "M26B0473",
+                "h_correction_rejected",
+            ),
+            ({"lote": "H99B9999"}, "", "none"),
+            ({"lote": ""}, "", "none"),
+        ],
+    )
+    def test_resolve_row_lote_kinds(self, row, expected_canonical, expected_kind):
+        canonical, _entry, kind = _resolve_row_lote(self._REFS_H, row)
+        assert canonical == expected_canonical
+        assert kind == expected_kind
+
+    def test_resolve_row_lote_h_via_suffix_without_m_alias(self):
+        # Refs sintéticas sem o alias M (só a linha sem prefixo): a correção
+        # resolve pelo sufixo mas propõe SEMPRE a forma M canónica.
+        refs = {
+            "available": True,
+            "lotes_sap_full": {"26B0473": {"larg": 1320, "esp": 4.8}},
+        }
+        canonical, entry, kind = _resolve_row_lote(
+            refs, {"lote": "H26B0473", "larg_mm": "1320", "esp": "4,8"}
+        )
+        assert canonical == "M26B0473"
+        assert entry == {"larg": 1320, "esp": 4.8}
+        assert kind == "h_correction_accepted"
 
 
 class TestFindWinner:

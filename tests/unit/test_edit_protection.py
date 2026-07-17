@@ -173,6 +173,33 @@ class TestMaybeApplySnapProtected:
         sheet = db.get_sheet(sid)
         assert sheet["sheet_data"]["rows"][0]["modelo"] == "CANONICO"
 
+    def test_no_auto_write_flag_blocks_concrete_ref(self, tmp_db):
+        """R259 — proposta pendente de revisão humana (ex.: confusão OCR H↔M
+        com medidas divergentes): mesmo com ref concreta (contraste com o
+        R215 acima), `no_auto_write` bloqueia a gravação."""
+        sid = db.insert_sheet("test.jpg")
+        sheet_data = {
+            "template_name": "bobine_formato", "header": {}, "footer": {},
+            "rows": [{"lote": "H26B0473"}],
+        }
+        db.update_extraction(sid, sheet_data, {}, sheet_data)
+        cell = {
+            "engine_status": "very_different", "value": "H26B0473",
+            "source": "ocr_raw", "ref_source": "sap", "ref": "M26B0473",
+            "no_auto_write": True,
+        }
+
+        applied = main._maybe_apply_snap(sid, "rows[0].lote", cell, frozenset())
+
+        assert applied is False
+        sheet = db.get_sheet(sid)
+        assert sheet["sheet_data"]["rows"][0]["lote"] == "H26B0473"
+        # A célula gémea SEM o flag grava (política R215 intacta).
+        twin = {k: v for k, v in cell.items() if k != "no_auto_write"}
+        assert main._maybe_apply_snap(sid, "rows[0].lote", twin, frozenset()) is True
+        sheet = db.get_sheet(sid)
+        assert sheet["sheet_data"]["rows"][0]["lote"] == "M26B0473"
+
     def test_marginal_write_gate_flag(self, tmp_db):
         """R236 — CROSS_WRITE_GATE_MARGINAL: OFF (default) mantém o R219
         (substitui sempre); ON bloqueia a gravação de very_different vindo de

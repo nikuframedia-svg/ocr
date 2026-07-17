@@ -739,6 +739,11 @@ def _maybe_apply_snap(
     # R125 — obra concluída no plan: operador investiga, não auto-substituir.
     if cell.get("source") == "obra_concluida":
         return False
+    # R259 — proposta pendente de revisão humana (ex.: confusão OCR H↔M com
+    # medidas divergentes): o motor mostra a proposta no tooltip/to_analisar
+    # mas NUNCA a grava, mesmo vindo de ref concreta.
+    if cell.get("no_auto_write"):
+        return False
     engine_status = cell.get("engine_status")
     # R236/R243 — gate de gravação (flag, default OFF = R219 substitui-sempre):
     # quando ON, a decisão é por PERDA ESPERADA — grava sse P(winner certo) ≥
@@ -1412,6 +1417,10 @@ def _build_cc_maps(sheet_id: int, *, allow_regen: bool = True) -> tuple[
         return info.get("plan_value")
 
     def _cell_ref_title(info: dict, ref: object) -> str:
+        # R259 — proposta em revisão (no_auto_write): o warning traz o
+        # contexto completo (ex.: divergências larg/esp OCR ↔ SAP).
+        if info.get("no_auto_write") and info.get("warning"):
+            return str(info["warning"])
         ref_text = str(ref).strip()
         ref_source = str(info.get("ref_source") or info.get("source") or "").strip()
         prefix = {

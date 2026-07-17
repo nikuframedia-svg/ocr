@@ -139,13 +139,17 @@ def _o_zero_variants(s: str) -> list[str]:
 
 
 def _lote_variants(value: object) -> list[str]:
+    """Variantes LEGÍTIMAS de um lote para match exato/alias.
+
+    R259 — a correção OCR H→M saiu daqui (vive em _lote_h_correction e no
+    resolver _resolve_row_lote): H e M são códigos diferentes e um lote H
+    nunca confirma só porque a variante M existe no StockSAP. A direção
+    M→sem-prefixo é coberta pelos aliases do ref_watcher."""
     raw = str(value or "").strip().upper()
     if not raw:
         return []
     variants = [raw]
-    if raw.startswith("H") and len(raw) >= 2:
-        variants.append("M" + raw[1:])
-    elif not raw.startswith("M") and re.match(r"^\d{2}B", raw):
+    if not raw.startswith("M") and re.match(r"^\d{2}B", raw):
         variants.append("M" + raw)
     out: list[str] = []
     for v in variants:
@@ -154,11 +158,87 @@ def _lote_variants(value: object) -> list[str]:
     return out
 
 
+def _lote_h_correction(value: object) -> str:
+    """Candidato de correção OCR H↔M: 'M'+resto. '' se não começa por H."""
+    raw = str(value or "").strip().upper()
+    if raw.startswith("H") and len(raw) >= 2:
+        return "M" + raw[1:]
+    return ""
+
+
 def _sap_lote_entry(refs: dict, lote_value: object) -> tuple[str, dict | None]:
     sap_full = refs.get("lotes_sap_full", {}) or {}
     for variant in _lote_variants(lote_value):
         if variant in sap_full:
             return variant, sap_full[variant]
+    return "", None
+
+
+def _lote_measures_divergences(row: dict, entry: dict) -> list[dict]:
+    """R259 — pares medida-OCR ↔ medida-SAP que divergem claramente.
+
+    Compara larg_mm/esp da linha com larg/esp da entry do StockSAP usando o
+    limiar de cor (_COLOR_NUM_ABS — tolerante, 30/05). Pares não comparáveis
+    (OCR ou SAP em falta/ilegível) são ignorados: só medidas presentes E
+    divergentes bloqueiam a correção H→M (decisão Luís 2026-07-16)."""
+    divergences: list[dict] = []
+    for field, key in (("larg_mm", "larg"), ("esp", "esp")):
+        sap_n = _num(entry.get(key))
+        ocr_ns = _num_variants(field, row.get(field))
+        if sap_n is None or not ocr_ns:
+            continue
+        if min(abs(v - sap_n) for v in ocr_ns) > _COLOR_NUM_ABS[field]:
+            divergences.append({
+                "field": field,
+                "ocr": _format_value(field, row.get(field)),
+                "sap": _format_value(field, entry.get(key)),
+            })
+    return divergences
+
+
+def _resolve_row_lote(refs: dict, row: dict) -> tuple[str, dict | None, str]:
+    """R259 — resolução do lote da linha contra o StockSAP.
+
+    Devolve (canonical, entry, kind) com kind ∈ {"exact_or_alias",
+    "h_correction_accepted", "h_correction_rejected", "none"}:
+      - exact_or_alias: o lote (ou alias legítimo sem-prefixo↔M) existe no SAP;
+      - h_correction_accepted: lote H cuja variante M existe no SAP e nenhuma
+        medida da linha (larg_mm/esp) diverge claramente da entry;
+      - h_correction_rejected: variante M existe mas as medidas divergem —
+        proposta para revisão humana, nunca confirmação/gravação silenciosa;
+      - none: sem correspondência no SAP."""
+    sap_full = refs.get("lotes_sap_full", {}) or {}
+    raw = str(row.get("lote") or "").strip().upper()
+    if not raw or not sap_full:
+        return "", None, "none"
+    variant, entry = _sap_lote_entry(refs, raw)
+    if entry is not None:
+        return variant, entry, "exact_or_alias"
+    m = _lote_h_correction(raw)
+    if m:
+        # No SAP real a forma M existe sempre que a sem-prefixo existe
+        # (aliases do ref_watcher); o sufixo cobre refs sintéticas de teste.
+        for cand in (m, m[1:]):
+            if cand in sap_full:
+                entry = sap_full[cand]
+                kind = (
+                    "h_correction_rejected"
+                    if _lote_measures_divergences(row, entry)
+                    else "h_correction_accepted"
+                )
+                # A proposta visível é sempre a forma M (spec: nunca H;
+                # operadores escrevem o prefixo M nos kanbans).
+                return m, entry, kind
+    return "", None, "none"
+
+
+def _sap_entry_for_measures(refs: dict, row: dict) -> tuple[str, dict | None]:
+    """Entry SAP utilizável por larg_mm/esp: só match exato/alias ou correção
+    H→M ACEITE. Correção rejeitada / lote desconhecido → sem entry — as
+    medidas do operador nunca são substituídas por um lote não confirmado."""
+    canonical, entry, kind = _resolve_row_lote(refs, row)
+    if kind in ("exact_or_alias", "h_correction_accepted"):
+        return canonical, entry
     return "", None
 
 
@@ -711,6 +791,11 @@ _STATUS_LABELS = {
 # R185 — legado: abreviação de cliente removida em R208; só compacto igual.
 # R186 — lote com H inicial é aceite como variante OCR de M quando o lote M...
 # existe no StockSAP, e essa normalização também alimenta largura/espessura SAP.
+# SUBSTITUÍDO em R259: H e M são códigos diferentes — H nunca confirma verde
+# via variante M. A confusão OCR H→M vira correção explícita: snapped para o
+# canónico M quando as medidas da linha (larg/esp) validam a entry SAP, ou
+# revisão sem gravação (no_auto_write) quando divergem. Lote H rejeitado
+# também deixa de alimentar largura/espessura SAP (_sap_entry_for_measures).
 # R187 — modelo compara código compacto (sem pontuação/espaços, com O/0)
 # contra a designação do plan antes de declarar "muito diferente".
 # R188 — modelo compacto normaliza marcas Nº/N° como N para apanhar códigos
@@ -853,7 +938,9 @@ _STATUS_LABELS = {
 # modelo incerto sai naturalmente; substitui p_top×_sibling_p (R248) e o
 # p_top logístico de 1 rival (fica como telemetria). No flip: BUMP + gates
 # (GOOD 110/110, MODEL_SIB >=74%, reliability/abstenção OOD do harness).
-ENGINE_VERSION = "v30_R249"
+# R259 — lote H↔M: fim da confirmação silenciosa via variante M (ver bloco
+# R186 acima); bump força regeneração on-demand dos JSON de cross-check.
+ENGINE_VERSION = "v30_R259"
 
 # R250 — VARIANTE de scoring (rollout da refundação matemática R250-R252).
 # ContextVar e não global de módulo: a sombra (_spawn_shadow_scoring) corre em
@@ -4039,12 +4126,12 @@ def _has_field_reference_pool(field: str, refs: dict, idx: dict, row: dict) -> b
     if field == "lote":
         return bool(refs.get("lotes_sap_full"))
     if field == "larg_mm":
-        _sap_lote, sap_e = _sap_lote_entry(refs, row.get("lote"))
+        _sap_lote, sap_e = _sap_entry_for_measures(refs, row)
         if sap_e and sap_e.get("larg") not in (None, ""):
             return True
         return bool((idx.get("dim_indices") or {}).get("larg"))
     if field == "esp":
-        _sap_lote, sap_e = _sap_lote_entry(refs, row.get("lote"))
+        _sap_lote, sap_e = _sap_entry_for_measures(refs, row)
         if sap_e and sap_e.get("esp") not in (None, ""):
             return True
         return bool((idx.get("dim_indices") or {}).get("esp"))
@@ -4079,12 +4166,12 @@ def _field_ref_source(field: str, refs: dict | None = None, row: dict | None = N
     if field == "lote":
         return "sap"
     if field == "larg_mm":
-        _sap_lote, sap_e = _sap_lote_entry(refs or {}, (row or {}).get("lote"))
+        _sap_lote, sap_e = _sap_entry_for_measures(refs or {}, row or {})
         if sap_e and sap_e.get("larg") not in (None, ""):
             return "sap"
         return "plan"
     if field == "esp":
-        _sap_lote, sap_e = _sap_lote_entry(refs or {}, (row or {}).get("lote"))
+        _sap_lote, sap_e = _sap_entry_for_measures(refs or {}, row or {})
         if sap_e and sap_e.get("esp") not in (None, ""):
             return "sap"
     return "plan"
@@ -4250,12 +4337,36 @@ def _apply_winner_to_field(
         sap_full = refs.get("lotes_sap_full", {}) or {}
         if not sap_full:
             return _make_cell(ocr_value, "very_different", "ocr_raw", ref_source="sap")
-        sap_lote, sap_entry = _sap_lote_entry(refs, ocr_value)
-        if sap_entry:
+        canonical, sap_entry, lote_kind = _resolve_row_lote(refs, row)
+        if lote_kind == "exact_or_alias":
             extra = {"ref_source": "sap"}
-            if sap_lote and sap_lote != ocr_value.strip().upper():
-                extra["proposed"] = sap_lote
+            if canonical and canonical != ocr_value.strip().upper():
+                extra["proposed"] = canonical
             return _mark_winner_cell(_make_cell(ocr_value, "confirmed", "sap", **extra), winner)
+        if lote_kind == "h_correction_accepted":
+            # R259 — confusão OCR H↔M validada pelas medidas da linha:
+            # snapped com o lote canónico M visível (substitute-everything);
+            # _maybe_apply_snap grava e a UI mostra verde com `*`.
+            cell = _finish_cell(field, ocr_value, canonical, "sap", None)
+            cell["decision_reason"] = "lote_h_ocr_confusion"
+            return _mark_winner_cell(cell, winner)
+        if lote_kind == "h_correction_rejected":
+            # R259 — a variante M existe mas larg/esp divergem do lote SAP:
+            # proposta para revisão humana, NUNCA gravada (no_auto_write).
+            # Tem de retornar antes do ramo fuzzy — um candidato sim>=80 com
+            # ref_source="sap" seria auto-gravado apesar da divergência.
+            divs = _lote_measures_divergences(row, sap_entry or {})
+            det = "; ".join(
+                f"{d['field']} {d['ocr']} ↔ SAP {d['sap']}" for d in divs
+            )
+            return _make_cell(
+                ocr_value, "very_different", "ocr_raw",
+                ref_source="sap",
+                proposed=canonical,
+                no_auto_write=True,
+                decision_reason="lote_h_correction_rejected",
+                warning=f"OCR H↔M: SAP tem {canonical}, mas medidas divergem ({det})",
+            )
         if candidates and candidates[0].get("sim", 0) >= 80:
             return _make_cell(
                 ocr_value, "very_different", "ocr_raw",
@@ -4269,23 +4380,11 @@ def _apply_winner_to_field(
 
     if field == "larg_mm":
         # StockSAP tem prioridade porque a largura da bobine é indexada pelo
-        # lote. Sem lote/SAP, deixamos a lógica do plan usar `winner.larg`
-        # quando essa referência existir.
-        _sap_lote, sap_e = _sap_lote_entry(refs, row.get("lote"))
+        # lote. Sem lote/SAP (ou lote H não confirmado — R259), deixamos a
+        # lógica do plan usar `winner.larg` quando essa referência existir.
+        _sap_lote, sap_e = _sap_entry_for_measures(refs, row)
         sap_larg = sap_e.get("larg") if sap_e else None
         if sap_larg not in (None, ""):
-            ocr_larg_n = _num(ocr_value)
-            sap_larg_n = _num(sap_larg)
-            if (
-                ocr_value
-                and ocr_larg_n is not None
-                and sap_larg_n is not None
-                and abs(ocr_larg_n - sap_larg_n) > _VERY_DIFF_NUM_ABS["larg_mm"]
-            ):
-                return _mark_winner_cell(
-                    _finish_cell(field, ocr_value, str(sap_larg), "sap", None),
-                    winner,
-                )
             return _mark_winner_cell(
                 _finish_cell(field, ocr_value, str(sap_larg), "sap", None),
                 winner,
@@ -4295,7 +4394,7 @@ def _apply_winner_to_field(
         # StockSAP também traz espessura do lote. Se o operador escreveu esp,
         # validamos primeiro contra SAP; se estiver em branco, deixamos a
         # lógica do plan decidir se há confiança suficiente para autofill.
-        _sap_lote, sap_e = _sap_lote_entry(refs, row.get("lote"))
+        _sap_lote, sap_e = _sap_entry_for_measures(refs, row)
         sap_esp = sap_e.get("esp") if sap_e else None
         if ocr_value and sap_esp not in (None, ""):
             return _mark_winner_cell(
@@ -5454,7 +5553,8 @@ def _to_legacy_cell(v5_cell: dict, ref_value: str | None = None) -> dict:
     if v5_cell.get("match_kind"):
         out["match_kind"] = v5_cell.get("match_kind")
     for key in ("winner_mode", "score_reasons", "forced_from_status", "warning",
-                "empty_ok", "decision_confidence", "decision_reason", "vote"):
+                "empty_ok", "decision_confidence", "decision_reason", "vote",
+                "no_auto_write"):
         if key in v5_cell:
             out[key] = v5_cell[key]
     # Ref para tooltip de referência: prioriza `proposed`,
@@ -5522,6 +5622,13 @@ def cross_check_sheet(
                           "campo contou para a escolha da linha")
             else:
                 reason = "Plano (cross informativo) tem valor diferente do OCR"
+        elif legacy_cell.get("decision_reason") == "lote_h_correction_rejected":
+            # R259 — proposta H→M rejeitada pelas medidas: o warning traz as
+            # divergências concretas (larg/esp OCR ↔ SAP), antes do genérico.
+            reason = legacy_cell.get("warning") or (
+                "OCR H↔M: existe lote M no SAP mas as medidas divergem — "
+                "confirmar lote e medidas"
+            )
         elif has_ref:
             reason = "Motor propõe valor muito diferente do OCR"
         elif ref_source == "syntax":
