@@ -59,6 +59,22 @@ def queue_size() -> int:
     return _ocr_queue.qsize()
 
 
+def position_of(kind: str, item_id: int) -> int | None:
+    """R258 — posição REAL (1-based) de um job na fila; None se já não
+    está lá (em processamento ou concluído). O wizard mostrava
+    `queue_size` sob o rótulo "posição na fila" — mentia com fila funda.
+
+    `Queue.mutex`/`Queue.queue` são internos mas estáveis em CPython; o
+    scan é O(n) com n pequeno (dezenas) e o lock é segurado uns µs.
+    Itens legados (int puro) nunca fazem match com o tuplo — sem risco.
+    """
+    with _ocr_queue.mutex:
+        for i, job in enumerate(_ocr_queue.queue):
+            if job == (kind, item_id):
+                return i + 1
+    return None
+
+
 def worker_alive() -> bool:
     """True if the worker thread is running. Used by /admin/queue-status."""
     return _worker_thread is not None and _worker_thread.is_alive()
@@ -139,6 +155,7 @@ def shutdown(timeout: float = 5.0) -> None:
 __all__ = [
     "enqueue",
     "enqueue_discovery",
+    "position_of",
     "queue_size",
     "recover_pending",
     "shutdown",

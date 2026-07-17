@@ -16,6 +16,7 @@ import secrets
 import shutil
 import sqlite3  # Task C — erros de unicidade nas unidades fabris
 import sys
+import tempfile  # R258 — upload atómico da imagem do template
 import threading
 import time  # R224 — timing por etapa (profiling)
 import traceback
@@ -2843,9 +2844,30 @@ def admin_page(request: Request, tab: str) -> Response:
         ctx["trofa_id"] = db.trofa_unidade_id()
     elif tab == "kanbans":
         from app.templates_registry import TEMPLATES
-        ctx["kanban_templates"] = db.list_kanban_templates()
-        ctx["n_builtin_templates"] = sum(
-            1 for t in TEMPLATES.values() if t.source == "builtin")
+        # R258 — inventário por setor: a tab passa a mostrar TAMBÉM os
+        # modelos de fábrica (antes só um número) e o setor de cada
+        # template registado ("de quais setores é que existem?").
+        registados = db.list_kanban_templates()
+        for t in registados:
+            try:
+                spec_d = json.loads(t.get("spec_json") or "{}")
+            except json.JSONDecodeError:
+                spec_d = {}
+            aliases = spec_d.get("setor_aliases") or []
+            t["setor"] = (aliases[0] if aliases else "—")
+        ctx["kanban_templates"] = registados
+        ctx["builtin_templates"] = sorted(
+            ({
+                "name": t.name,
+                "setor": (t.setor_aliases[0] if t.setor_aliases else "—"),
+                "phase": t.phase,
+                "n_row": len(t.row_fields),
+                "n_cross": len(t.cross_check_fields),
+                "is_verso": not t.has_production_rows,
+                "is_gemini": t.is_gemini,
+            } for t in TEMPLATES.values() if t.source == "builtin"),
+            key=lambda d: (d["phase"], d["name"]))
+        ctx["n_builtin_templates"] = len(ctx["builtin_templates"])
         ctx["unidades_ativas"] = db.list_unidades()
         ctx["crossable_fields"] = sorted(template_store.CROSSABLE_FIELDS)
         ctx["known_row_fields"] = sorted(template_store.KNOWN_ROW_FIELDS)
@@ -3022,24 +3044,33 @@ async def admin_create_kanban_template(
     suffix = Path(file.filename).suffix.lower()
     rel_path = f"{_TEMPLATE_IMAGES_DIR}/{canonical}{suffix}"
     target = _DATA_DIR / rel_path
-    bytes_written = 0
-    with target.open("wb") as f:
-        while chunk := await file.read(1024 * 1024):
-            bytes_written += len(chunk)
-            if bytes_written > _MAX_UPLOAD_BYTES:
-                f.close()
-                target.unlink(missing_ok=True)
-                raise HTTPException(413, "imagem demasiado grande")
-            f.write(chunk)
-
-    stub = {"name": canonical, "row_fields": [], "setor_aliases": []}
+    # R258 — escrita para temp único no MESMO diretório: dois uploads
+    # concorrentes com o mesmo nome escreviam AMBOS para `target` e o
+    # perdedor do IntegrityError apagava a imagem do VENCEDOR. O UNIQUE(name)
+    # do INSERT arbitra a corrida; só o vencedor promove o temp para o nome
+    # canónico (os.replace é atómico no mesmo volume, incl. Windows). Um
+    # crash a meio deixa um `.up_*` órfão — inócuo.
+    fd, tmp_name = tempfile.mkstemp(suffix=suffix, prefix=".up_", dir=img_dir)
+    tmp_path = Path(tmp_name)
     try:
+        bytes_written = 0
+        with os.fdopen(fd, "wb") as f:
+            while chunk := await file.read(1024 * 1024):
+                bytes_written += len(chunk)
+                if bytes_written > _MAX_UPLOAD_BYTES:
+                    raise HTTPException(413, "imagem demasiado grande")
+                f.write(chunk)
+        stub = {"name": canonical, "row_fields": [], "setor_aliases": []}
         tid = db.insert_kanban_template(
             canonical, unidade_id, json.dumps(stub, ensure_ascii=False),
             image_path=rel_path, status="a_analisar")
+        os.replace(tmp_path, target)  # só o vencedor do INSERT chega aqui
     except sqlite3.IntegrityError:
-        target.unlink(missing_ok=True)
+        tmp_path.unlink(missing_ok=True)
         raise HTTPException(409, f"já existe um template '{canonical}'")
+    except Exception:
+        tmp_path.unlink(missing_ok=True)  # 413 e qualquer outro erro
+        raise
     pos = ocr_queue.enqueue_discovery(tid)
     return JSONResponse({
         "ok": True, "id": tid, "name": canonical,
@@ -3065,6 +3096,9 @@ def admin_kanban_template_status(template_id: int) -> JSONResponse:
         "id": tpl["id"], "name": tpl["name"], "status": tpl["status"],
         "unidade_id": tpl["unidade_id"], "spec": spec,
         "discovery": discovery, "queue_size": ocr_queue.queue_size(),
+        # R258 — posição real na fila (None = em processamento/concluído);
+        # o wizard mostrava queue_size sob o rótulo "posição na fila".
+        "queue_position": ocr_queue.position_of("discovery", tpl["id"]),
     })
 
 
@@ -3079,6 +3113,12 @@ async def admin_kanban_template_spec(
     tpl = db.get_kanban_template(template_id)
     if tpl is None:
         raise HTTPException(404, "template não encontrado")
+    if tpl["status"] == "a_analisar":
+        # R258 — a descoberta ainda vai escrever o spec: aceitar agora seria
+        # sobreposto pelo worker (_process_discovery só preserva row_fields
+        # do stub com parse_ok=False). O wizard nunca chega aqui neste
+        # estado; a guarda protege chamadas diretas à API.
+        raise HTTPException(409, "análise em curso — aguarda que termine")
     body = await request.json()
     spec = dict(body.get("spec") or {})
     spec["name"] = tpl["name"]  # o nome canónico não muda por aqui

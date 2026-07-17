@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import io
 import json
+import queue
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app import templates_registry as reg
-from app.web import db, main, template_store
+from app.web import db, main, ocr_queue, template_store
 
 _DESKTOP = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
 _MOBILE = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)"}
@@ -68,6 +69,41 @@ class TestCreate:
         assert r1.status_code == 200
         _, r2 = _create(client, unidade_id=uid)
         assert r2.status_code == 409
+
+    def test_duplicate_upload_preserves_winner_image(self, env, client):
+        # R258 — antes, os dois uploads escreviam para o MESMO ficheiro e o
+        # perdedor do IntegrityError apagava a imagem do VENCEDOR.
+        uid = db.create_unidade("Esposende")
+        r1 = client.post(
+            "/admin/kanban-templates",
+            data={"nome": "corte esposende", "unidade_id": str(uid)},
+            files={"file": ("tpl.png", io.BytesIO(b"winner"), "image/png")},
+            headers=_DESKTOP)
+        assert r1.status_code == 200
+        r2 = client.post(
+            "/admin/kanban-templates",
+            data={"nome": "corte esposende", "unidade_id": str(uid)},
+            files={"file": ("tpl.png", io.BytesIO(b"loser"), "image/png")},
+            headers=_DESKTOP)
+        assert r2.status_code == 409
+        img = env["tmp"] / db.get_kanban_template(r1.json()["id"])["image_path"]
+        assert img.read_bytes() == b"winner"
+        leftovers = [p for p in img.parent.iterdir() if p.name.startswith(".up_")]
+        assert leftovers == []  # sem temps órfãos
+
+    def test_upload_too_large_413_no_leftover(self, env, client, monkeypatch):
+        monkeypatch.setattr(main, "_MAX_UPLOAD_BYTES", 4)
+        uid = db.create_unidade("Esposende")
+        r = client.post(
+            "/admin/kanban-templates",
+            data={"nome": "x", "unidade_id": str(uid)},
+            files={"file": ("t.png", io.BytesIO(b"x" * 1024), "image/png")},
+            headers=_DESKTOP)
+        assert r.status_code == 413
+        img_dir = env["tmp"] / "template_images"
+        assert list(img_dir.iterdir()) == []  # nem canónico nem temp .up_*
+        assert db.list_kanban_templates() == []
+        assert env["enqueued"] == []
 
     def test_bad_extension_422(self, env, client):
         uid = db.create_unidade("Esposende")
@@ -134,6 +170,53 @@ class TestDiscoveryProcessing:
         assert body["status"] == "analisado"
         assert body["spec"]["row_fields"] == ["of", "modelo", "qtd"]
 
+    def test_process_discovery_exception_sets_error(self, env, client, monkeypatch):
+        # R258 — caminho except (run_discovery a LEVANTAR, não parse_ok=False):
+        # o template nunca pode ficar preso em 'a_analisar'.
+        uid, r = _create(client)
+        tid = r.json()["id"]
+
+        def _boom(p):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(main.ocr_runner, "run_discovery", _boom)
+        main._process_discovery(tid)
+        tpl = db.get_kanban_template(tid)
+        assert tpl["status"] == "analisado"
+        disc = json.loads(tpl["discovery_json"])
+        assert disc["parse_ok"] is False
+        assert "RuntimeError" in disc["error"]
+
+    def test_discovery_failure_preserves_stub_row_fields(self, env, client, monkeypatch):
+        # R258 — com parse_ok=False, o worker preserva o que o humano já
+        # tiver posto no stub (main._process_discovery :257-260).
+        uid, r = _create(client)
+        tid = r.json()["id"]
+        db.update_kanban_template_spec(tid, json.dumps({
+            "name": r.json()["name"], "row_fields": ["of"],
+            "setor_aliases": ["CORTE ESPOSENDE"]}))
+        monkeypatch.setattr(main.ocr_runner, "run_discovery",
+                            lambda p: {"parse_ok": False, "title": "",
+                                       "header": [], "columns": [],
+                                       "footer": [], "raw": ""})
+        main._process_discovery(tid)
+        spec = json.loads(db.get_kanban_template(tid)["spec_json"])
+        assert spec["row_fields"] == ["of"]
+        assert spec["setor_aliases"] == ["CORTE ESPOSENDE"]
+
+    def test_status_returns_real_queue_position(self, env, client, monkeypatch):
+        # R258 — o wizard mostrava queue_size (total) sob "posição na fila".
+        monkeypatch.setattr(ocr_queue, "_ocr_queue", queue.Queue())
+        uid, r = _create(client)
+        tid = r.json()["id"]
+        ocr_queue._ocr_queue.put(("sheet", 1))
+        ocr_queue._ocr_queue.put(("discovery", tid))
+        s = client.get(f"/admin/kanban-templates/{tid}/status", headers=_DESKTOP)
+        assert s.json()["queue_position"] == 2
+        monkeypatch.setattr(ocr_queue, "_ocr_queue", queue.Queue())
+        s = client.get(f"/admin/kanban-templates/{tid}/status", headers=_DESKTOP)
+        assert s.json()["queue_position"] is None  # em processamento/concluído
+
 
 class TestSpecAndActivate:
     def _analisado(self, client, monkeypatch):
@@ -157,6 +240,56 @@ class TestSpecAndActivate:
         t, reason = reg.detect_template_with_reason("CORTE ESPOSENDE")
         assert t.name == name and reason == "exact_alias"
         assert template_store.unidade_for_template(name) == uid
+
+    def test_spec_409_while_a_analisar(self, env, client, monkeypatch):
+        # R258 — gravar spec com a análise ainda na fila seria sobreposto
+        # pelo worker (só row_fields do stub sobrevivem, e só com
+        # parse_ok=False).
+        uid, r = _create(client)
+        tid = r.json()["id"]
+        spec = {"row_fields": ["of"], "setor_aliases": ["CORTE ESPOSENDE"]}
+        r1 = client.post(f"/admin/kanban-templates/{tid}/spec",
+                         json={"spec": spec}, headers=_DESKTOP)
+        assert r1.status_code == 409
+        monkeypatch.setattr(main.ocr_runner, "run_discovery", lambda p: dict(_DISC))
+        main._process_discovery(tid)
+        r2 = client.post(f"/admin/kanban-templates/{tid}/spec",
+                         json={"spec": spec}, headers=_DESKTOP)
+        assert r2.status_code == 200, r2.text
+
+    def test_spec_save_on_active_template_reloads_registry(self, env, client, monkeypatch):
+        # R258 — edição a quente de um template ativo (main :3097-3098):
+        # o alias novo tem de ficar imediatamente detetável.
+        uid, tid = self._analisado(client, monkeypatch)
+        spec = json.loads(db.get_kanban_template(tid)["spec_json"])
+        spec["setor_aliases"] = ["CORTE ESPOSENDE"]
+        client.post(f"/admin/kanban-templates/{tid}/spec",
+                    json={"spec": spec}, headers=_DESKTOP)
+        client.post(f"/admin/kanban-templates/{tid}/activate", headers=_DESKTOP)
+        spec["setor_aliases"] = ["CORTE ESPOSENDE", "CORTE NOVO"]
+        r = client.post(f"/admin/kanban-templates/{tid}/spec",
+                        json={"spec": spec}, headers=_DESKTOP)
+        assert r.status_code == 200, r.text
+        t, reason = reg.detect_template_with_reason("CORTE NOVO")
+        assert t is not None and t.name == f"u{uid}_corte_esposende"
+
+    def test_admin_tab_shows_setor_of_registered(self, env, client, monkeypatch):
+        # R258 — inventário por setor: a tabela dos registados mostra o
+        # 1º alias do spec; um stub a_analisar (sem aliases) mostra "—".
+        uid, r = _create(client)
+        page = client.get("/admin/kanbans", headers=_DESKTOP)
+        assert "—" in page.text
+        tid = r.json()["id"]
+        monkeypatch.setattr(main.ocr_runner, "run_discovery", lambda p: dict(_DISC))
+        main._process_discovery(tid)
+        spec = json.loads(db.get_kanban_template(tid)["spec_json"])
+        spec["setor_aliases"] = ["CORTE ESPOSENDE"]
+        rs = client.post(f"/admin/kanban-templates/{tid}/spec",
+                         json={"spec": spec}, headers=_DESKTOP)
+        assert rs.status_code == 200, rs.text
+        page = client.get("/admin/kanbans", headers=_DESKTOP)
+        assert page.status_code == 200
+        assert "CORTE ESPOSENDE" in page.text
 
     def test_spec_exact_alias_conflict_422(self, env, client, monkeypatch):
         _, tid = self._analisado(client, monkeypatch)
@@ -200,6 +333,16 @@ class TestDelete:
         assert d.status_code == 200
         assert db.get_kanban_template(tid) is None
 
+    def test_delete_removes_image_file(self, env, client):
+        # R258 — o delete tem de apagar também o ficheiro em template_images/
+        uid, r = _create(client)
+        tid = r.json()["id"]
+        img = env["tmp"] / db.get_kanban_template(tid)["image_path"]
+        assert img.exists()
+        d = client.post(f"/admin/kanban-templates/{tid}/delete", headers=_DESKTOP)
+        assert d.status_code == 200
+        assert not img.exists()
+
     def test_delete_with_sheets_409(self, env, client):
         uid, r = _create(client)
         tid = r.json()["id"]
@@ -212,6 +355,23 @@ class TestDelete:
         d = client.post(f"/admin/kanban-templates/{tid}/delete", headers=_DESKTOP)
         assert d.status_code == 409
         assert db.get_kanban_template(tid) is not None
+
+
+class TestStartupRecovery:
+    def test_startup_reenqueues_orphan_discoveries(self, env, monkeypatch):
+        # R258 — processo morto a meio da análise: o template fica
+        # 'a_analisar' e o startup tem de o repor na fila (main :306-313).
+        uid = db.create_unidade("Esposende")
+        tid = db.insert_kanban_template(
+            f"u{uid}_orfao", uid, "{}", status="a_analisar")
+        db.insert_kanban_template(
+            f"u{uid}_feito", uid, "{}", status="analisado")
+        monkeypatch.setattr(main.ocr_queue, "start_worker", lambda *a, **k: None)
+        monkeypatch.setattr(main.ocr_queue, "recover_pending", lambda *a, **k: 0)
+        monkeypatch.setattr(main.ref_importer, "start_background_importer",
+                            lambda: False)
+        main._startup()
+        assert env["enqueued"] == [tid]  # só o órfão, não o 'analisado'
 
 
 class TestRefsLookup:

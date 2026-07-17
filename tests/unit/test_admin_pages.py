@@ -78,6 +78,18 @@ class TestAdminSkeleton:
         assert r.status_code == 200
         assert "Kanbans registados" in r.text
 
+    def test_tab_kanbans_lists_builtin_inventory(self, tmp_db, client):
+        # R258 — inventário por setor: os modelos de fábrica aparecem na
+        # tab (antes eram só um número), com setor + fase + badges.
+        r = client.get("/admin/kanbans", headers=_DESKTOP)
+        assert r.status_code == 200
+        assert "Modelos de fábrica" in r.text
+        assert "BOBINE-FORMATO" in r.text      # alias canónico do default
+        assert "GUILHOTINA 6M" in r.text       # setor de corte
+        assert "bobine_formato" in r.text      # nome técnico
+        assert ">verso<" in r.text             # badge dos templates verso
+        assert ">TPL102<" in r.text            # badge dos Gemini
+
     def test_tab_kpis_renders(self, tmp_db, client):
         r = client.get("/admin/kpis", headers=_DESKTOP)
         assert r.status_code == 200

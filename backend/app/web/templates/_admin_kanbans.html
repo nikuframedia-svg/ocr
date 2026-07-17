@@ -26,12 +26,13 @@
       {% else %}
       <table class="tbl">
         <thead>
-          <tr><th>Nome</th><th>Unidade</th><th>Estado</th><th>Criado</th><th></th></tr>
+          <tr><th>Nome</th><th>Setor/Máquina</th><th>Unidade</th><th>Estado</th><th>Criado</th><th></th></tr>
         </thead>
         <tbody>
           {% for t in kanban_templates %}
           <tr>
             <td style="font-family:var(--font-mono); font-size:12px;">{{ t.name }}</td>
+            <td>{{ t.setor }}</td>
             <td>{{ t.unidade_nome }}</td>
             <td>
               {% if t.status == 'ativo' %}
@@ -67,6 +68,40 @@
         </tbody>
       </table>
       {% endif %}
+    </div>
+  </div>
+
+  {# ---- Modelos de fábrica (builtins, R258) — inventário por setor ---- #}
+  <div class="card" style="margin-bottom:14px;">
+    <div class="card-h">
+      <div class="card-h-title">Modelos de fábrica (Trofa)</div>
+      <div class="card-h-sub">
+        os {{ n_builtin_templates }} kanbans definidos em código — que setores
+        já têm modelo (read-only; novos setores registam-se abaixo)
+      </div>
+    </div>
+    <div class="card-b">
+      <table class="tbl">
+        <thead>
+          <tr><th>Setor/Máquina</th><th>Fase</th><th>Nome técnico</th>
+              <th>Campos</th><th>Cross</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for b in builtin_templates %}
+          <tr>
+            <td>{{ b.setor }}</td>
+            <td>{{ b.phase }}</td>
+            <td style="font-family:var(--font-mono); font-size:12px;">{{ b.name }}</td>
+            <td class="muted tiny">{{ b.n_row }}</td>
+            <td class="muted tiny">{{ b.n_cross }}</td>
+            <td style="text-align:right; white-space:nowrap;">
+              {% if b.is_verso %}<span class="pill neutral">verso</span>{% endif %}
+              {% if b.is_gemini %}<span class="pill info">TPL102</span>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
   </div>
 
@@ -293,6 +328,9 @@ function kanbanWizard() {
     busy: false,
     flashErr: '',
     _poll: null,
+    _pollFails: 0,      // R258 — falhas consecutivas de rede/5xx no polling
+    _pollStall: 0,      // R258 — ticks seguidos sem progresso na fila
+    _lastPos: undefined,
     knownFields: {{ known_row_fields | tojson }},
     crossableFields: {{ crossable_fields | tojson }},
 
@@ -329,6 +367,7 @@ function kanbanWizard() {
     },
     startPolling() {
       this.stopPolling();
+      this._pollFails = 0; this._pollStall = 0; this._lastPos = undefined;
       this._poll = setInterval(() => this.checkStatus(), 3000);
       this.checkStatus();
     },
@@ -336,15 +375,46 @@ function kanbanWizard() {
     async checkStatus() {
       try {
         const r = await fetch('/admin/kanban-templates/' + this.templateId + '/status');
-        if (!r.ok) return;
+        if (r.status === 404) {
+          // R258 — apagado noutra aba durante a análise: antes o !r.ok era
+          // ignorado e o wizard girava em "A analisar…" para sempre.
+          this.stopPolling();
+          this.flashErr = 'Este registo já não existe (foi apagado). Recomeça o registo.';
+          this.step = 'upload';
+          return;
+        }
+        if (!r.ok) { this._bumpPollFail(); return; }
+        this._pollFails = 0;
         const data = await r.json();
-        this.queuePosition = data.queue_size;
+        // R258 — posição REAL na fila (null = já em processamento); antes
+        // mostrava queue_size (total da fila) sob o rótulo "posição".
+        this.queuePosition = data.queue_position == null
+            ? 'em processamento…' : data.queue_position;
+        if (data.queue_position !== this._lastPos) {
+          this._lastPos = data.queue_position; this._pollStall = 0;
+        } else if (++this._pollStall >= 240) {
+          // R258 — 240×3s = 12 min SEM progresso (> TIMEOUT_SEC=600s de um
+          // pedido Ollama): worker provavelmente parado. Uma fila funda mas
+          // viva nunca dispara (a posição decresce a cada ~25 s).
+          this.stopPolling();
+          this.flashErr = 'A análise está a demorar mais do que o esperado. ' +
+            'O registo não se perdeu: fica na tabela acima — usa "Retomar registo" ' +
+            'mais tarde; um reinício do servidor volta a pô-lo na fila automaticamente.';
+          return;
+        }
         if (data.status !== 'a_analisar') {
           this.stopPolling();
           this.loadFromStatus(data);
           this.step = 'campos';
         }
-      } catch (e) { /* rede — tenta no próximo tick */ }
+      } catch (e) { this._bumpPollFail(); }  // rede — tolera transitórios
+    },
+    _bumpPollFail() {
+      if (++this._pollFails >= 5) {  // ~15 s de falhas seguidas
+        this.stopPolling();
+        this.flashErr = 'Sem resposta do servidor. O registo fica na tabela — ' +
+          'usa "Retomar registo" quando a ligação voltar.';
+      }
     },
     loadFromStatus(data) {
       this.templateId = data.id;

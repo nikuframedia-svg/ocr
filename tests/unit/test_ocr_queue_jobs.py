@@ -34,6 +34,26 @@ class TestTypedJobs:
         assert q.queue_size() == 3
 
 
+class TestPositionOf:
+    """R258 — posição real na fila (o wizard mostrava queue_size)."""
+
+    def test_position_of_returns_1based(self, fresh_queue):
+        q.enqueue(1)
+        q.enqueue_discovery(7)
+        q.enqueue(3)
+        assert q.position_of("discovery", 7) == 2
+        assert q.position_of("sheet", 3) == 3
+        assert q.position_of("sheet", 1) == 1
+
+    def test_position_of_missing_is_none(self, fresh_queue):
+        assert q.position_of("discovery", 7) is None  # fila vazia
+        q.enqueue(1)
+        q._ocr_queue.put(2)  # item legado (int puro) não faz match nem crasha
+        assert q.position_of("discovery", 1) is None  # kind diferente
+        assert q.position_of("sheet", 2) is None  # legado ≠ tuplo
+        assert q.position_of("sheet", 1) == 1
+
+
 class TestWorkerDispatch:
     def test_dispatch_by_kind(self, fresh_queue):
         processed: list[int] = []
