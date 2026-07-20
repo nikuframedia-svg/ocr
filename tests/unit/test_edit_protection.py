@@ -80,6 +80,62 @@ class TestHumanEditedPaths:
         assert main._human_edited_paths(sid2) == frozenset({"rows[1].cliente"})
 
 
+class TestHighWaterGuard:
+    """R260 — a marca de água (max_edit_id + human_edits_after) protege uma
+    correção feita DURANTE o cross-check da reversão por uma thread anterior
+    com snapshot `protected` desactualizado. Reproduz o sheet 436: OF
+    corrigido 261857→262005 e revertido no mesmo segundo por 262005→261857."""
+
+    def test_max_edit_id_empty_and_after_insert(self, tmp_db):
+        sid = _mk_sheet()
+        assert db.max_edit_id(sid) == 0
+        _insert_edit(sid, "rows[0].of", "262005", "human")
+        assert db.max_edit_id(sid) > 0
+
+    def test_human_edits_after_filters_by_id_and_source(self, tmp_db):
+        sid = _mk_sheet()
+        _insert_edit(sid, "rows[0].of", "OLD", "human")
+        seq = db.max_edit_id(sid)                      # marca de água
+        _insert_edit(sid, "rows[0].of", "262005", "human")   # correção posterior
+        _insert_edit(sid, "rows[1].cliente", "X", "system")  # snap posterior (ignorado)
+        after = db.human_edits_after(sid, seq)
+        assert after == frozenset({"rows[0].of"})     # só a humana com id > seq
+        assert db.human_edits_after(sid, db.max_edit_id(sid)) == frozenset()
+
+    def test_guard_protects_edit_made_during_cross_check(self, tmp_db):
+        # A thread lê edit_seq ANTES da correção; o gate protected recalculado
+        # com human_edits_after(edit_seq) tem de conter a correção → não reverte.
+        sid = db.insert_sheet("test.jpg")
+        sheet_data = {"template_name": "bobine_formato", "header": {}, "footer": {},
+                      "rows": [{"of": "261857"}]}
+        db.update_extraction(sid, sheet_data, {}, sheet_data)
+        edit_seq = db.max_edit_id(sid)                # thread começa aqui
+        # operador corrige a OF DURANTE o cross-check (id > edit_seq)
+        db.apply_edit(sid, "rows[0].of", "262005")
+        protected = (main._human_edited_paths(sid)
+                     | db.human_edits_after(sid, edit_seq))
+        assert "rows[0].of" in protected
+        # a célula do plano (canónico antigo) seria escrita, mas é bloqueada
+        cell = {"engine_status": "very_different", "value": "261857",
+                "source": "plan", "ref_source": "plan"}
+        assert main._maybe_apply_snap(sid, "rows[0].of", cell, protected) is False
+        assert db.get_sheet(sid)["sheet_data"]["rows"][0]["of"] == "262005"
+
+    def test_human_edited_paths_fails_closed_on_db_error(self, tmp_db, monkeypatch):
+        # R260 — um erro de BD (ex.: 'database is locked' sob a re-validação em
+        # massa) NÃO pode devolver frozenset() e desligar a proteção em
+        # silêncio. Tem de propagar para o chamador saltar a escrita.
+        sid = _mk_sheet()
+        _insert_edit(sid, "rows[0].of", "262005", "human")
+
+        def boom(*a, **k):
+            raise RuntimeError("database is locked")
+
+        monkeypatch.setattr(db, "conn", boom)
+        with pytest.raises(Exception):
+            main._human_edited_paths(sid)
+
+
 class TestRebuildFromRaw:
     def test_rebuild_drops_system_snaps_and_keeps_human_fields(self, tmp_db):
         sid = db.insert_sheet("test.jpg")

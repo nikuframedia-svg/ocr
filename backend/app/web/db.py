@@ -1481,6 +1481,36 @@ def apply_edits_batch(
     return applied
 
 
+def max_edit_id(sheet_id: int) -> int:
+    """R260 — id da última linha em ``edits`` para a folha (0 se não houver).
+
+    Serve de "marca de água" (high-water) para o auto-overwrite do cross-check:
+    o `result` do cross reflecte o `sheet_data` deste instante; qualquer edição
+    humana com id superior a esta marca foi feita DEPOIS de o cross começar e
+    não pode ser revertida (fecha a corrida entre threads de cross-check e
+    correções concorrentes do operador)."""
+    with conn() as c:
+        row = c.execute(
+            "SELECT MAX(id) AS m FROM edits WHERE sheet_id = ?", (sheet_id,)
+        ).fetchone()
+    return int(row["m"]) if row and row["m"] is not None else 0
+
+
+def human_edits_after(sheet_id: int, seq: int) -> frozenset[str]:
+    """R260 — field_paths com uma edição `source='human'` de id > `seq`.
+
+    Correções feitas DEPOIS do instante `seq` (tipicamente o `max_edit_id`
+    capturado no arranque do cross-check). O auto-overwrite salta estes
+    paths mesmo que o snapshot `protected` do cross já esteja desactualizado."""
+    with conn() as c:
+        rows = c.execute(
+            "SELECT DISTINCT field_path FROM edits "
+            "WHERE sheet_id = ? AND source = 'human' AND id > ?",
+            (sheet_id, int(seq)),
+        ).fetchall()
+    return frozenset(str(r["field_path"]) for r in rows)
+
+
 def add_row(sheet_id: int, *, source: str = "human") -> int:
     """R136 — append an empty row to ``sheet_data["rows"]``. Returns the new
     row index.

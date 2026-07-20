@@ -631,15 +631,18 @@ def _human_edited_paths(sheet_id: int) -> frozenset[str]:
     "escrevo mas não guarda". Última edição por path = MAX(id) (itera por
     id ASC, o último source ganha).
     """
-    try:
-        with db.conn() as c:
-            rows = c.execute(
-                "SELECT field_path, source FROM edits "
-                "WHERE sheet_id = ? ORDER BY id ASC",
-                (sheet_id,),
-            ).fetchall()
-    except Exception:
-        return frozenset()
+    # R260 — FAIL-CLOSED: NÃO devolver frozenset() vazio numa exceção. Um erro
+    # de BD (ex.: 'database is locked' sob contenção da re-validação em massa)
+    # engolido aqui desligaria SILENCIOSAMENTE toda a proteção do run e o
+    # auto-overwrite reverteria TODAS as edições humanas da folha. Deixar
+    # propagar: os chamadores tratam a falha saltando a escrita (ver
+    # _run_and_store_cross_check / _apply_lightweight_edit_snaps).
+    with db.conn() as c:
+        rows = c.execute(
+            "SELECT field_path, source FROM edits "
+            "WHERE sheet_id = ? ORDER BY id ASC",
+            (sheet_id,),
+        ).fetchall()
     last: dict[str, str] = {}
     for r in rows:
         last[r["field_path"]] = r["source"]
@@ -1034,6 +1037,12 @@ def _run_and_store_cross_check(
                 sheet = refreshed
         _ct["rebuild_ms"] = int((time.perf_counter() - _t0) * 1000)
 
+    # R260 — marca de água ANTES de pontuar: o `result` reflecte o sheet_data
+    # deste instante. Qualquer edição humana com id superior foi feita durante
+    # o cross-check (thread concorrente) e não pode ser revertida — fecha a
+    # corrida em que uma thread de uma edição anterior escrevia por cima de
+    # uma correção do operador gravada entretanto (mesmo segundo, id seguinte).
+    edit_seq = db.max_edit_id(sheet_id)
     _t0 = time.perf_counter()
     result = cross_check_sheet(
         sheet["sheet_data"], sheet.get("dq_audit"), refs, collect_trace=_prof,
@@ -1049,12 +1058,27 @@ def _run_and_store_cross_check(
     # R133 — campos com última edição humana são autoritativos: o
     # auto-overwrite abaixo salta-os, senão o re-cross-check disparado por
     # `sheet_edit` reverte a correcção do operador ("escrevo mas não guarda").
-    protected = _human_edited_paths(sheet_id)
+    # R260 — inclui também as correções feitas DURANTE este cross-check
+    # (id > edit_seq), que o snapshot last-source pode ainda não reflectir.
+    # FAIL-CLOSED: se a proteção não puder ser determinada (erro de BD), NUNCA
+    # auto-substituir — senão o run reverteria as edições humanas da folha.
+    try:
+        protected = (_human_edited_paths(sheet_id)
+                     | db.human_edits_after(sheet_id, edit_seq))
+        protected_ok = True
+    except Exception:
+        protected = frozenset()
+        protected_ok = False
+        print(f"[cross-check] proteção indeterminada em sheet {sheet_id}; "
+              f"auto-overwrite saltado: {traceback.format_exc()}",
+              file=sys.stderr, flush=True)
     # R134 — folhas validadas são IMUTÁVEIS (audit trail EN 1090 / ISO 9001):
     # nunca auto-substituir nada. O bump do ENGINE_VERSION faz `_build_cc_maps`
     # regenerar o cross-check de folhas antigas ao abrir — para validated isso
     # só pode refrescar o JSON de display, nunca tocar no sheet_data.
-    if sheet.get("status") == "validated":
+    if sheet.get("status") == "validated" or not protected_ok:
+        # validada (imutável) OU proteção indeterminada (fail-closed): sem
+        # auto-substituição — só se refresca o JSON de display.
         n_overwritten = n_op_snapped = n_codmaq_filled = 0
     else:
         _t0 = time.perf_counter()
@@ -1483,7 +1507,11 @@ def _apply_lightweight_edit_snaps(sheet_id: int, field_path: str, sheet: dict) -
         return sheet
     if not refs.get("available"):
         return sheet
-    protected = _human_edited_paths(sheet_id)
+    # R260 — fail-closed: sem proteção determinada, não fazer snaps de header.
+    try:
+        protected = _human_edited_paths(sheet_id)
+    except Exception:
+        return sheet
     n_applied = 0
     if field_path in ("header.operador", "header.n_operador"):
         n_applied += _apply_operador_snap(sheet_id, sheet, refs, protected)
@@ -3705,18 +3733,37 @@ async def sheet_apply_of_entry(sheet_id: int, request: Request) -> JSONResponse:
         "ltopo": e.get("ltopo"),
         "esp": e.get("esp"),
     }
+    # R260 — nunca clobrar uma correção manual da mesma linha. A varinha
+    # escrevia todos os campos com source='system', por cima de valores que
+    # o operador já tinha corrigido à mão (of/ov/cliente/modelo), tornando-os
+    # last-source=system → desprotegidos e revertidos ao plano na validação.
+    # Fail-closed: sem proteção determinada, não aplica (evita clobrar).
+    try:
+        protected = _human_edited_paths(sheet_id)
+    except Exception:
+        raise HTTPException(503, "não foi possível verificar edições manuais — tenta novamente")
     edits_to_apply = []
     skipped = []
+    kept = []
     for field, value in fields_to_set.items():
         if value is None or value == "":
             skipped.append(field)
             continue
         path = f"rows[{row_index}].{field}"
+        if path in protected:
+            # Correção manual do operador é autoritativa — preserva-a.
+            kept.append(field)
+            continue
         edits_to_apply.append((field, path, str(value)))
     applied = []
     if edits_to_apply:
         try:
             batch = [(path, value) for _field, path, value in edits_to_apply]
+            # R260 — mantém source='system' (valores derivados do plano, não
+            # digitados pelo operador): marcá-los 'human' poluía o re-fit do
+            # cross e as métricas de esforço (learning/cross_refit.py:119,
+            # metrics.py:27 filtram source='human'). O que corrige o bug é o
+            # salto dos campos `protected` acima, não a mudança de source.
             db.apply_edits_batch(sheet_id, batch, source="system")
             applied = [
                 {"field": field, "value": value}
@@ -3740,6 +3787,7 @@ async def sheet_apply_of_entry(sheet_id: int, request: Request) -> JSONResponse:
         "n_applied": len(applied),
         "applied": applied,
         "skipped": skipped,
+        "kept": kept,  # R260 — campos preservados por já terem correção manual
         "of_used": of_norm,
     })
 

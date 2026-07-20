@@ -236,6 +236,52 @@ class TestEndpoints:
         assert row["comp_mm"] == "5000"
         assert queued == [((sid,), {"profile_trigger": "apply_of_entry"})]
 
+    def test_apply_of_entry_preserves_human_edited_field(
+        self, tmp_db, monkeypatch, client
+    ):
+        """R260 — a varinha nunca clobra uma correção manual da mesma linha.
+        O operador corrige o modelo à mão; aplicar uma entrada do plano com
+        modelo diferente preserva o valor humano e aplica os restantes."""
+        sid = _seed([{"of": "", "cliente": "", "modelo": ""}])
+        # Correção manual do operador (source='human' por defeito).
+        db.apply_edit(sid, "rows[0].modelo", "CGC2E10D_ESPECIAL")
+        refs = {
+            "of_to_entries": {
+                "262892": [{
+                    "cliente": "MTG", "ov": "450001", "designacao": "CGC2E10D",
+                    "comp": 5000, "lbase": 120, "ltopo": 100, "esp": 3,
+                }]
+            }
+        }
+
+        class _Watcher:
+            def get_refs(self):
+                return refs
+
+        monkeypatch.setattr(main, "get_watcher", lambda: _Watcher())
+        monkeypatch.setattr(main, "_start_sheet_cross_check", lambda *a, **k: None)
+
+        r = client.post(
+            f"/sheet/{sid}/apply-of-entry",
+            json={"row_index": 0, "of": "262892", "entry_idx": 0},
+            headers=_DESKTOP,
+        )
+
+        assert r.status_code == 200
+        body = r.json()
+        assert "modelo" in body["kept"]           # correção manual preservada
+        assert body["n_applied"] == 7             # os outros 7 aplicados
+        row = db.get_sheet(sid)["sheet_data"]["rows"][0]
+        assert row["modelo"] == "CGC2E10D_ESPECIAL"   # NÃO revertido ao plano
+        assert row["of"] == "262892"
+        assert row["cliente"] == "MTG"
+        # R260 — a correção manual continua protegida; os campos aplicados pela
+        # varinha são source='system' (valores do plano, não digitados) para
+        # não poluir as métricas/learning que filtram source='human'.
+        prot = main._human_edited_paths(sid)
+        assert "rows[0].modelo" in prot        # correção manual preservada
+        assert "rows[0].of" not in prot        # aplicado pela varinha = system
+
     def test_remove_row_out_of_range_400(self, tmp_db, isolate, client):
         sid = _seed([{"of": "111"}])
         r = client.post(f"/sheet/{sid}/remove-row", json={"row_index": 9}, headers=_DESKTOP)
