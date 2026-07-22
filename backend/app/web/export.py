@@ -44,6 +44,8 @@ ROW_COLUMNS = [
     ("esp", "ESP"),
     ("lbase", "LBASE"),
     ("ltopo", "LTOPO"),
+    # R261 — sucata (rev00) por linha; já vinha no SELECT pr.*, faltava a coluna.
+    ("sucata", "SUCATA"),
 ]
 
 
@@ -336,7 +338,7 @@ def _write_day_sheet(wb: openpyxl.Workbook, day_iso: str, day_rows: list[dict]) 
         row_idx += 1  # blank line between operators
 
     # Column widths — generous defaults for Inter font
-    widths = [6, 14, 11, 10, 14, 7, 10, 10, 12, 10, 8, 9, 9]
+    widths = [6, 14, 11, 10, 14, 7, 10, 10, 12, 10, 8, 9, 9, 9]
     for ci, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(ci)].width = w
 
@@ -438,6 +440,9 @@ CPIS_COLUMNS: tuple[tuple[str, str], ...] = (
     ("peso_produzido_t", "Peso Produzido (t)"),
     ("desperdicio_t", "Desperdício (t)"),
     ("desperdicio_pct", "% Desperdício"),
+    # R261 — Sucata (rev00) no fim para não deslocar as colunas do template
+    # original do importador CPIS.
+    ("sucata", "Sucata"),
 )
 
 
@@ -709,6 +714,8 @@ def _build_cpis_row(row: dict, refs: dict | None = None) -> dict:
             round(weights.desperdicio_pct, 2)
             if weights.desperdicio_pct is not None else None
         ),
+        # R261 — sucata (rev00), inteiro por linha.
+        "sucata": _to_int(row.get("sucata")),
     }
 
 
@@ -767,13 +774,14 @@ def build_cpis_workbook(
                 cell.number_format = "0.00"
             elif key == "esp_mm":
                 cell.number_format = "0.0"
-            elif key == "n_chapas":
+            elif key in ("n_chapas", "sucata"):
                 cell.number_format = "0"       # integer
 
     # Column widths — one entry per CPIS column.
     widths = [
         12, 16, 24, 24, 12, 10, 10, 20, 24, 8, 12, 10,
         14, 10, 10, 16, 14, 12, 10, 10, 16, 16, 14, 12,
+        10,
     ]
     for ci, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(ci)].width = w

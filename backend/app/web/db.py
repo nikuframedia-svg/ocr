@@ -1187,8 +1187,13 @@ def _sync_production_rows(c: sqlite3.Connection, sheet_id: int, sheet_data: dict
     for i, row in enumerate(rows):
         if not isinstance(row, dict):
             continue
-        # Skip totally empty rows (R117 — usa fields do template)
-        if not any((row.get(k) or "").strip() for k in empty_check_fields):
+        # Skip totally empty rows (R117 — usa fields do template).
+        # R261 — sucata conta como conteúdo: uma linha só-com-sucata (rev00)
+        # tem de chegar a production_rows/exports. NOTA: sucata fica fora de
+        # cross_check_fields (informativo, sem ref no plano/SAP).
+        if not any(
+            (row.get(k) or "").strip() for k in (*empty_check_fields, "sucata")
+        ):
             continue
         c.execute(
             """INSERT INTO production_rows

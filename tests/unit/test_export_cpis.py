@@ -43,6 +43,8 @@ EXPECTED_HEADER_LABELS = [
     "Peso Produzido (t)",
     "Desperdício (t)",
     "% Desperdício",
+    # R261 — Sucata (rev00) acrescentada no fim do schema CPIS.
+    "Sucata",
 ]
 
 
@@ -136,6 +138,7 @@ def test_build_cpis_row_bobine_formato_with_waste() -> None:
         "ltopo": 150,
         "esp": 26.0,
         "coni": "10",
+        "sucata": "3",
     }
     out = _build_cpis_row(raw, refs=_refs())
 
@@ -158,6 +161,20 @@ def test_build_cpis_row_bobine_formato_with_waste() -> None:
     assert out["peso_produzido_t"] == 0.089
     assert out["desperdicio_t"] == 0.064
     assert out["desperdicio_pct"] is not None
+    assert out["sucata"] == 3  # R261
+
+
+def test_build_cpis_row_sucata_empty_is_none() -> None:
+    """Linhas sem sucata exportam célula vazia (None), não 0."""
+    raw = {
+        "sheet_iso_date": "2026-04-09",
+        "n_operador": "1",
+        "setor_maquina": "BOBINE-FORMATO",
+        "operador": "X",
+        "qtd": 5,
+    }
+    out = _build_cpis_row(raw)
+    assert out["sucata"] is None
 
 
 def test_build_cpis_row_header_cod_maquina_wins_over_derivation() -> None:

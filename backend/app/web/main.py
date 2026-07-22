@@ -1588,6 +1588,145 @@ def _maybe_record_operador_alias(sheet_id: int) -> None:
     )
 
 
+def _render_cell_html(
+    sheet: dict,
+    fp: str,
+    value: object,
+    *,
+    edited: bool,
+    oob: bool,
+    cc_maps: tuple | None = None,
+) -> str:
+    """Render a single _cell.html fragment. ``oob=True`` adds hx-swap-oob so
+    HTMX updates that cell by id without it being the request's swap target.
+
+    R261 — extraído do closure de sheet_edit para reutilização pelo
+    apply-lote-medidas. ``cc_maps`` (resultado de _build_cc_maps) pode ser
+    partilhado entre várias células da mesma resposta.
+    """
+    sheet_id = sheet["id"]
+    if cc_maps is None:
+        cc_maps = _build_cc_maps(sheet_id, allow_regen=False)
+    (cc_status_by_path, cc_ref_by_path, cc_ref_title_by_path,
+     cc_suspended_by_path, cc_snapped_by_path,
+     cc_obra_concluida_by_path) = cc_maps
+    cells_by_path = (sheet.get("dq_audit") or {}).get("cells", {})
+    return templates.env.get_template("_cell.html").render(
+        sheet_id=sheet_id,
+        field_path=fp,
+        value=value,
+        audit=cells_by_path.get(fp, {}),
+        edited=edited,
+        cc_status_by_path=cc_status_by_path,
+        cc_ref_by_path=cc_ref_by_path,
+        cc_ref_title_by_path=cc_ref_title_by_path,
+        cc_suspended_by_path=cc_suspended_by_path,
+        cc_snapped_by_path=cc_snapped_by_path,
+        cc_obra_concluida_by_path=cc_obra_concluida_by_path,
+        sheet_status=sheet.get("status"),
+        oob=oob,
+    )
+
+
+def _lote_suggestion(refs: dict, row: dict, row_fields: tuple) -> dict | None:
+    """R261 — contexto do banner de cross-check lote↔StockSAP em tempo real.
+
+    Sugestão apenas (nunca escreve): compara as medidas da linha
+    (larg_mm/esp) com a entry do lote no StockSAP via os helpers R259 do
+    motor cross. Devolve ``None`` quando não há nada a mostrar (refs
+    indisponíveis ou lote vazio).
+
+    Limitação conhecida: ``lotes_sap_full`` é last-write-wins — para os ~8
+    lotes com múltiplas linhas no StockSAP (ex.: C2217/20 com larguras
+    diferentes) só a última linha do ficheiro conta.
+    """
+    from app.pipeline.scoring_engine import (
+        _format_value,
+        _lote_measures_divergences,
+        _resolve_row_lote,
+    )
+    if not refs or not refs.get("available"):
+        return None
+    if not (refs.get("lotes_sap_full") or {}):
+        return None
+    typed = str(row.get("lote") or "").strip()
+    if not typed:
+        return None
+    canonical, entry, kind = _resolve_row_lote(refs, row)
+    if entry is None:
+        return {"status": "not_found", "typed": typed, "kind": kind}
+    divergences = _lote_measures_divergences(row, entry)
+    # Medidas vazias na folha mas presentes no SAP → sugestão de preenchimento.
+    missing = [
+        f for f, key in (("larg_mm", "larg"), ("esp", "esp"))
+        if f in row_fields
+        and not str(row.get(f) or "").strip()
+        and str(entry.get(key) or "").strip()
+    ]
+    if kind.startswith("h_correction"):
+        status = "h_candidate"
+    elif divergences or missing:
+        status = "diverge"
+    else:
+        status = "match"
+    return {
+        "status": status,
+        "typed": typed,
+        "canonical": canonical,
+        "kind": kind,
+        "sap": {
+            "larg": _format_value("larg_mm", entry.get("larg")),
+            "esp": _format_value("esp", entry.get("esp")),
+            "desc": str(entry.get("desc") or "").strip(),
+            "qtd": entry.get("qtd"),
+        },
+        "folha": {
+            "larg": _format_value("larg_mm", row.get("larg_mm")),
+            "esp": _format_value("esp", row.get("esp")),
+        },
+        "divergences": divergences,
+        "missing": missing,
+    }
+
+
+def _render_lote_suggest(
+    sheet: dict, row_index: int, trigger_field: str, *, oob: bool = True,
+    override: dict | None = None,
+) -> str:
+    """R261 — fragmento do banner lote↔StockSAP (id fixo ``lote-cc-banner``).
+
+    Devolve SEMPRE o div do banner — vazio quando não há nada a dizer — para
+    que qualquer edição de lote/larg_mm/esp limpe uma sugestão obsoleta.
+    ``override`` substitui o contexto calculado (usado pelo apply para os
+    estados "applied"/"stale").
+    """
+    ctx: dict | None = override
+    if ctx is None:
+        tpl_ctx = _template_ctx_for_sheet(sheet)
+        row_fields = tuple(tpl_ctx.get("row_fields") or ())
+        # Gate por capacidade (não por nome): hoje só bobine_formato tem
+        # lote+medidas, mas templates futuros com os mesmos campos herdam.
+        if "lote" in row_fields and ({"larg_mm", "esp"} & set(row_fields)):
+            rows = (sheet.get("sheet_data") or {}).get("rows") or []
+            if 0 <= row_index < len(rows) and isinstance(rows[row_index], dict):
+                try:
+                    refs = get_watcher().get_refs()
+                except Exception:
+                    refs = None
+                ctx = _lote_suggestion(refs or {}, rows[row_index], row_fields)
+        # Edição de medida (direção inversa): só interessa se o lote está
+        # confirmado — avisos de lote (not_found/h_candidate) seriam ruído.
+        if ctx is not None and trigger_field in ("larg_mm", "esp") \
+                and ctx["status"] not in ("match", "diverge"):
+            ctx = None
+    return templates.env.get_template("_lote_suggest.html").render(
+        sheet_id=sheet["id"],
+        row_index=row_index,
+        s=ctx,
+        oob=oob,
+    )
+
+
 @app.post("/sheet/{sheet_id}/edit", response_class=HTMLResponse)
 async def sheet_edit(
     request: Request,
@@ -1642,33 +1781,12 @@ async def sheet_edit(
         real_value = new
     if real_value is None:
         real_value = new
-    cells_by_path = (sheet.get("dq_audit") or {}).get("cells", {})
-    (cc_status_by_path, cc_ref_by_path, cc_ref_title_by_path,
-     cc_suspended_by_path, cc_snapped_by_path,
-     cc_obra_concluida_by_path) = _build_cc_maps(sheet_id, allow_regen=False)
-
-    def _render_cell(fp: str, val: object, *, edited: bool, oob: bool) -> str:
-        """Render a single _cell.html fragment. ``oob=True`` adds
-        hx-swap-oob so HTMX updates that cell by id without it being the
-        request's swap target."""
-        return templates.env.get_template("_cell.html").render(
-            sheet_id=sheet_id,
-            field_path=fp,
-            value=val,
-            audit=cells_by_path.get(fp, {}),
-            edited=edited,
-            cc_status_by_path=cc_status_by_path,
-            cc_ref_by_path=cc_ref_by_path,
-            cc_ref_title_by_path=cc_ref_title_by_path,
-            cc_suspended_by_path=cc_suspended_by_path,
-            cc_snapped_by_path=cc_snapped_by_path,
-            cc_obra_concluida_by_path=cc_obra_concluida_by_path,
-            sheet_status=sheet.get("status"),
-            oob=oob,
-        )
+    cc_maps = _build_cc_maps(sheet_id, allow_regen=False)
 
     # Primary cell — swapped into the edit target (hx-target=#cell-...).
-    parts = [_render_cell(field_path, real_value, edited=(old != real_value), oob=False)]
+    parts = [_render_cell_html(sheet, field_path, real_value,
+                               edited=(old != real_value), oob=False,
+                               cc_maps=cc_maps)]
 
     # R136 — out-of-band swaps. Qualquer célula do CABEÇALHO que tenha mudado
     # como efeito secundário do cross-check (ex: header.operador resolvido a
@@ -1682,7 +1800,19 @@ async def sheet_edit(
         if fp == field_path:
             continue  # já é a célula primária
         if str(header_before.get(f) or "") != str(header_after.get(f) or ""):
-            parts.append(_render_cell(fp, header_after.get(f, ""), edited=True, oob=True))
+            parts.append(_render_cell_html(sheet, fp, header_after.get(f, ""),
+                                           edited=True, oob=True, cc_maps=cc_maps))
+
+    # R261 — cross-check em tempo real lote↔StockSAP (Bobine formato): a
+    # resposta leva um banner OOB com a sugestão. Sugerir apenas — nunca
+    # escrever aqui (lição R260). Nunca partir a edição por causa do banner.
+    m_lote = re.match(r"^rows\[(\d+)\]\.(lote|larg_mm|esp)$", field_path)
+    if m_lote:
+        try:
+            parts.append(_render_lote_suggest(
+                sheet, int(m_lote.group(1)), m_lote.group(2)))
+        except Exception as e:
+            print(f"[lote-suggest] sheet {sheet_id}: {e}", file=sys.stderr)
 
     _start_sheet_cross_check({sheet_id}, profile_trigger="sheet_edit")
     return HTMLResponse("".join(parts))
@@ -3790,6 +3920,103 @@ async def sheet_apply_of_entry(sheet_id: int, request: Request) -> JSONResponse:
         "kept": kept,  # R260 — campos preservados por já terem correção manual
         "of_used": of_norm,
     })
+
+
+@app.post("/sheet/{sheet_id}/apply-lote-medidas", response_class=HTMLResponse)
+async def sheet_apply_lote_medidas(
+    request: Request,
+    sheet_id: int,
+    row_index: int = Form(...),
+    lote: str = Form(...),
+) -> Response:
+    """R261 — aplica o lote canónico + medidas (larg_mm/esp) do StockSAP a
+    uma linha, após clique explícito no banner (_lote_suggest.html).
+
+    Só escreve o que difere/está vazio, sempre recomputado server-side no
+    momento do apply (nunca confia nos valores que o cliente viu). Escreve
+    com source='human': ao contrário da varinha apply-of-entry (R260 — 8
+    campos do plano que o operador nunca inspecionou, source='system'),
+    aqui o clique é confirmação humana de 1-3 valores mostrados no ecrã —
+    ficam protegidos por _human_edited_paths contra o cross em background.
+    Trade-off consciente: estes confirms contam nas métricas de esforço /
+    re-fit (learning filtra source='human'), o que é aceitável por serem
+    decisões reais do revisor.
+    """
+    if _is_mobile_request(request):
+        raise HTTPException(403, "Edição só pode ser feita em desktop")
+    sheet = db.get_sheet(sheet_id)
+    if sheet is None:
+        raise HTTPException(404, f"sheet {sheet_id} not found")
+    if sheet.get("status") == "validated":
+        raise HTTPException(409, "Folha já validada — edits bloqueados")
+    rows = (sheet.get("sheet_data") or {}).get("rows") or []
+    if not (0 <= row_index < len(rows)) or not isinstance(rows[row_index], dict):
+        raise HTTPException(400, "row_index inválido")
+    lote_req = (lote or "").strip().upper()
+    if not lote_req:
+        raise HTTPException(400, "lote obrigatório")
+
+    from app.pipeline.scoring_engine import (
+        _format_value,
+        _lote_measures_divergences,
+        _resolve_row_lote,
+    )
+    try:
+        refs = get_watcher().get_refs() or {}
+    except Exception:
+        refs = {}
+    row = rows[row_index]
+    canonical, entry, _kind = _resolve_row_lote(refs, row)
+    # TOCTOU — o banner foi calculado sobre um estado que pode já ter mudado
+    # (outra edição, reload de refs). Se o alvo recomputado não é o mesmo que
+    # o cliente confirmou, não escrever nada.
+    if entry is None or canonical != lote_req:
+        return HTMLResponse(_render_lote_suggest(
+            sheet, row_index, "lote", oob=False, override={"status": "stale"}))
+
+    row_fields = tuple(_template_ctx_for_sheet(sheet).get("row_fields") or ())
+    batch: list[tuple[str, str]] = []
+    applied_fields: list[tuple[str, str]] = []
+    if str(row.get("lote") or "").strip().upper() != canonical:
+        batch.append((f"rows[{row_index}].lote", canonical))
+        applied_fields.append(("lote", canonical))
+    divergent = {d["field"] for d in _lote_measures_divergences(row, entry)}
+    for field, key in (("larg_mm", "larg"), ("esp", "esp")):
+        if field not in row_fields:
+            continue
+        sap_val = _format_value(field, entry.get(key))
+        if not sap_val:
+            continue
+        cur = str(row.get(field) or "").strip()
+        if (field in divergent or not cur) and cur != sap_val:
+            batch.append((f"rows[{row_index}].{field}", sap_val))
+            applied_fields.append((field, sap_val))
+
+    if batch:
+        try:
+            db.apply_edits_batch(sheet_id, batch, source="human")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        _start_sheet_cross_check({sheet_id}, profile_trigger="apply_lote_medidas")
+        sheet = db.get_sheet(sheet_id) or sheet
+        labels = {"lote": "lote", "larg_mm": "larg", "esp": "esp"}
+        message = "Aplicado do StockSAP: " + " · ".join(
+            f"{labels[f]} {v}" for f, v in applied_fields)
+    else:
+        message = "Linha já coerente com o StockSAP — nada a alterar."
+
+    parts = [_render_lote_suggest(
+        sheet, row_index, "lote", oob=False,
+        override={"status": "applied", "message": message})]
+    if applied_fields:
+        cc_maps = _build_cc_maps(sheet_id, allow_regen=False)
+        new_row = ((sheet.get("sheet_data") or {}).get("rows") or [{}])[row_index]
+        for field, _value in applied_fields:
+            fp = f"rows[{row_index}].{field}"
+            parts.append(_render_cell_html(sheet, fp, new_row.get(field, ""),
+                                           edited=True, oob=True,
+                                           cc_maps=cc_maps))
+    return HTMLResponse("".join(parts))
 
 
 @app.post("/sheet/{sheet_id}/add-row")

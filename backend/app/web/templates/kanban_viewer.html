@@ -263,6 +263,8 @@
     <div class="card-h">
       <div class="card-h-title">Linhas de Produção ({{ rows | length }})</div>
     </div>
+    {# R261 — alvo OOB do banner de cross-check lote↔StockSAP (tempo real) #}
+    <div id="lote-cc-banner"></div>
     <div class="card-b" style="padding:0; overflow-x:auto;">
       {% if not rows %}
         <div class="muted tiny" style="padding:12px;">Sem linhas extraídas.</div>

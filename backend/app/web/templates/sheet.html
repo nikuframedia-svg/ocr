@@ -244,6 +244,8 @@
           {% endif %}
         </div>
       </div>
+      {# R261 — alvo OOB do banner de cross-check lote↔StockSAP (tempo real) #}
+      <div id="lote-cc-banner"></div>
       <div class="scroll-x">
         <table class="tbl" style="font-size:11px;">
           <thead>
@@ -744,22 +746,31 @@ function cellEditor() {
       this.active = false;
     },
     async submit() {
-      const fd = new FormData();
-      fd.append('field_path', this.field_path);
-      fd.append('new_value', this.value);
+      // R261 — htmx.ajax em vez de fetch + outerHTML manual: processa também
+      // os fragmentos hx-swap-oob da resposta (companion cells R136 + banner
+      // lote↔StockSAP), que o swap manual ignorava.
+      const cell = document.getElementById(this.cell_id);
+      if (!cell) { this.active = false; return; }
+      let failedStatus = null;
+      const onErr = (evt) => {
+        failedStatus = (evt.detail && evt.detail.xhr) ? evt.detail.xhr.status : '?';
+      };
+      document.body.addEventListener('htmx:responseError', onErr, { once: true });
       try {
-        const res = await fetch('/sheet/' + this.sheet_id + '/edit', {
-          method: 'POST',
-          body: fd,
-          headers: { 'HX-Request': 'true' }
+        await htmx.ajax('POST', '/sheet/' + this.sheet_id + '/edit', {
+          target: cell,
+          swap: 'outerHTML',
+          values: { field_path: this.field_path, new_value: this.value },
         });
-        if (!res.ok) throw new Error('save falhou (' + res.status + ')');
-        const html = await res.text();
-        const cell = document.getElementById(this.cell_id);
-        if (cell) cell.outerHTML = html;
-        this.active = false;
+        if (failedStatus !== null) {
+          alert('Falha ao guardar (' + failedStatus + ')');
+        } else {
+          this.active = false;
+        }
       } catch (e) {
-        alert('Falha ao guardar: ' + e.message);
+        alert('Falha ao guardar: ' + (e && e.message ? e.message : e));
+      } finally {
+        document.body.removeEventListener('htmx:responseError', onErr);
       }
     },
   };

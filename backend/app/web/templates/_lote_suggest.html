@@ -1,0 +1,73 @@
+{# R261 — banner de cross-check em tempo real lote↔StockSAP (Bobine formato).
+
+   Renderizado como fragmento OOB na resposta de POST /sheet/{id}/edit e
+   como swap direto na resposta de POST /sheet/{id}/apply-lote-medidas.
+   s=None → banner vazio (limpa qualquer sugestão anterior).
+   Sugerir apenas: nada é escrito sem o clique explícito em "Aplicar". #}
+<div id="lote-cc-banner"{% if oob %} hx-swap-oob="true"{% endif %}>
+{% if s %}
+  {% set n = row_index + 1 %}
+  {% if s.status == 'match' %}
+  <div class="alert ok" style="margin:8px 12px;">
+    <span style="flex:1;">✓ L{{ n }} · Lote <b>{{ s.canonical }}</b> confirmado no StockSAP —
+      medidas coerentes (larg {{ s.sap.larg or '—' }} · esp {{ s.sap.esp or '—' }}{% if s.sap.desc %} · {{ s.sap.desc }}{% endif %})</span>
+    <button type="button" class="btn ghost" title="Fechar"
+            onclick="document.getElementById('lote-cc-banner').innerHTML=''">✕</button>
+  </div>
+
+  {% elif s.status == 'diverge' or s.status == 'h_candidate' %}
+  <div class="alert warn" style="margin:8px 12px; flex-wrap:wrap; align-items:center;">
+    <span style="flex:1; min-width:260px;">
+      {% if s.status == 'h_candidate' %}
+        L{{ n }} · <b>{{ s.typed }}</b> não existe no StockSAP — existe <b>{{ s.canonical }}</b>
+        (larg {{ s.sap.larg or '—' }} · esp {{ s.sap.esp or '—' }}{% if s.sap.desc %} · {{ s.sap.desc }}{% endif %}).
+      {% else %}
+        L{{ n }} · Lote <b>{{ s.canonical }}</b> no StockSAP: larg <b>{{ s.sap.larg or '—' }}</b> · esp <b>{{ s.sap.esp or '—' }}</b>{% if s.sap.desc %} · {{ s.sap.desc }}{% endif %}{% if s.sap.qtd %} · qtd {{ s.sap.qtd }}{% endif %}.
+      {% endif %}
+      {% for d in s.divergences %}
+        <span class="pill warn" style="margin-left:4px;">{{ 'larg' if d.field == 'larg_mm' else 'esp' }}: {{ d.ocr or '—' }} → <b>{{ d.sap }}</b></span>
+      {% endfor %}
+      {% for f in s.missing %}
+        <span class="pill warn" style="margin-left:4px;">{{ 'larg' if f == 'larg_mm' else 'esp' }}: (vazio) → <b>{{ s.sap.larg if f == 'larg_mm' else s.sap.esp }}</b></span>
+      {% endfor %}
+      <span class="muted tiny" style="display:block;">Nada é alterado sem confirmares.</span>
+    </span>
+    {% if s.divergences or s.missing or s.status == 'h_candidate' %}
+    <button type="button" class="btn primary"
+            hx-post="/sheet/{{ sheet_id }}/apply-lote-medidas"
+            hx-vals='{"row_index": {{ row_index }}, "lote": "{{ s.canonical }}"}'
+            hx-target="#lote-cc-banner" hx-swap="outerHTML">
+      {%- if s.status == 'h_candidate' -%}
+        Usar {{ s.canonical }}{% if s.divergences or s.missing %} e medidas{% endif %}
+      {%- else -%}
+        Aplicar medidas do StockSAP
+      {%- endif -%}
+    </button>
+    {% endif %}
+    <button type="button" class="btn ghost"
+            onclick="document.getElementById('lote-cc-banner').innerHTML=''">Ignorar</button>
+  </div>
+
+  {% elif s.status == 'not_found' %}
+  <div class="alert warn" style="margin:8px 12px;">
+    <span style="flex:1;">L{{ n }} · Lote <b>{{ s.typed }}</b> não existe no StockSAP — verifica o número.</span>
+    <button type="button" class="btn ghost" title="Fechar"
+            onclick="document.getElementById('lote-cc-banner').innerHTML=''">✕</button>
+  </div>
+
+  {% elif s.status == 'applied' %}
+  <div class="alert ok" style="margin:8px 12px;">
+    <span style="flex:1;">✓ L{{ n }} · {{ s.message }}</span>
+    <button type="button" class="btn ghost" title="Fechar"
+            onclick="document.getElementById('lote-cc-banner').innerHTML=''">✕</button>
+  </div>
+
+  {% elif s.status == 'stale' %}
+  <div class="alert warn" style="margin:8px 12px;">
+    <span style="flex:1;">L{{ n }} · A linha mudou entretanto — nada foi alterado. Verifica de novo.</span>
+    <button type="button" class="btn ghost" title="Fechar"
+            onclick="document.getElementById('lote-cc-banner').innerHTML=''">✕</button>
+  </div>
+  {% endif %}
+{% endif %}
+</div>

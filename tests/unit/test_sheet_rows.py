@@ -105,6 +105,22 @@ class TestAddRow:
         assert _prod_row_count(sid) == before  # a linha vazia é filtrada
 
 
+class TestSucataOnlyRow:
+    def test_sucata_only_row_kept_in_production_rows(self, tmp_db):
+        # R261 — sucata conta como conteúdo: uma linha só-com-sucata tem de
+        # chegar a production_rows (e aos exports), mesmo sem OF/qtd.
+        sid = _seed([
+            {"of": "111", "cliente": "X", "modelo": "A", "qtd": "3"},
+            {"sucata": "4"},
+        ])
+        assert _prod_row_count(sid) == 2
+        with db.conn() as c:
+            r = c.execute(
+                "SELECT sucata FROM production_rows "
+                "WHERE sheet_id = ? AND row_index = 1", (sid,)).fetchone()
+        assert r["sucata"] == 4
+
+
 class TestDeleteRow:
     def test_delete_row_removes_correct_one_and_shifts(self, tmp_db):
         sid = _seed([{"of": "111"}, {"of": "222"}, {"of": "333"}])
