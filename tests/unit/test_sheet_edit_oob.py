@@ -102,6 +102,55 @@ def _seed(operador="HELENA FERNANDEZ", n_operador="1162", data="20-05-2026"):
     return sid
 
 
+def _seed_bobine_v3():
+    sid = db.insert_sheet("bobine-v3.jpg")
+    sheet_data = {
+        "template_name": "bobine_formato",
+        "header": {
+            "operador": "AUGUSTO MONTEIRO",
+            "n_operador": "95",
+            "data": "27-07-2026",
+            "setor_maquina": "BOBINE-FORMATO",
+            "cod_maquina": "M032",
+            "turno": "M",
+        },
+        "rows": [{"of": "262107", "modelo": "CFC5F45RIV", "fecho": ""}],
+        "footer": {},
+    }
+    db.update_extraction(
+        sid,
+        raw_extraction=sheet_data,
+        dq_audit={"cells": {}},
+        sheet_data=sheet_data,
+    )
+    return sid
+
+
+@pytest.mark.parametrize(("value", "expected"), [("", ""), ("x", "X"), ("X", "X")])
+def test_desktop_edit_accepts_and_normalizes_fecho(
+    value, expected, tmp_db, isolate, client,
+):
+    sid = _seed_bobine_v3()
+    response = client.post(
+        f"/sheet/{sid}/edit",
+        data={"field_path": "rows[0].fecho", "new_value": value},
+        headers=_DESKTOP,
+    )
+    assert response.status_code == 200
+    assert db.get_sheet(sid)["sheet_data"]["rows"][0]["fecho"] == expected
+
+
+def test_desktop_edit_rejects_invalid_fecho(tmp_db, isolate, client):
+    sid = _seed_bobine_v3()
+    response = client.post(
+        f"/sheet/{sid}/edit",
+        data={"field_path": "rows[0].fecho", "new_value": "SIM"},
+        headers=_DESKTOP,
+    )
+    assert response.status_code == 400
+    assert db.get_sheet(sid)["sheet_data"]["rows"][0]["fecho"] == ""
+
+
 class TestEditNumberRefreshesName:
     """Point #2 — mudar o nº do operador actualiza o nome no ecrã (OOB)."""
 

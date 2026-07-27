@@ -28,6 +28,7 @@ def build_overlay() -> dict:
         "clientes_observed": [],
         "modelos_observed": [],
         "fewshot_by_template": {},
+        "case_rules_by_template": {},
     }
     with db.conn() as c:
         rows = c.execute(
@@ -62,6 +63,13 @@ def build_overlay() -> dict:
             sid = p.get("sheet_id")
             if tname and sid is not None:
                 overlay["fewshot_by_template"].setdefault(tname, []).append(sid)
+        elif kind == "case_rule":
+            field, folded, canonical = p.get("field"), p.get("from_casefold"), p.get("to")
+            if field and folded and canonical:
+                tname = r["template_name"] or "bobine_formato"
+                overlay["case_rules_by_template"].setdefault(
+                    tname, {}
+                ).setdefault(field, {})[folded] = canonical
 
     return overlay
 

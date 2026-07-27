@@ -156,6 +156,8 @@ def list_templates() -> dict:
         from app.templates_registry import TEMPLATES
         out = []
         for name, spec in TEMPLATES.items():
+            if getattr(spec, "internal", False):
+                continue
             out.append({
                 "name": name,
                 "csv_block_label": getattr(spec, "csv_block_label", ""),

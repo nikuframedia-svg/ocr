@@ -213,6 +213,8 @@ _BASE_CLIENTES: tuple[str, ...] = _CLIENTES
 _BASE_CONFUSION: dict[str, dict[str, float]] = _CONFUSION
 _BASE_MODELOS_FULL: tuple[str, ...] = _MODELOS_FULL
 _BASE_CLIENTE_ALIASES: dict[str, str] = dict(_CLIENTE_ALIASES)
+_CASE_RULES_BY_TEMPLATE: dict[str, dict[str, dict[str, str]]] = {}
+_ALIAS_FIELDS_FOR_CASE = frozenset({"cliente", "modelo", "operador"})
 
 
 def _merge_confusion(
@@ -241,6 +243,7 @@ def reload_lexicons() -> None:
     after a cycle, and by the web layer right after a learning is approved.
     """
     global _CLIENTES, _CONFUSION, _MODELOS_FULL, _CLIENTE_ALIASES
+    global _CASE_RULES_BY_TEMPLATE
     overlay = _load_overlay(_REPO)
     _CLIENTES = _BASE_CLIENTES + tuple(
         str(v).strip() for v in overlay.get("clientes_observed", []) if v
@@ -259,6 +262,35 @@ def reload_lexicons() -> None:
     }
     merged.update(_BASE_CLIENTE_ALIASES)
     _CLIENTE_ALIASES = merged
+    raw_case_rules = overlay.get("case_rules_by_template", {})
+    _CASE_RULES_BY_TEMPLATE = {
+        str(tname): {
+            str(field): {
+                str(folded).casefold(): str(canonical)
+                for folded, canonical in (rules or {}).items()
+                if canonical
+            }
+            for field, rules in (fields or {}).items()
+        }
+        for tname, fields in (raw_case_rules or {}).items()
+    }
+
+
+def canonical_case(template_name: str, field: str, value: object) -> str | None:
+    """Return a learned canonical spelling for an exact casefold match."""
+    raw = str(value or "").strip()
+    if not raw or field not in _ALIAS_FIELDS_FOR_CASE:
+        return None
+    folded = raw.casefold()
+    for scope in (str(template_name or ""), "*"):
+        canonical = (
+            _CASE_RULES_BY_TEMPLATE.get(scope, {})
+            .get(field, {})
+            .get(folded)
+        )
+        if canonical:
+            return canonical
+    return None
 
 
 # Fold the overlay in at import time.

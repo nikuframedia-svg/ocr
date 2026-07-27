@@ -94,6 +94,11 @@ CREATE TABLE IF NOT EXISTS edits (
     edited_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS app_migrations (
+    name TEXT PRIMARY KEY,
+    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Denormalised production rows: one row per data row across all sheets.
 -- Auto-populated on update_extraction() and re-synced on apply_edit().
 -- Drives all KPI aggregations (instead of json_each scans on sheet_data).
@@ -142,6 +147,8 @@ CREATE TABLE IF NOT EXISTS production_rows (
     fim TEXT,
     -- rev00 — SUCATA (nº de peças sucatadas). NULL para folhas do formato antigo.
     sucata INTEGER,
+    -- TPL103 Bobine Formato v3 — closure mark (blank/X).
+    fecho TEXT,
     UNIQUE (sheet_id, row_index)
 );
 
@@ -425,9 +432,42 @@ def init_db() -> None:
             ("fim", "TEXT"),
             # rev00 — SUCATA (nº de peças sucatadas).
             ("sucata", "INTEGER"),
+            ("fecho", "TEXT"),
         ):
             if col not in pr_cols:
                 c.execute(f"ALTER TABLE production_rows ADD COLUMN {col} {type_}")
+        # One-time compatibility migration: at the first startup with v3,
+        # every already-persisted Bobine extraction predates FECHO.
+        migration = "bobine_formato_v3_fecho"
+        done = c.execute(
+            "SELECT 1 FROM app_migrations WHERE name = ?", (migration,)
+        ).fetchone()
+        if done is None:
+            for row in c.execute(
+                "SELECT id, sheet_data FROM sheets WHERE sheet_data IS NOT NULL"
+            ).fetchall():
+                try:
+                    data = json.loads(row["sheet_data"])
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                tname = data.get("template_name")
+                is_legacy_bobine = tname == "bobine_formato"
+                if not tname:
+                    header = data.get("header") or {}
+                    from app.templates_registry import detect_template
+
+                    inferred = detect_template(
+                        str(header.get("setor_maquina") or ""),
+                        cod_maquina=str(header.get("cod_maquina") or ""),
+                    )
+                    is_legacy_bobine = inferred.name == "bobine_formato"
+                if is_legacy_bobine:
+                    data["template_name"] = "bobine_formato_legacy"
+                    c.execute(
+                        "UPDATE sheets SET sheet_data = ? WHERE id = ?",
+                        (json.dumps(data, ensure_ascii=False), row["id"]),
+                    )
+            c.execute("INSERT INTO app_migrations (name) VALUES (?)", (migration,))
         # Learning engine — `edits.source` distinguishes human corrections
         # ('human') from auto-snaps written by cross-check / operador_snap
         # ('system'). The success metric only counts 'human'.
@@ -1023,6 +1063,11 @@ def get_sheet_template_name(sheet: dict | int) -> str:
     # Explicit template_name persisted by R54+ uploads
     tname = sd.get("template_name")
     if tname:
+        if tname == "bobine_formato" and any(
+            isinstance(row, dict) and "sucata" in row
+            for row in (sd.get("rows") or [])
+        ):
+            return "bobine_formato_legacy"
         return str(tname)
 
     # Legacy sheets — infer from header.setor_maquina, with cod_maquina as a
@@ -1129,6 +1174,10 @@ def _sync_production_rows(c: sqlite3.Connection, sheet_id: int, sheet_data: dict
 
     tname = sheet_data.get("template_name")
     if tname:
+        if tname == "bobine_formato" and any(
+            isinstance(row, dict) and "sucata" in row for row in rows
+        ):
+            tname = "bobine_formato_legacy"
         tspec = get_template(tname)
     else:
         tspec = detect_template(
@@ -1192,7 +1241,8 @@ def _sync_production_rows(c: sqlite3.Connection, sheet_id: int, sheet_data: dict
         # tem de chegar a production_rows/exports. NOTA: sucata fica fora de
         # cross_check_fields (informativo, sem ref no plano/SAP).
         if not any(
-            (row.get(k) or "").strip() for k in (*empty_check_fields, "sucata")
+            (row.get(k) or "").strip()
+            for k in (*empty_check_fields, "sucata", "fecho")
         ):
             continue
         c.execute(
@@ -1205,8 +1255,8 @@ def _sync_production_rows(c: sqlite3.Connection, sheet_id: int, sheet_data: dict
                 dbase, dtopo,
                 m2, nesting,
                 qtd_metros, cesta_n, inicio, fim,
-                sucata)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                sucata, fecho)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 sheet_id, i,
                 operador, sheet_date_raw, sheet_iso, captured_at, validated_at,
@@ -1239,6 +1289,7 @@ def _sync_production_rows(c: sqlite3.Connection, sheet_id: int, sheet_data: dict
                 (row.get("fim") or "").strip() or None,
                 # rev00 — SUCATA (nº de peças sucatadas). NULL se vazio.
                 _parse_int(row.get("sucata")),
+                "X" if str(row.get("fecho") or "").strip().upper() == "X" else None,
             ),
         )
 

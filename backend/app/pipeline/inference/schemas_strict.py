@@ -118,6 +118,8 @@ _ROW_SCHEMA: dict[str, Any] = {
         # rev00 — coluna SUCATA (nº de peças sucatadas). Não vai a `required`;
         # só preenchida nos templates de produção rev00.
         "sucata": _string(_NUMERIC_SHORT),
+        # Bobine Formato v3: blank or a handwritten X.
+        "fecho": _string(r"^(?:X|x)?$"),
     },
 }
 

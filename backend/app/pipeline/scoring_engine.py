@@ -354,6 +354,7 @@ _NO_REF_FIELDS = frozenset({
     "sobras", "cesta_n",
     # rev00 — SUCATA (nº peças sucatadas): informativo, sem ref no plano/SAP.
     "sucata",
+    "fecho",
     # TPL102 Gemini: área informativa, sem ref, mas com sintaxe numérica.
     "m2",
 })
@@ -3810,6 +3811,8 @@ def _score_no_ref_row_cell(
         valid = _looks_like_short_digits(ocr_value)
     elif field in ("qtd_metros", "m2", "sobras", "sucata"):
         valid = _looks_like_non_negative_decimal(ocr_value)
+    elif field == "fecho":
+        valid = str(ocr_value).strip().upper() == "X"
     elif field == "cesta_n":
         valid = any(ch.isdigit() for ch in ocr_value)
     elif field in ("inicio", "fim"):
@@ -3820,6 +3823,18 @@ def _score_no_ref_row_cell(
         valid = _looks_like_yes_no_marker(ocr_value)
 
     if valid is False:
+        # FECHO is a closed binary mark. A row winner cannot make arbitrary
+        # OCR text valid here: keep the cell in review until a human clears
+        # it or changes it to X.
+        if field == "fecho":
+            return _make_cell(
+                ocr_value,
+                "very_different",
+                "syntax",
+                proposed="X",
+                ref_source="syntax",
+                warning="FECHO aceita apenas vazio ou X.",
+            )
         if row_has_winner:
             return _make_cell(
                 ocr_value,
@@ -3995,15 +4010,27 @@ def _finish_cell(
     # numéricos cujo OCR seja texto/lixo. Removido o guarda de sintaxe
     # numérica do R216 (que preservava o OCR e bloqueava auto-apply); a única
     # coisa que a divergência afeta é a cor (very_different/vermelho).
-    if proposed_fmt and ocr_fmt and proposed_fmt.upper() == ocr_fmt.upper():
+    if proposed_fmt and ocr_fmt and proposed_fmt == ocr_fmt:
         status = "confirmed"
+    elif proposed_fmt and ocr_fmt and proposed_fmt.casefold() == ocr_fmt.casefold():
+        # Same identifier, wrong casing: keep matching case-insensitive but
+        # persist the authoritative spelling from Plan/SAP.
+        status = "snapped"
     elif not ocr_value:
         status = "snapped"  # autofill
     elif _is_very_different(field, ocr_value, proposed):
         status = "very_different"
     else:
         status = "snapped"
-    return _make_cell(proposed_fmt, status, source=source, score=score)
+    cell = _make_cell(proposed_fmt, status, source=source, score=score)
+    if (
+        status == "snapped"
+        and proposed_fmt
+        and ocr_fmt
+        and proposed_fmt.casefold() == ocr_fmt.casefold()
+    ):
+        cell["decision_reason"] = "canonical_case"
+    return cell
 
 
 def _identifier_values_match(field: str, ocr_value: object, proposed: object) -> bool:
@@ -4322,6 +4349,17 @@ def _apply_winner_to_field(
 ) -> dict:
     if field in _NO_REF_FIELDS:
         return _score_no_ref_row_cell(field, ocr_value)
+    if winner is None and field in {"cliente", "modelo"}:
+        try:
+            from app.dq.snap import canonical_case
+
+            learned = canonical_case(template_name or "", field, ocr_value)
+        except Exception:
+            learned = None
+        if learned and learned != str(ocr_value or "").strip():
+            cell = _make_cell(learned, "snapped", "lexicon")
+            cell["decision_reason"] = "learned_canonical_case"
+            return cell
     # R252 — campo ativo para a confiança por célula (_mark_winner_cell lê
     # winner["_active_field"]; mutação serial por linha — sem corrida).
     if winner is not None:
@@ -4630,7 +4668,7 @@ def _apply_winner_to_field(
 
     proposed_fmt = _format_value(field, proposed)
     ocr_fmt = _format_value(field, ocr_value)
-    if proposed_fmt and ocr_fmt and proposed_fmt.upper() == ocr_fmt.upper():
+    if proposed_fmt and ocr_fmt and proposed_fmt == ocr_fmt:
         return _mark_winner_cell(
             _make_cell(proposed_fmt, "confirmed", source="plan", score=score),
             winner,
@@ -5062,6 +5100,7 @@ def _score_header_footer(
     header_fields: tuple[str, ...] = (),
     footer_fields: tuple[str, ...] = (),
     derived_footer: dict | None = None,
+    template_name: str = "",
 ) -> tuple[dict, dict]:
     """R123 (B9) — valida o cabeçalho e o rodapé em vez de os forçar a NA.
 
@@ -5192,9 +5231,48 @@ def _score_header_footer(
                     proposed=expected_entry["name"],
                     ref_source="colaboradores",
                 )
+            if expected_entry is None:
+                expected_entry = entry_by_header_name
+            if (
+                expected_entry
+                and expected_entry.get("name")
+                and _norm_name(v) in (expected_entry.get("aliases_norm") or set())
+            ):
+                canonical_name = str(expected_entry["name"])
+                # A common-name alias safely identifies the person but is not
+                # a casing correction. Rewrite only when the letters are the
+                # same and the reference differs exclusively in case.
+                if v.casefold() == canonical_name.casefold():
+                    return _finish_cell(
+                        field, v, canonical_name, "colaboradores", None
+                    )
+                return _make_cell(
+                    v, "confirmed", "ocr_raw", ref_source="colaboradores",
+                )
+            if expected_entry is None:
+                try:
+                    from app.dq.snap import canonical_case
+
+                    learned = canonical_case(template_name, field, v)
+                except Exception:
+                    learned = None
+                if learned and learned != v:
+                    cell = _make_cell(learned, "snapped", "lexicon")
+                    cell["decision_reason"] = "learned_canonical_case"
+                    return cell
             st = "confirmed" if _norm_name(v) in snames else "very_different"
             return _make_cell(v, st, "ocr_raw", ref_source="colaboradores")
         elif field == "operador":
+            try:
+                from app.dq.snap import canonical_case
+
+                learned = canonical_case(template_name, field, v)
+            except Exception:
+                learned = None
+            if learned and learned != v:
+                cell = _make_cell(learned, "snapped", "lexicon")
+                cell["decision_reason"] = "learned_canonical_case"
+                return cell
             return _make_cell(v, "confirmed", "syntax")
         elif field == "n_operador" and colaborador_codes:
             variants = _operator_code_variants(v)
@@ -5482,6 +5560,7 @@ def shadow_score(
         header_fields=getattr(template, "header_fields", ()),
         footer_fields=getattr(template, "footer_fields", ()),
         derived_footer=_derive_footer_values(rows, footer),
+        template_name=canonical_template_name,
     )
     for cell in (*header_out.values(), *footer_out.values()):
         st = cell["status"]

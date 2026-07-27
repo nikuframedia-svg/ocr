@@ -4501,6 +4501,61 @@ class TestR217NumericJunkSubstitution:
         assert cell["value"] == "1500"
         assert "auto_apply" not in cell
 
+    def test_case_only_difference_snaps_to_plan_spelling(self):
+        from app.pipeline.scoring_engine import _finish_cell
+
+        cell = _finish_cell(
+            "modelo", "CFC5F45RIV", "CFC5F45Riv", "plan", 100,
+        )
+
+        assert cell["status"] == "snapped"
+        assert cell["value"] == "CFC5F45Riv"
+        assert cell["decision_reason"] == "canonical_case"
+
+    def test_plan_canonical_model_case_flows_through_cross_check(self):
+        refs = {
+            "available": True,
+            "of_to_entries": {
+                "262999": [{
+                    "ov": "2410999",
+                    "cliente": "Cliente Riv",
+                    "designacao": "CFC5F45Riv",
+                }],
+            },
+            "clientes_plan": frozenset({"CLIENTE RIV"}),
+            "lotes_sap_full": {},
+        }
+        sheet = {
+            "template_name": "bobine_formato",
+            "header": {},
+            "rows": [{
+                "of": "262999",
+                "ov": "2410999",
+                "cliente": "CLIENTE RIV",
+                "modelo": "CFC5F45RIV",
+            }],
+            "footer": {},
+        }
+
+        scoring, *_ = shadow_score(sheet, None, refs)
+        modelo = scoring["rows"][0]["fields"]["modelo"]
+
+        assert modelo["status"] == "snapped"
+        assert modelo["value"] == "CFC5F45Riv"
+        assert modelo["decision_reason"] == "canonical_case"
+
+    def test_invalid_fecho_stays_in_review_even_with_row_winner(self):
+        from app.pipeline.scoring_engine import _score_no_ref_row_cell
+
+        cell = _score_no_ref_row_cell(
+            "fecho", "SIM", row_has_winner=True,
+        )
+
+        assert cell["status"] == "very_different"
+        assert cell["value"] == "SIM"
+        assert cell["proposed"] == "X"
+        assert "vazio ou X" in cell["warning"]
+
 
 class TestR218WinnerMixAndAmbiguityGuard:
     """R218 — winner por MISTURA (contagem de acertos + soma graduada) e guarda

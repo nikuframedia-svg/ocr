@@ -71,9 +71,9 @@ DEFAULT_PROMPT = """You are an OCR and data extraction expert. Analyze this indu
 Extract ALL data and return ONLY a valid JSON object. No markdown, no <think> blocks, no explanation.
 
 The sheet has:
-1. HEADER fields: Operador (full name), N° (operator number), Setor/Maquina, Data
+1. HEADER fields: Operador (full name), N° (operator number), Setor/Maquina, Data, Turno
 2. A TABLE with exactly these columns in order:
-   PRI | CLIENTE | OV | OF | MODELO | QTD | COMP_MM | LARG_MM | LOTE | CONI | ESP | LBASE | LTOPO
+   PRI | CLIENTE | OV | OF | MODELO | QTD | COMP_MM | LARG_MM | LOTE | CONI | ESP | LBASE | LTOPO | FECHO
 3. FOOTER fields: Colunas Produzidas, Horas Trabalhadas
 
 IMPORTANT RULES:
@@ -84,6 +84,9 @@ IMPORTANT RULES:
 - CLIENTE may have no spaces (MTGBELUX) or have spaces (MTG GMBH, DAV NORDIC, LE HAVRE).
 - CONI can be a number (10, 12, 14) or text (T, OCT, TORRES).
 - LOTE follows pattern like M25B0746, M26B0307, H24B1003 — copy exactly what you see.
+- TURNO is the marked checkbox: M, R, XM, or T. Use "" if none is marked.
+- FECHO is a handwritten closure mark. Return exactly "X" when the cell
+  contains an x/cross; otherwise return "".
 - If a field is empty or not visible, use empty string "".
 - Do NOT invent values. If a digit is unclear, copy your best reading; do not make up plausible alternatives.
 - Normalize date to DD-MM-YYYY format.
@@ -94,10 +97,11 @@ Return this exact JSON structure:
     "operador": "FULL NAME",
     "n_operador": "e.g. 0537",
     "setor_maquina": "BOBINE-FORMATO",
-    "data": "DD-MM-YYYY"
+    "data": "DD-MM-YYYY",
+    "turno": "M | R | XM | T"
   },
   "rows": [
-    {"pri":"","cliente":"","ov":"","of":"","modelo":"","qtd":"","comp_mm":"","larg_mm":"","lote":"","coni":"","esp":"","lbase":"","ltopo":""}
+    {"pri":"","cliente":"","ov":"","of":"","modelo":"","qtd":"","comp_mm":"","larg_mm":"","lote":"","coni":"","esp":"","lbase":"","ltopo":"","fecho":""}
   ],
   "footer": {
     "colunas_produzidas": "",
@@ -148,8 +152,8 @@ class ExtractionResult:
 
 # ── Pydantic-style schema (validação leve, sem regex agressivo) ───────────────
 ROW_FIELDS = ["pri", "cliente", "ov", "of", "modelo", "qtd", "comp_mm",
-              "larg_mm", "lote", "coni", "esp", "lbase", "ltopo"]
-HEADER_FIELDS = ("operador", "n_operador", "setor_maquina", "data")
+              "larg_mm", "lote", "coni", "esp", "lbase", "ltopo", "fecho"]
+HEADER_FIELDS = ("operador", "n_operador", "setor_maquina", "data", "turno")
 FOOTER_FIELDS = ("colunas_produzidas", "horas_trabalhadas")
 
 
@@ -193,6 +197,8 @@ def normalize_extraction(
         # R106 — OF is always 6 digits (zero-pad short numeric reads).
         if "of" in clean_row:
             clean_row["of"] = normalize_of(clean_row["of"])
+        if "fecho" in clean_row and clean_row["fecho"].upper() == "X":
+            clean_row["fecho"] = "X"
         # Filtrar rows totalmente vazios
         if any(clean_row.values()):
             clean_rows.append(clean_row)
@@ -369,6 +375,11 @@ def ollama_request(
 
 # ── CSV ───────────────────────────────────────────────────────────────────────
 def write_csv(output_csv: Path, results: list[ExtractionResult]) -> None:
+    """Write the fixed pre-template CSV used by standalone legacy tooling.
+
+    Production/factory exports are template-aware and live in
+    ``app.web.main._to_3block_csv``.
+    """
     with output_csv.open("w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f, delimiter=";")
 

@@ -63,6 +63,7 @@ _FIELD_LABELS: dict[str, str] = {
     # rev00 (13/04/2026) — coluna SUCATA (nº de peças sucatadas) em todas as
     # tabelas de produção.
     "sucata": "SUCATA",
+    "fecho": "FECHO",
     "motivo": "MOTIVO DA PARAGEM",
     "inicio": "INÍCIO",
     "fim": "FIM",
@@ -188,6 +189,8 @@ _RULES_PRODUCTION = """IMPORTANT RULES:
 - LOTE follows pattern like M25B0746, M26B0307, H24B1003 — copy exactly what you see.
 - SUCATA is the number of scrapped/rejected pieces for that row (a small integer).
   It is usually blank — use "" when the cell is empty; never invent a value.
+- FECHO is a handwritten closure mark used only on Bobine Formato v3. Return
+  exactly "X" when the cell contains an x/cross; otherwise return "".
 - If a field is empty or not visible, use empty string "".
 - Do NOT invent values. If a digit is unclear, copy your best reading; do not make up plausible alternatives.
 - Normalize date to DD-MM-YYYY format.
@@ -340,6 +343,18 @@ def build_prompt(template: TemplateSpec) -> str:
     else:
         rules = _RULES_PRODUCTION
         domain_hint = "PRODUÇÃO DE COLUNAS"
+        if "sucata" not in template.row_fields:
+            rules = rules.replace(
+                '- SUCATA is the number of scrapped/rejected pieces for that row (a small integer).\n'
+                '  It is usually blank — use "" when the cell is empty; never invent a value.\n',
+                "",
+            )
+        if "fecho" not in template.row_fields:
+            rules = rules.replace(
+                '- FECHO is a handwritten closure mark used only on Bobine Formato v3. Return\n'
+                '  exactly "X" when the cell contains an x/cross; otherwise return "".\n',
+                "",
+            )
 
     # Round 98 — few-shot block from the learning engine. Empty string when
     # the template has no learned examples, keeping the prompt unchanged.

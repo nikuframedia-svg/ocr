@@ -42,7 +42,7 @@ def _mk_spec(name="u2_corte_esposende", aliases=("CORTE ESPOSENDE",),
 
 class TestBuiltinRegression:
     def test_18_builtins_intact(self):
-        assert len(reg.TEMPLATES) == 18
+        assert len(reg.TEMPLATES) == 19
         assert all(t.source == "builtin" for t in reg.TEMPLATES.values())
         assert all(t.unidade_id is None for t in reg.TEMPLATES.values())
 
@@ -78,7 +78,7 @@ class TestSetRuntimeTemplates:
                                             aliases=("OUTRO SETOR",))])
         assert "u2_corte_esposende" not in reg.TEMPLATES  # substituído
         assert "u2_outro" in reg.TEMPLATES
-        assert len(reg.TEMPLATES) == 19
+        assert len(reg.TEMPLATES) == 20
 
     def test_builtin_name_collision_skipped(self):
         spec = _mk_spec(name="bobine_formato")

@@ -62,6 +62,7 @@ def run_learning_cycle() -> int | None:
         sheets = mining.load_validated_sheets()
         proposals = (
             mining.derive_aliases(edits)
+            + mining.derive_case_rules(edits)
             + mining.derive_confusions(edits)
             + mining.derive_observed_values(sheets)
             + mining.derive_fewshot_candidates(sheets)

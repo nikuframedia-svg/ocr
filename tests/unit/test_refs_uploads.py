@@ -1331,6 +1331,26 @@ def test_plan_headers_always_published(tmp_path):
     assert refs["plan_headers"] == sorted(refs["plan_headers"])
 
 
+def test_plan_keeps_canonical_spelling_but_indexes_case_insensitively(tmp_path):
+    doc_dir = tmp_path / "docs"
+    doc_dir.mkdir()
+    _write_plan(doc_dir / "plan_colunas_cpis.xlsx", [
+        [
+            "Cliente Riv", "2603977", "263348", "CFC5F45Riv", 1,
+            0, 0, 0, 0, 0, 0, 0, 4, 659, 242, 11050,
+        ],
+    ])
+    refs = ref_watcher.RefWatcher(
+        doc_dir=doc_dir, repo_root=tmp_path,
+    ).force_reload()
+
+    entry = refs["of_to_entries"]["263348"][0]
+    assert entry["cliente"] == "Cliente Riv"
+    assert entry["designacao"] == "CFC5F45Riv"
+    assert "CLIENTE RIV" in refs["clientes_plan"]
+    assert refs["plan_by_cliente"]["CLIENTE RIV"][0]["cliente"] == "Cliente Riv"
+
+
 def test_entry_extra_only_with_declared_templates(tmp_path, _clean_registry):
     reg = _clean_registry
     doc_dir = tmp_path / "docs"

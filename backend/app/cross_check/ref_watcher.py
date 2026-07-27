@@ -465,7 +465,10 @@ def _mine_from_excel(
                 of_int = int(float(str(r[hdrs["of"]])))
             except (ValueError, TypeError, KeyError):
                 continue
-            cliente = str(r[hdrs.get("cliente", -1)] or "").strip().upper()
+            # Preserve the source spelling for canonical output. Indexes and
+            # comparisons normalise independently, so matching stays
+            # case-insensitive without destroying the authoritative casing.
+            cliente = str(r[hdrs.get("cliente", -1)] or "").strip()
             ov = str(r[hdrs.get("ov", -1)] or "").strip()
             desig = str(r[hdrs.get("designacao", -1)] or "").strip()
 

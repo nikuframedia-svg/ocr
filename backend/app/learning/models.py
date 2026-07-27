@@ -15,6 +15,7 @@ class EditDiff:
     field: str            # leaf field name, e.g. "modelo"
     old: str              # OCR value (wrong)
     new: str              # human-corrected value (right)
+    template_name: str | None = None
 
 
 @dataclass

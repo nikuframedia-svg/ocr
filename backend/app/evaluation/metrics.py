@@ -56,6 +56,19 @@ def _normalise(value: str) -> str:
     return s
 
 
+def _normalise_case_sensitive(value: str) -> str:
+    """Normalise accents/space/date formatting while preserving letter case."""
+    if not value:
+        return ""
+    decomposed = unicodedata.normalize("NFKD", value)
+    s = "".join(ch for ch in decomposed if not unicodedata.combining(ch)).strip()
+    m = _DATE_PADDABLE_RE.match(s)
+    if m:
+        d, mo, y = m.groups()
+        return f"{int(d):02d}-{int(mo):02d}-{y}"
+    return s
+
+
 # Fields where character-level partial credit is meaningful: anything
 # the model has to *read* glyph-by-glyph (handwritten or lexical).
 # Numeric fields like comp_mm/qtd are excluded because reading "5000"
@@ -99,6 +112,10 @@ class FieldComparison:
     is_match: bool
     is_hallucination: bool
     is_critical: bool
+
+    @property
+    def is_case_match(self) -> bool:
+        return _normalise_case_sensitive(self.expected) == _normalise_case_sensitive(self.actual)
 
     @classmethod
     def make(
@@ -187,6 +204,9 @@ class BaselineMetrics:
     # fields in :data:`_CER_FIELDS` (where char-level partial credit
     # makes sense).
     cer_by_field: dict[str, float]
+    # Separate diagnostic: legacy field_accuracy remains case-insensitive.
+    case_sensitive_accuracy: float
+    case_sensitive_accuracy_by_field: dict[str, float]
 
 
 def _safe_div(num: float, den: float) -> float:
@@ -213,10 +233,12 @@ def compute_metrics(
     critical_matches = sum(1 for c in critical if c.is_match)
 
     per_field_hits: dict[str, list[bool]] = {}
+    per_field_case_hits: dict[str, list[bool]] = {}
     per_field_cer: dict[str, list[float]] = {}
     for c in flat:
         leaf = c.field_path.rsplit(".", 1)[-1]
         per_field_hits.setdefault(leaf, []).append(c.is_match)
+        per_field_case_hits.setdefault(leaf, []).append(c.is_case_match)
         if leaf in _CER_FIELDS:
             per_field_cer.setdefault(leaf, []).append(
                 character_error_rate(c.expected, c.actual)
@@ -228,6 +250,10 @@ def compute_metrics(
     cer_by_field = {
         name: sum(values) / len(values) for name, values in per_field_cer.items() if values
     }
+    case_accuracy_by_field = {
+        name: _safe_div(sum(hits), len(hits))
+        for name, hits in per_field_case_hits.items()
+    }
 
     return BaselineMetrics(
         total_sheets=total_sheets,
@@ -238,6 +264,8 @@ def compute_metrics(
         critical_field_accuracy=_safe_div(critical_matches, len(critical)),
         accuracy_by_field=accuracy_by_field,
         cer_by_field=cer_by_field,
+        case_sensitive_accuracy=_safe_div(sum(c.is_case_match for c in flat), total),
+        case_sensitive_accuracy_by_field=case_accuracy_by_field,
     )
 
 

@@ -121,6 +121,17 @@ class TestSucataOnlyRow:
         assert r["sucata"] == 4
 
 
+class TestFechoOnlyRow:
+    def test_fecho_is_normalised_and_persisted(self, tmp_db):
+        sid = _seed([{"fecho": "x"}])
+        with db.conn() as c:
+            row = c.execute(
+                "SELECT fecho FROM production_rows WHERE sheet_id = ?",
+                (sid,),
+            ).fetchone()
+        assert row["fecho"] == "X"
+
+
 class TestDeleteRow:
     def test_delete_row_removes_correct_one_and_shifts(self, tmp_db):
         sid = _seed([{"of": "111"}, {"of": "222"}, {"of": "333"}])

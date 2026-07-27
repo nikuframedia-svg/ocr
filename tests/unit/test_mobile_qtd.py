@@ -243,16 +243,35 @@ def test_mobile_qtd_batch_persists_multiple_rows_and_production_rows(
 # ---------------------------------------------------------------------------
 
 def _seed_bobine(rows: list[dict] | None = None) -> int:
-    """Folha de produção com template que declara `sucata` (bobine_formato)."""
+    """Folha histórica de produção com template que declara `sucata`."""
     sid = db.insert_sheet("mobile.jpg")
     sheet_data = {
-        "template_name": "bobine_formato",
+        "template_name": "bobine_formato_legacy",
         "header": {
             "operador": "TESTE", "n_operador": "123",
             "setor_maquina": "BOBINE-FORMATO", "cod_maquina": "M032",
             "data": "25-05-2026", "turno": "M",
         },
         "rows": rows or [{"of": "262892", "modelo": "CGC2E10D", "qtd": "4", "sucata": ""}],
+        "footer": {"colunas_produzidas": "4", "horas_trabalhadas": "8"},
+    }
+    db.update_extraction(sid, sheet_data, {}, sheet_data)
+    return sid
+
+
+def _seed_bobine_v3(rows: list[dict] | None = None) -> int:
+    """Folha Bobine v3 com a marca FECHO."""
+    sid = db.insert_sheet("mobile-v3.jpg")
+    sheet_data = {
+        "template_name": "bobine_formato",
+        "header": {
+            "operador": "TESTE", "n_operador": "123",
+            "setor_maquina": "BOBINE-FORMATO", "cod_maquina": "M032",
+            "data": "27-07-2026", "turno": "M",
+        },
+        "rows": rows or [
+            {"of": "262892", "modelo": "CGC2E10D", "qtd": "4", "fecho": ""}
+        ],
         "footer": {"colunas_produzidas": "4", "horas_trabalhadas": "8"},
     }
     db.update_extraction(sid, sheet_data, {}, sheet_data)
@@ -306,6 +325,61 @@ def test_mobile_qtd_batch_saves_sucata(tmp_db, isolate, client):
             (sid,),
         ).fetchone()
     assert row["sucata"] == 2
+
+
+def test_mobile_qtds_lists_fecho_not_sucata_for_bobine_v3(
+    tmp_db, isolate, client,
+):
+    sid = _seed_bobine_v3()
+    body = client.get(f"/mobile/qtds?ids={sid}", headers=_MOBILE).json()
+    sheet = body["sheets"][0]
+    assert sheet["row_fields_extra"] == ["fecho"]
+    assert "fecho" in sheet["rows"][0]
+
+
+@pytest.mark.parametrize("value", ["", "x", "X"])
+def test_mobile_qtd_batch_accepts_and_normalizes_fecho(
+    value, tmp_db, isolate, client,
+):
+    sid = _seed_bobine_v3(rows=[
+        {"of": "262892", "modelo": "CGC2E10D", "qtd": "4", "fecho": "X"}
+    ])
+    response = client.post(
+        "/mobile/qtds-batch",
+        json={
+            "edits": [
+                {
+                    "sheet_id": sid,
+                    "field_path": "rows[0].fecho",
+                    "value": value,
+                },
+            ],
+        },
+        headers=_MOBILE,
+    )
+    assert response.status_code == 200
+    expected = "X" if value else ""
+    assert db.get_sheet(sid)["sheet_data"]["rows"][0]["fecho"] == expected
+
+
+def test_mobile_qtd_batch_rejects_invalid_fecho(tmp_db, isolate, client):
+    sid = _seed_bobine_v3()
+    response = client.post(
+        "/mobile/qtds-batch",
+        json={
+            "edits": [
+                {
+                    "sheet_id": sid,
+                    "field_path": "rows[0].fecho",
+                    "value": "SIM",
+                },
+            ],
+        },
+        headers=_MOBILE,
+    )
+    assert response.status_code == 400
+    assert "blank or X" in str(response.json()["errors"])
+    assert db.get_sheet(sid)["sheet_data"]["rows"][0]["fecho"] == ""
 
 
 def _seed_paragens_sheet(template_name: str, setor: str) -> int:

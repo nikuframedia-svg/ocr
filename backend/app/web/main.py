@@ -170,7 +170,14 @@ def _process_sheet_ocr(sheet_id: int) -> None:
         was_reprocess = bool(sheet.get("raw_extraction"))
         # rev00 — pista de página da captura guiada (autoritativa p/ o routing).
         page_hint = (sheet.get("page_hint") or "").strip().upper() or None
-        result = ocr_runner.run_pipeline(img_path, page_hint=page_hint)
+        template_hint = None
+        if was_reprocess and db.get_sheet_template_name(sheet) == "bobine_formato_legacy":
+            template_hint = "bobine_formato_legacy"
+        result = ocr_runner.run_pipeline(
+            img_path,
+            page_hint=page_hint,
+            template_name_hint=template_hint,
+        )
         db.update_extraction(
             sheet_id=sheet_id,
             raw_extraction=result["raw"],
@@ -699,6 +706,12 @@ def _rebuild_sheet_data_from_raw(sheet_id: int, sheet: dict) -> bool:
     if not raw or _has_human_row_structure_edits(sheet_id):
         return False
     rebuilt = json.loads(json.dumps(raw, ensure_ascii=False))
+    # raw_extraction is an immutable OCR snapshot and intentionally is not
+    # rewritten by compatibility migrations. Preserve the current internal
+    # template when reconstructing editable sheet_data from that snapshot.
+    current_template = str(current.get("template_name") or "")
+    if current_template == "bobine_formato_legacy":
+        rebuilt["template_name"] = current_template
     for path, value in _last_human_field_edits(sheet_id).items():
         try:
             db._set_by_path(rebuilt, path, value)
@@ -1756,6 +1769,13 @@ async def sheet_edit(
         _v = new_value.strip()
         if _ISO_DATE_RE.match(_v):
             new_value = f"{_v[8:10]}-{_v[5:7]}-{_v[0:4]}"
+    if re.match(r"^rows\[\d{1,3}\]\.fecho$", field_path):
+        tpl = _template_ctx_for_sheet(sheet_pre)["template"]
+        if tpl is None or "fecho" not in tpl.row_fields:
+            raise HTTPException(400, "fecho não é permitido neste template")
+        new_value = new_value.strip().upper()
+        if new_value not in ("", "X"):
+            raise HTTPException(400, "FECHO aceita apenas vazio ou X")
     try:
         old, new = db.apply_edit(sheet_id, field_path, new_value)
     except ValueError as e:
@@ -2052,7 +2072,7 @@ def mobile_qtds(ids: str) -> JSONResponse:
             continue
         # rev00 — SUCATA por linha entra como campo extra (espelha cesta_n).
         extra_fields = (
-            [fname for fname in ("cesta_n", "sucata") if fname in tpl.row_fields]
+            [fname for fname in ("cesta_n", "sucata", "fecho") if fname in tpl.row_fields]
             if tpl is not None else []
         )
         out.append({
@@ -2073,6 +2093,7 @@ def mobile_qtds(ids: str) -> JSONResponse:
                     "cesta_n": r.get("cesta_n", ""),
                     # rev00 — SUCATA por linha (vazio se template não a usa)
                     "sucata": r.get("sucata", ""),
+                    "fecho": r.get("fecho", ""),
                 }
                 for i, r in enumerate(rows)
             ],
@@ -2136,7 +2157,7 @@ async def mobile_qtds_batch(request: Request) -> JSONResponse:
         raise HTTPException(400, "edits must be a list")
 
     # Whitelist: qty + cesta_n (R114) + sucata (rev00) + footer counters
-    row_field_re = re.compile(r"^rows\[(\d{1,3})\]\.(qtd|cesta_n|sucata)$")
+    row_field_re = re.compile(r"^rows\[(\d{1,3})\]\.(qtd|cesta_n|sucata|fecho)$")
     allowed_footer = {"footer.colunas_produzidas", "footer.horas_trabalhadas"}
     errors: list[dict] = []
     valid_edits: list[tuple[int, str, str]] = []
@@ -2183,7 +2204,7 @@ async def mobile_qtds_batch(request: Request) -> JSONResponse:
                 continue
             # cesta_n (R114) e sucata (rev00) só são aceites se o template os
             # declarar; qtd é universal.
-            if row_field in ("cesta_n", "sucata"):
+            if row_field in ("cesta_n", "sucata", "fecho"):
                 from app.templates_registry import get_template
                 tpl = get_template(db.get_sheet_template_name(sheet))
                 if row_field not in tpl.row_fields:
@@ -2191,6 +2212,11 @@ async def mobile_qtds_batch(request: Request) -> JSONResponse:
                         "edit": e,
                         "error": f"{row_field} not allowed for this template",
                     })
+                    continue
+            if row_field == "fecho":
+                value = value.strip().upper()
+                if value not in ("", "X"):
+                    errors.append({"edit": e, "error": "fecho must be blank or X"})
                     continue
         elif field_path not in allowed_footer:
             errors.append({"edit": e, "error": f"field {field_path} not allowed on mobile"})
@@ -3061,7 +3087,8 @@ def admin_page(request: Request, tab: str) -> Response:
                 "n_cross": len(t.cross_check_fields),
                 "is_verso": not t.has_production_rows,
                 "is_gemini": t.is_gemini,
-            } for t in TEMPLATES.values() if t.source == "builtin"),
+            } for t in TEMPLATES.values()
+              if t.source == "builtin" and not t.internal),
             key=lambda d: (d["phase"], d["name"]))
         ctx["n_builtin_templates"] = len(ctx["builtin_templates"])
         ctx["unidades_ativas"] = db.list_unidades()
@@ -5240,6 +5267,11 @@ def _to_3block_csv(filename: str, data: dict, *, neutralize: bool = False) -> st
 
     # Resolve template — explicit > inferred > default
     tname = (data or {}).get("template_name")
+    if tname == "bobine_formato" and any(
+        isinstance(row, dict) and "sucata" in row
+        for row in ((data or {}).get("rows") or [])
+    ):
+        tname = "bobine_formato_legacy"
     if tname:
         template = get_template(tname)
     else:

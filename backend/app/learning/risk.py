@@ -17,6 +17,8 @@ def classify_risk(proposal: Proposal) -> str:
         return "behavior"
     if proposal.kind in _ALWAYS_LOW:
         return "low"
+    if proposal.kind == "case_rule":
+        return "behavior" if proposal.payload.get("conflict") else "low"
     if proposal.kind.endswith("_alias"):
         return _alias_risk(proposal)
     return "behavior"

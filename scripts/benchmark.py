@@ -231,6 +231,7 @@ def main() -> int:
 
     console.print(f"\n[green]baseline written to {output}[/green]")
     console.print(f"  field accuracy:    {metrics.field_accuracy * 100:.1f}%")
+    console.print(f"  case-sensitive:    {metrics.case_sensitive_accuracy * 100:.1f}%")
     console.print(f"  perfect sheets:    {metrics.perfect_sheet_rate * 100:.1f}%")
     console.print(f"  critical accuracy: {metrics.critical_field_accuracy * 100:.1f}%")
     console.print(f"  hallucination:     {metrics.hallucination_rate * 100:.1f}%")

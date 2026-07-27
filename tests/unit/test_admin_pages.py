@@ -87,6 +87,7 @@ class TestAdminSkeleton:
         assert "BOBINE-FORMATO" in r.text      # alias canónico do default
         assert "GUILHOTINA 6M" in r.text       # setor de corte
         assert "bobine_formato" in r.text      # nome técnico
+        assert "bobine_formato_legacy" not in r.text  # template interno
         assert ">verso<" in r.text             # badge dos templates verso
         assert ">TPL102<" in r.text            # badge dos Gemini
 

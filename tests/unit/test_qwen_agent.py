@@ -116,6 +116,7 @@ class TestDBTools:
         names = [t["name"] for t in result["templates"]]
         # Pelo menos os templates principais têm de aparecer
         assert "bobine_formato" in names
+        assert "bobine_formato_legacy" not in names
         assert len(names) >= 5
 
     def test_get_refs_summary_shape(self):

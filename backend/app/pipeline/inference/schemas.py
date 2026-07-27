@@ -50,6 +50,8 @@ ROW_FIELDS: Final[tuple[str, ...]] = (
     "esp",
     "lbase",
     "ltopo",
+    "sucata",
+    "fecho",
 )
 
 FOOTER_FIELDS: Final[tuple[str, ...]] = (
@@ -136,6 +138,13 @@ class Row(_StringFields):
     # rev00 (13/04/2026) — coluna SUCATA (nº de peças sucatadas) em todas as
     # tabelas de produção. Informativo; sem cross-check contra plano/SAP.
     sucata: str = ""
+    # TPL103 Bobine Formato v3 — mark indicating that the row was closed.
+    fecho: str = ""
+
+    @field_validator("fecho", mode="after")
+    @classmethod
+    def _normalise_fecho(cls, value: str) -> str:
+        return "X" if value.strip().upper() == "X" else value
 
     @field_validator("coni", mode="after")
     @classmethod

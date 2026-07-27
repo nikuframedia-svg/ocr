@@ -98,6 +98,106 @@ def test_mine_edits_excludes_system_source(learn_db):
     assert mining.mine_edits() == []
 
 
+def test_case_only_edits_generate_case_rule(learn_db):
+    from app.learning import mining
+
+    sid = _add_sheet(
+        learn_db,
+        sheet_data={"template_name": "bobine_formato", "rows": []},
+    )
+    for _ in range(2):
+        _add_edit(learn_db, sid, "rows[0].modelo", "CFC5F45RIV", "CFC5F45Riv")
+    edits = mining.mine_edits()
+    assert len(edits) == 2
+    rules = mining.derive_case_rules(edits)
+    assert len(rules) == 1
+    assert rules[0].payload["to"] == "CFC5F45Riv"
+    assert rules[0].template_name == "bobine_formato"
+
+
+def test_conflicting_case_rules_are_quarantined(learn_db):
+    from app.learning import mining, risk
+
+    sid = _add_sheet(
+        learn_db,
+        sheet_data={"template_name": "bobine_formato", "rows": []},
+    )
+    for canonical in ("CFC5F45Riv", "Cfc5f45riv"):
+        for _ in range(2):
+            _add_edit(
+                learn_db,
+                sid,
+                "rows[0].modelo",
+                "CFC5F45RIV",
+                canonical,
+            )
+
+    rules = mining.derive_case_rules(mining.mine_edits())
+
+    assert len(rules) == 2
+    assert all(rule.payload["conflict"] is True for rule in rules)
+    assert all(risk.classify_risk(rule) == "behavior" for rule in rules)
+
+
+def test_case_rule_closed_loop_applies_to_next_sheet(learn_db, monkeypatch):
+    from app.dq import snap
+    from app.learning import materialize, mining, risk, store
+    from app.pipeline.scoring_engine import (
+        _apply_winner_to_field,
+        _score_header_footer,
+    )
+
+    sid = _add_sheet(
+        learn_db,
+        sheet_data={"template_name": "bobine_formato", "rows": []},
+    )
+    corrections = (
+        ("rows[0].modelo", "CFC5F45RIV", "CFC5F45Riv"),
+        ("rows[0].cliente", "CLIENTE RIV", "Cliente Riv"),
+        ("header.operador", "ANA SILVA", "Ana Silva"),
+    )
+    for field_path, old, new in corrections:
+        for _ in range(2):
+            _add_edit(learn_db, sid, field_path, old, new)
+    rules = mining.derive_case_rules(mining.mine_edits())
+    assert {rule.field for rule in rules} == {"cliente", "modelo", "operador"}
+    for rule in rules:
+        stored = store.upsert_proposal(rule, risk.classify_risk(rule))
+        assert stored["status"] == "approved"
+    overlay = materialize.build_overlay()
+    original_loader = snap._load_overlay
+    monkeypatch.setattr(snap, "_load_overlay", lambda _repo: overlay)
+    try:
+        snap.reload_lexicons()
+        modelo = _apply_winner_to_field(
+            "modelo", "CFC5F45RIV", None, [], {}, {},
+            has_field_reference=True,
+            template_name="bobine_formato",
+        )
+        cliente = _apply_winner_to_field(
+            "cliente", "CLIENTE RIV", None, [], {}, {},
+            has_field_reference=True,
+            template_name="bobine_formato",
+        )
+        header, _footer = _score_header_footer(
+            {"operador": "ANA SILVA"},
+            {},
+            {},
+            header_fields=("operador",),
+            template_name="bobine_formato",
+        )
+        assert modelo["status"] == "snapped"
+        assert modelo["value"] == "CFC5F45Riv"
+        assert modelo["decision_reason"] == "learned_canonical_case"
+        assert cliente["value"] == "Cliente Riv"
+        assert cliente["decision_reason"] == "learned_canonical_case"
+        assert header["operador"]["value"] == "Ana Silva"
+        assert header["operador"]["decision_reason"] == "learned_canonical_case"
+    finally:
+        monkeypatch.setattr(snap, "_load_overlay", original_loader)
+        snap.reload_lexicons()
+
+
 def test_derive_confusions_finds_char_substitution(learn_db):
     from app.learning import mining
 

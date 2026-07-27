@@ -53,7 +53,7 @@ CROSSABLE_FIELDS = frozenset({
 # sem KPIs nem cross-check (aviso no wizard).
 KNOWN_ROW_FIELDS = frozenset({
     "pri", "cliente", "ov", "of", "modelo", "qtd", "comp_mm", "larg_mm",
-    "lote", "coni", "esp", "lbase", "ltopo", "sucata", "qtd_metros",
+    "lote", "coni", "esp", "lbase", "ltopo", "sucata", "fecho", "qtd_metros",
     "sobras", "cesta_n", "dbase", "dtopo", "m2", "nesting", "inicio",
     "fim", "np", "pf", "cf", "motivo", "duracao", "resolvido",
 })

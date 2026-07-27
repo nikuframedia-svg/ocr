@@ -312,6 +312,9 @@
                   <template x-if="hasSucata(sheet)">
                     <th style="text-align:right; padding:6px 8px; width:70px;">SUCATA</th>
                   </template>
+                  <template x-if="hasFecho(sheet)">
+                    <th style="text-align:center; padding:6px 8px; width:70px;">FECHO</th>
+                  </template>
                 </tr>
               </thead>
               <tbody>
@@ -354,6 +357,13 @@
                                style="width:100%; padding:6px; text-align:right;
                                       font-family:var(--font-mono); font-size:14px;
                                       border:1px solid var(--rule-2); border-radius:4px;">
+                      </td>
+                    </template>
+                    <template x-if="hasFecho(sheet)">
+                      <td style="padding:6px 8px; text-align:center;">
+                        <input type="checkbox"
+                               :checked="String(row.fecho || '').toUpperCase() === 'X'"
+                               @change="row.fecho = $event.target.checked ? 'X' : ''">
                       </td>
                     </template>
                   </tr>
@@ -901,6 +911,10 @@ function captureApp() {
       return Array.isArray(sheet.row_fields_extra)
         && sheet.row_fields_extra.includes('sucata');
     },
+    hasFecho(sheet) {
+      return Array.isArray(sheet.row_fields_extra)
+        && sheet.row_fields_extra.includes('fecho');
+    },
 
     async submitQtds() {
       if (this.savingQtds) return;
@@ -930,6 +944,13 @@ function captureApp() {
               sheet_id: s.sheet_id,
               field_path: `rows[${r.row_index}].sucata`,
               value: String(r.sucata ?? ''),
+            });
+          }
+          if (this.hasFecho(s)) {
+            edits.push({
+              sheet_id: s.sheet_id,
+              field_path: `rows[${r.row_index}].fecho`,
+              value: String(r.fecho ?? ''),
             });
           }
         }

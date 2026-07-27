@@ -46,6 +46,7 @@ ROW_COLUMNS = [
     ("ltopo", "LTOPO"),
     # R261 — sucata (rev00) por linha; já vinha no SELECT pr.*, faltava a coluna.
     ("sucata", "SUCATA"),
+    ("fecho", "FECHO"),
 ]
 
 
@@ -338,7 +339,7 @@ def _write_day_sheet(wb: openpyxl.Workbook, day_iso: str, day_rows: list[dict]) 
         row_idx += 1  # blank line between operators
 
     # Column widths — generous defaults for Inter font
-    widths = [6, 14, 11, 10, 14, 7, 10, 10, 12, 10, 8, 9, 9, 9]
+    widths = [6, 14, 11, 10, 14, 7, 10, 10, 12, 10, 8, 9, 9, 9, 7]
     for ci, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(ci)].width = w
 

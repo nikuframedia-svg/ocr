@@ -463,7 +463,11 @@ def _build_current_and_dq(raw_extraction: dict, template: Any) -> tuple[dict, di
     return current, dq
 
 
-def run_pipeline(image_path: Path, page_hint: str | None = None) -> dict:
+def run_pipeline(
+    image_path: Path,
+    page_hint: str | None = None,
+    template_name_hint: str | None = None,
+) -> dict:
     """R109 — corre OCR + detecção de template. Sem DQ.
 
     A normalização (snap_cliente, snap_modelo, etc.) acontece no motor
@@ -493,8 +497,13 @@ def run_pipeline(image_path: Path, page_hint: str | None = None) -> dict:
     template, detection_source = detect_template_with_reason(
         setor, cod_maquina=cod_maquina,
     )
+    if template_name_hint:
+        hinted = get_template(template_name_hint)
+        if hinted.internal:
+            template = hinted
+            detection_source = "persisted_template"
     structure = _acabamento_structure_analysis(pass1_raw)
-    if template.name == DEFAULT_TEMPLATE.name:
+    if template.name == DEFAULT_TEMPLATE.name and not template_name_hint:
         inferred = _infer_template_from_default_pass1(pass1_raw)
         if inferred is not None:
             template = inferred

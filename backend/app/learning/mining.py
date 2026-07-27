@@ -5,6 +5,7 @@ wrong) → ``new`` (human, right) pair. Validated sheets are confirmed
 ground truth. This module turns both into :class:`Proposal` objects:
 
 - :func:`derive_aliases`         — repeated old→new pairs become aliases
+- :func:`derive_case_rules`      — repeated case-only edits retain canonical casing
 - :func:`derive_confusions`      — char-level diffs become confusion pairs
 - :func:`derive_observed_values` — new clientes/modelos seen in gold
 - :func:`derive_fewshot_candidates` — best validated sheets per template
@@ -40,22 +41,29 @@ def field_of(field_path: str) -> str:
 def mine_edits(since_edit_id: int = 0) -> list[EditDiff]:
     """Read human corrections from the ``edits`` table.
 
-    Drops noise: empty new value, no-op edits, and case-only changes
-    (normalisation, not a learnable OCR error). System auto-snaps
+    Drops noise: empty new value and exact no-op edits. Case-only changes are
+    deliberately retained because casing is part of the factory identifier.
+    System auto-snaps
     (``source='system'``) are excluded — only operator corrections teach.
     """
     diffs: list[EditDiff] = []
     with db.conn() as c:
         rows = c.execute(
-            "SELECT id, sheet_id, field_path, old_value, new_value "
-            "FROM edits WHERE id > ? AND source = 'human' ORDER BY id",
+            "SELECT e.id, e.sheet_id, e.field_path, e.old_value, e.new_value, "
+            "s.sheet_data FROM edits e JOIN sheets s ON s.id = e.sheet_id "
+            "WHERE e.id > ? AND e.source = 'human' ORDER BY e.id",
             (since_edit_id,),
         ).fetchall()
     for r in rows:
         old = (r["old_value"] or "").strip()
         new = (r["new_value"] or "").strip()
-        if not new or old == new or old.upper() == new.upper():
+        if not new or old == new:
             continue
+        try:
+            sheet_data = json.loads(r["sheet_data"]) if r["sheet_data"] else {}
+        except (json.JSONDecodeError, TypeError):
+            sheet_data = {}
+        template_name = db.get_sheet_template_name({"sheet_data": sheet_data})
         diffs.append(
             EditDiff(
                 edit_id=r["id"],
@@ -64,9 +72,45 @@ def mine_edits(since_edit_id: int = 0) -> list[EditDiff]:
                 field=field_of(r["field_path"]),
                 old=old,
                 new=new,
+                template_name=template_name,
             )
         )
     return diffs
+
+
+def derive_case_rules(edits: list[EditDiff]) -> list[Proposal]:
+    """Repeated case-only corrections become auditable canonical spellings."""
+    groups: dict[tuple[str, str, str, str], list[EditDiff]] = defaultdict(list)
+    targets: dict[tuple[str, str, str], set[str]] = defaultdict(set)
+    for d in edits:
+        if d.field not in _ALIAS_FIELDS or not d.old:
+            continue
+        if d.old != d.new and d.old.casefold() == d.new.casefold():
+            template_name = d.template_name or "bobine_formato"
+            groups[(template_name, d.field, d.old.casefold(), d.new)].append(d)
+            targets[(template_name, d.field, d.old.casefold())].add(d.new)
+    out: list[Proposal] = []
+    for (template_name, field, folded, canonical), ds in groups.items():
+        if len(ds) < MIN_ALIAS_SUPPORT:
+            continue
+        conflict = len(targets[(template_name, field, folded)]) > 1
+        out.append(Proposal(
+            kind="case_rule",
+            field=field,
+            template_name=template_name,
+            payload={
+                "field": field,
+                "from_casefold": folded,
+                "to": canonical,
+                "conflict": conflict,
+            },
+            dedup_key=(
+                f"case_rule|{template_name}|{field}|{folded}=>{canonical}"
+            ),
+            evidence_count=len(ds),
+            evidence_refs=sorted(d.edit_id for d in ds),
+        ))
+    return out
 
 
 def derive_aliases(edits: list[EditDiff]) -> list[Proposal]:
@@ -75,7 +119,11 @@ def derive_aliases(edits: list[EditDiff]) -> list[Proposal]:
     groups: dict[tuple[str, str, str], list[EditDiff]] = defaultdict(list)
     for d in edits:
         kind = _ALIAS_FIELDS.get(d.field)
-        if not kind or not d.old:
+        if (
+            not kind
+            or not d.old
+            or d.old.casefold() == d.new.casefold()
+        ):
             continue
         groups[(kind, d.old.upper().strip(), d.new.strip())].append(d)
 

@@ -153,6 +153,9 @@ class TemplateSpec:
     source: str = "builtin"           # "builtin" | "db"
     unidade_id: int | None = None     # None = Trofa (sede)
     db_id: int | None = None          # kanban_templates.id quando source="db"
+    # Compatibility-only builtins remain resolvable for persisted sheets but
+    # are hidden from inventories/options for new captures.
+    internal: bool = False
 
 
 # ============================================================================
@@ -163,12 +166,32 @@ class TemplateSpec:
 _TPL103_HEADER = ("operador", "n_operador", "setor_maquina", "cod_maquina", "data")
 _TPL103_FOOTER = ("colunas_produzidas", "horas_trabalhadas")
 
-# Bobine-Formato — the original supported template (13 row fields)
+# Bobine-Formato v3 (27/07/2026) — FECHO replaces the rev00 SUCATA column.
 _BOBINE_FORMATO = TemplateSpec(
     name="bobine_formato",
     tpl_code="TPL103",
     phase="Bobine Formato",
     setor_aliases=("BOBINE-FORMATO", "BOBINE FORMATO", "BOBINE/FORMATO"),
+    row_fields=(
+        "pri", "cliente", "ov", "of", "modelo",
+        "qtd", "comp_mm", "larg_mm", "lote", "coni",
+        "esp", "lbase", "ltopo", "fecho",
+    ),
+    cross_check_fields=(
+        "cliente", "ov", "of", "modelo",
+        "comp_mm", "larg_mm", "lote", "esp",
+        "lbase", "ltopo",
+    ),
+    description="Corte / formato de bobine v3. FECHO é uma marca X.",
+)
+
+# Historical Bobine-Formato sheets keep their original SUCATA contract.
+# No aliases: this template is never auto-detected for a new capture.
+_BOBINE_FORMATO_LEGACY = TemplateSpec(
+    name="bobine_formato_legacy",
+    tpl_code="TPL103",
+    phase="Bobine Formato",
+    setor_aliases=(),
     row_fields=(
         "pri", "cliente", "ov", "of", "modelo",
         "qtd", "comp_mm", "larg_mm", "lote", "coni",
@@ -179,7 +202,8 @@ _BOBINE_FORMATO = TemplateSpec(
         "comp_mm", "larg_mm", "lote", "esp",
         "lbase", "ltopo",
     ),
-    description="Corte / formato de bobine. Schema canónico com 13 colunas.",
+    description="Bobine Formato rev00 histórico, com coluna SUCATA.",
+    internal=True,
 )
 
 # Guilhotina — Máquina de corte (no LARG_MM, no LOTE)
@@ -539,6 +563,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
     t.name: t
     for t in (
         _BOBINE_FORMATO,
+        _BOBINE_FORMATO_LEGACY,
         _GUILHOTINA,
         _LINHA_CORTE,
         _QUINADORA_PAV8,
@@ -863,8 +888,11 @@ def all_phases() -> tuple[str, ...]:
 
 
 def templates_in_phase(phase: str) -> tuple[TemplateSpec, ...]:
-    """Return all TemplateSpec entries belonging to a production phase."""
-    return tuple(t for t in TEMPLATES.values() if t.phase == phase)
+    """Return selectable TemplateSpec entries belonging to a production phase."""
+    return tuple(
+        t for t in TEMPLATES.values()
+        if t.phase == phase and not t.internal
+    )
 
 
 __all__ = [

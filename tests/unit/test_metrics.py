@@ -57,6 +57,16 @@ def test_perfect_sheet_metrics() -> None:
     assert metrics.perfect_sheet_rate == 1.0
     assert metrics.critical_field_accuracy == 1.0
     assert metrics.hallucination_rate == 0.0
+    assert metrics.case_sensitive_accuracy == 1.0
+
+
+def test_case_only_error_is_visible_without_changing_legacy_accuracy() -> None:
+    expected = _make(modelo="CFC5F45Riv")
+    actual = _make(modelo="CFC5F45RIV")
+    metrics = compute_metrics({"a.jpg": compare_extractions("a.jpg", expected, actual)})
+    assert metrics.field_accuracy == 1.0
+    assert metrics.case_sensitive_accuracy < 1.0
+    assert metrics.case_sensitive_accuracy_by_field["modelo"] == 0.0
 
 
 def test_critical_field_mismatch_drops_critical_accuracy() -> None:
