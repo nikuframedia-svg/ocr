@@ -11,6 +11,8 @@ para não tocar no `data/app.db` tracked.
 """
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from app.web import db
@@ -575,6 +577,113 @@ class _EmptyRefsWatcher:
             "clientes_plan": frozenset(),
             "lotes_sap_full": {},
         }
+
+
+class TestCrossCheckRevisionConcurrency:
+    def _seed(self) -> int:
+        sid = db.insert_sheet("t.jpg")
+        sheet_data = {
+            "template_name": "bobine_formato",
+            "header": {},
+            "footer": {},
+            "rows": [{"of": "OLD"}],
+        }
+        db.update_extraction(sid, sheet_data, {}, sheet_data)
+        return sid
+
+    def test_cross_started_before_wizard_cannot_write_after_validation(
+        self, tmp_db, monkeypatch
+    ):
+        sid = self._seed()
+        scoring_started = threading.Event()
+        release_scoring = threading.Event()
+
+        def blocked_cross(sheet_data, *_args, **_kwargs):
+            scoring_started.set()
+            assert release_scoring.wait(2)
+            return {
+                "rows": [{
+                    "row_index": 0,
+                    "fields": {
+                        "of": {
+                            "engine_status": "very_different",
+                            "value": "OLD",
+                            "source": "plan",
+                        }
+                    },
+                }],
+                "header": {},
+                "footer": {},
+            }
+
+        monkeypatch.setattr(main, "get_watcher", lambda: _EmptyRefsWatcher())
+        monkeypatch.setattr(main, "cross_check_sheet", blocked_cross)
+        monkeypatch.setattr(main, "store_cross_check", lambda *a, **k: None)
+        monkeypatch.setattr(main, "_spawn_shadow_scoring", lambda *a, **k: None)
+
+        worker = threading.Thread(target=main._run_and_store_cross_check, args=(sid,))
+        worker.start()
+        assert scoring_started.wait(2)
+
+        revision = db.get_sheet(sid)["revision"]
+        db.apply_edits_batch(
+            sid,
+            [("rows[0].of", "NEW")],
+            source="wizard",
+            expected_revision=revision,
+        )
+        db.validate_sheet(sid, "JULIO LIMA")
+        release_scoring.set()
+        worker.join(2)
+
+        assert not worker.is_alive()
+        sheet = db.get_sheet(sid)
+        assert sheet["status"] == "validated"
+        assert sheet["sheet_data"]["rows"][0]["of"] == "NEW"
+
+    def test_cross_checks_for_same_sheet_are_serialized_and_latest_reads_new_revision(
+        self, tmp_db, monkeypatch
+    ):
+        sid = self._seed()
+        first_started = threading.Event()
+        release_first = threading.Event()
+        seen_values: list[str] = []
+        calls_lock = threading.Lock()
+
+        def observed_cross(sheet_data, *_args, **_kwargs):
+            with calls_lock:
+                call_no = len(seen_values)
+                seen_values.append(sheet_data["rows"][0]["of"])
+            if call_no == 0:
+                first_started.set()
+                assert release_first.wait(2)
+            return {"rows": [], "header": {}, "footer": {}}
+
+        monkeypatch.setattr(main, "get_watcher", lambda: _EmptyRefsWatcher())
+        monkeypatch.setattr(main, "cross_check_sheet", observed_cross)
+        monkeypatch.setattr(main, "store_cross_check", lambda *a, **k: None)
+        monkeypatch.setattr(main, "_spawn_shadow_scoring", lambda *a, **k: None)
+
+        first = threading.Thread(target=main._run_and_store_cross_check, args=(sid,))
+        first.start()
+        assert first_started.wait(2)
+        revision = db.get_sheet(sid)["revision"]
+        db.apply_edits_batch(
+            sid,
+            [("rows[0].of", "NEW")],
+            source="wizard",
+            expected_revision=revision,
+        )
+        second = threading.Thread(target=main._run_and_store_cross_check, args=(sid,))
+        second.start()
+        release_first.set()
+        first.join(2)
+        second.join(2)
+
+        assert not first.is_alive()
+        assert not second.is_alive()
+        assert seen_values == ["OLD", "NEW"]
+        assert db.get_sheet(sid)["sheet_data"]["rows"][0]["of"] == "NEW"
 
 
 class TestEditPersistsEndToEnd:

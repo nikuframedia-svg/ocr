@@ -362,6 +362,11 @@ def _is_mobile_request(request: Request) -> bool:
     return any(p in ua for p in _MOBILE_UA_PATTERNS)
 
 
+def _request_actor(request: Request) -> str:
+    """Best-effort identity for operator-driven audit records."""
+    return (request.headers.get("X-Forwarded-User") or "web").strip()[:200] or "web"
+
+
 @app.middleware("http")
 async def _admin_token_gate(request: Request, call_next):
     """Task C F7 — gate OPCIONAL das páginas de administração.
@@ -628,8 +633,14 @@ async def upload(
 
 
 def _human_edited_paths(sheet_id: int) -> frozenset[str]:
-    """R133 — field_paths cuja ÚLTIMA edição foi feita por um humano
-    (`edits.source='human'`). Estes campos são AUTORITATIVOS: o
+    """R133/R262 — paths cuja última edição é uma decisão do operador.
+
+    ``human`` identifica texto introduzido manualmente; ``wizard`` identifica
+    a entrada do plano explicitamente escolhida na varinha. Ambos são
+    AUTORITATIVOS contra o auto-overwrite, mas apenas ``human`` entra nas
+    métricas de esforço e no treino.
+
+    Estes campos são AUTORITATIVOS: o
     auto-overwrite do cross-check (snap/operador/codmaq, source='system')
     NÃO os deve reverter.
 
@@ -653,11 +664,14 @@ def _human_edited_paths(sheet_id: int) -> frozenset[str]:
     last: dict[str, str] = {}
     for r in rows:
         last[r["field_path"]] = r["source"]
-    return frozenset(fp for fp, src in last.items() if src == "human")
+    return frozenset(
+        fp for fp, src in last.items()
+        if src in db.AUTHORITATIVE_EDIT_SOURCES
+    )
 
 
-def _last_human_field_edits(sheet_id: int) -> dict[str, str]:
-    """Último valor humano por célula, excluindo edits estruturais de linha."""
+def _last_authoritative_field_edits(sheet_id: int) -> dict[str, str]:
+    """Última escolha explícita por célula, excluindo edits estruturais."""
     try:
         with db.conn() as c:
             rows = c.execute(
@@ -676,7 +690,7 @@ def _last_human_field_edits(sheet_id: int) -> dict[str, str]:
     return {
         path: value
         for path, (source, value) in last.items()
-        if source == "human"
+        if source in db.AUTHORITATIVE_EDIT_SOURCES
     }
 
 
@@ -712,20 +726,22 @@ def _rebuild_sheet_data_from_raw(sheet_id: int, sheet: dict) -> bool:
     current_template = str(current.get("template_name") or "")
     if current_template == "bobine_formato_legacy":
         rebuilt["template_name"] = current_template
-    for path, value in _last_human_field_edits(sheet_id).items():
+    for path, value in _last_authoritative_field_edits(sheet_id).items():
         try:
             db._set_by_path(rebuilt, path, value)
         except Exception:
             continue
     if rebuilt == current:
         return False
-    with db.conn() as c:
-        c.execute(
-            "UPDATE sheets SET sheet_data = ? WHERE id = ?",
-            (json.dumps(rebuilt, ensure_ascii=False), sheet_id),
+    try:
+        db.replace_sheet_data(
+            sheet_id,
+            rebuilt,
+            expected_revision=int(sheet.get("revision") or 0),
         )
-        db._sync_production_rows(c, sheet_id, rebuilt)
-    return True
+        return True
+    except db.SheetMutationError:
+        return False
 
 
 def _maybe_apply_snap(
@@ -733,6 +749,8 @@ def _maybe_apply_snap(
     field_path: str,
     cell: dict,
     protected: frozenset[str] = frozenset(),
+    *,
+    expected_revision: int | None = None,
 ) -> bool:
     """Aplica correções propostas pelo cross-check.
 
@@ -808,14 +826,22 @@ def _maybe_apply_snap(
     if not canonical:
         return False
     try:
-        db.apply_edit(sheet_id, field_path, canonical, source="system")
+        kwargs = (
+            {"expected_revision": expected_revision}
+            if expected_revision is not None else {}
+        )
+        db.apply_edit(sheet_id, field_path, canonical, source="system", **kwargs)
         return True
     except Exception:
         return False
 
 
 def _apply_auto_overwrites(
-    sheet_id: int, result: dict, protected: frozenset[str] = frozenset()
+    sheet_id: int,
+    result: dict,
+    protected: frozenset[str] = frozenset(),
+    *,
+    expected_revision: int | None = None,
 ) -> int:
     """R109/R124 — aplica snaps em rows + header + footer.
 
@@ -831,17 +857,34 @@ def _apply_auto_overwrites(
     auto-overwrite desses campos. Ver `_maybe_apply_snap`.
     """
     n_applied = 0
+    next_revision = expected_revision
     for row_r in result.get("rows", []):
         i = row_r.get("row_index")
         if i is None:
             continue
         for fn, cell in row_r.get("fields", {}).items():
-            if _maybe_apply_snap(sheet_id, f"rows[{i}].{fn}", cell, protected):
+            if _maybe_apply_snap(
+                sheet_id,
+                f"rows[{i}].{fn}",
+                cell,
+                protected,
+                expected_revision=next_revision,
+            ):
                 n_applied += 1
+                if next_revision is not None:
+                    next_revision += 1
     for section in ("header", "footer"):
         for fn, cell in (result.get(section) or {}).items():
-            if _maybe_apply_snap(sheet_id, f"{section}.{fn}", cell, protected):
+            if _maybe_apply_snap(
+                sheet_id,
+                f"{section}.{fn}",
+                cell,
+                protected,
+                expected_revision=next_revision,
+            ):
                 n_applied += 1
+                if next_revision is not None:
+                    next_revision += 1
     return n_applied
 
 
@@ -849,7 +892,12 @@ _LAST_OPERADOR_SNAP_WARN: str | None = None
 
 
 def _apply_operador_snap(
-    sheet_id: int, sheet: dict, refs: dict, protected: frozenset[str] = frozenset()
+    sheet_id: int,
+    sheet: dict,
+    refs: dict,
+    protected: frozenset[str] = frozenset(),
+    *,
+    expected_revision: int | None = None,
 ) -> int:
     """R70 — resolve operator identity against ListaColaboradores.
 
@@ -897,13 +945,26 @@ def _apply_operador_snap(
     sr = snap_operador(raw_name, raw_cod, colabs, aliases=aliases)
 
     n_applied = 0
+    next_revision = expected_revision
 
     # Persist pernr whenever we have a confident match (HIGH levels A/B/C),
     # even if no-op on name/cod (Condition A still has pernr to record).
     if sr.pernr and sr.pernr != cur_pernr:
         try:
-            db.apply_edit(sheet_id, "header.pernr", sr.pernr, source="system")
+            kwargs = (
+                {"expected_revision": next_revision}
+                if next_revision is not None else {}
+            )
+            db.apply_edit(
+                sheet_id,
+                "header.pernr",
+                sr.pernr,
+                source="system",
+                **kwargs,
+            )
             n_applied += 1
+            if next_revision is not None:
+                next_revision += 1
         except Exception:
             pass
 
@@ -911,8 +972,20 @@ def _apply_operador_snap(
     if (sr.applied and sr.snapped_name and sr.snapped_name != raw_name
             and "header.operador" not in protected):
         try:
-            db.apply_edit(sheet_id, "header.operador", sr.snapped_name, source="system")
+            kwargs = (
+                {"expected_revision": next_revision}
+                if next_revision is not None else {}
+            )
+            db.apply_edit(
+                sheet_id,
+                "header.operador",
+                sr.snapped_name,
+                source="system",
+                **kwargs,
+            )
             n_applied += 1
+            if next_revision is not None:
+                next_revision += 1
         except Exception:
             pass
 
@@ -920,8 +993,20 @@ def _apply_operador_snap(
     if (sr.applied and sr.snapped_cod and sr.snapped_cod != raw_cod
             and "header.n_operador" not in protected):
         try:
-            db.apply_edit(sheet_id, "header.n_operador", sr.snapped_cod, source="system")
+            kwargs = (
+                {"expected_revision": next_revision}
+                if next_revision is not None else {}
+            )
+            db.apply_edit(
+                sheet_id,
+                "header.n_operador",
+                sr.snapped_cod,
+                source="system",
+                **kwargs,
+            )
             n_applied += 1
+            if next_revision is not None:
+                next_revision += 1
         except Exception:
             pass
 
@@ -929,7 +1014,12 @@ def _apply_operador_snap(
 
 
 def _apply_codmaq_fill(
-    sheet_id: int, sheet: dict, refs: dict, protected: frozenset[str] = frozenset()
+    sheet_id: int,
+    sheet: dict,
+    refs: dict,
+    protected: frozenset[str] = frozenset(),
+    *,
+    expected_revision: int | None = None,
 ) -> int:
     """R85/R124 — fill OR correct header.cod_maquina from setor_maquina.
 
@@ -961,7 +1051,17 @@ def _apply_codmaq_fill(
     if current == canonical:
         return 0  # já igual — nada a fazer
     try:
-        db.apply_edit(sheet_id, "header.cod_maquina", canonical, source="system")
+        kwargs = (
+            {"expected_revision": expected_revision}
+            if expected_revision is not None else {}
+        )
+        db.apply_edit(
+            sheet_id,
+            "header.cod_maquina",
+            canonical,
+            source="system",
+            **kwargs,
+        )
         return 1
     except Exception:
         return 0
@@ -1003,7 +1103,36 @@ def _write_profile(record: dict) -> None:
         pass
 
 
+_CROSS_CHECK_LOCKS: dict[int, threading.Lock] = {}
+_CROSS_CHECK_LOCKS_GUARD = threading.Lock()
+
+
+def _cross_check_lock(sheet_id: int) -> threading.Lock:
+    """Return the process-local serialization lock for one sheet."""
+    with _CROSS_CHECK_LOCKS_GUARD:
+        return _CROSS_CHECK_LOCKS.setdefault(int(sheet_id), threading.Lock())
+
+
 def _run_and_store_cross_check(
+    sheet_id: int,
+    *,
+    rebuild_from_raw: bool = False,
+    profile_trigger: str | None = None,
+    ocr_timing: dict | None = None,
+    ocr_metrics: dict | None = None,
+) -> dict | None:
+    """Serialize scoring runs for a sheet, then process its latest revision."""
+    with _cross_check_lock(sheet_id):
+        return _run_and_store_cross_check_locked(
+            sheet_id,
+            rebuild_from_raw=rebuild_from_raw,
+            profile_trigger=profile_trigger,
+            ocr_timing=ocr_timing,
+            ocr_metrics=ocr_metrics,
+        )
+
+
+def _run_and_store_cross_check_locked(
     sheet_id: int,
     *,
     rebuild_from_raw: bool = False,
@@ -1050,6 +1179,10 @@ def _run_and_store_cross_check(
                 sheet = refreshed
         _ct["rebuild_ms"] = int((time.perf_counter() - _t0) * 1000)
 
+    # R262 — the scoring result is valid only for this exact sheet revision.
+    # Any explicit edit or validation increments it transactionally.
+    scored_revision = int(sheet.get("revision") or 0)
+
     # R260 — marca de água ANTES de pontuar: o `result` reflecte o sheet_data
     # deste instante. Qualquer edição humana com id superior foi feita durante
     # o cross-check (thread concorrente) e não pode ser revertida — fecha a
@@ -1068,6 +1201,16 @@ def _run_and_store_cross_check(
     plan_path = getattr(watcher, "plan_path", None)
     result["refs_snapshot"] = refs_snapshot(refs, plan_path)
 
+    # A mutation completed while scoring. Never store or apply this obsolete
+    # result: the mutation itself queues a fresh cross-check. This also closes
+    # the window where validation happened after the initial get_sheet().
+    current_sheet = db.get_sheet(sheet_id)
+    if current_sheet is None:
+        return result
+    if int(current_sheet.get("revision") or 0) != scored_revision:
+        return result
+    sheet = current_sheet
+
     # R133 — campos com última edição humana são autoritativos: o
     # auto-overwrite abaixo salta-os, senão o re-cross-check disparado por
     # `sheet_edit` reverte a correcção do operador ("escrevo mas não guarda").
@@ -1077,7 +1220,7 @@ def _run_and_store_cross_check(
     # auto-substituir — senão o run reverteria as edições humanas da folha.
     try:
         protected = (_human_edited_paths(sheet_id)
-                     | db.human_edits_after(sheet_id, edit_seq))
+                     | db.authoritative_edits_after(sheet_id, edit_seq))
         protected_ok = True
     except Exception:
         protected = frozenset()
@@ -1095,17 +1238,69 @@ def _run_and_store_cross_check(
         n_overwritten = n_op_snapped = n_codmaq_filled = 0
     else:
         _t0 = time.perf_counter()
+        expected_revision = scored_revision
         # Cross-check auto-overwrite: `snapped` e `very_different` concreto.
-        n_overwritten = _apply_auto_overwrites(sheet_id, result, protected)
+        n_overwritten = _apply_auto_overwrites(
+            sheet_id,
+            result,
+            protected,
+            expected_revision=expected_revision,
+        )
+        expected_revision += n_overwritten
+        after_overwrites = db.get_sheet(sheet_id)
+        can_continue = bool(
+            after_overwrites
+            and after_overwrites.get("status") != "validated"
+            and int(after_overwrites.get("revision") or 0) == expected_revision
+        )
         # R70 — operator snap against ListaColaboradores (SAP employee list).
         # Resolves OCR name/cod against canonical sname/cod/pernr and applies
         # auto-substitution when there's strong identity signal (cod + token
         # overlap). See backend/app/dq/operador_snap.py for the 5 rules.
-        n_op_snapped = _apply_operador_snap(sheet_id, sheet, refs, protected)
+        if can_continue:
+            sheet = after_overwrites
+            n_op_snapped = _apply_operador_snap(
+                sheet_id,
+                sheet,
+                refs,
+                protected,
+                expected_revision=expected_revision,
+            )
+            expected_revision += n_op_snapped
+        else:
+            n_op_snapped = 0
+        after_operador = db.get_sheet(sheet_id)
+        can_continue = bool(
+            after_operador
+            and after_operador.get("status") != "validated"
+            and int(after_operador.get("revision") or 0) == expected_revision
+        )
         # R85 — auto-fill cod_maquina from setor_maquina via maquinas.xlsx
         # lookup. Fills empty cod_maquina when setor maps to a known machine.
-        n_codmaq_filled = _apply_codmaq_fill(sheet_id, sheet, refs, protected)
+        if can_continue:
+            sheet = after_operador
+            n_codmaq_filled = _apply_codmaq_fill(
+                sheet_id,
+                sheet,
+                refs,
+                protected,
+                expected_revision=expected_revision,
+            )
+        else:
+            n_codmaq_filled = 0
         _ct["overwrites_ms"] = int((time.perf_counter() - _t0) * 1000)
+
+    # A user/wizard edit or validation may still win after the first revision
+    # check. Account only for this run's own writes; any other revision delta
+    # makes the display result obsolete and it must not be persisted.
+    own_writes = n_overwritten + n_op_snapped + n_codmaq_filled
+    latest_sheet = db.get_sheet(sheet_id)
+    if latest_sheet is None:
+        return result
+    if int(latest_sheet.get("revision") or 0) != scored_revision + own_writes:
+        return result
+    sheet = latest_sheet
+
     if n_overwritten > 0 or n_op_snapped > 0 or n_codmaq_filled > 0:
         # Re-fetch sheet (sheet_data was modified by apply_edit) and
         # re-run cross-check to refresh statuses against new values.
@@ -1149,6 +1344,16 @@ def _run_and_store_cross_check(
                 result["active_rereads"] = rereads
     except Exception:
         pass
+
+    # Active re-reads above can be slow. A validated-date correction may
+    # commit while they run, so close the final window immediately before
+    # deriving the storage path and persisting the display artefact.
+    store_sheet = db.get_sheet(sheet_id)
+    if store_sheet is None:
+        return result
+    if int(store_sheet.get("revision") or 0) != scored_revision + own_writes:
+        return result
+    sheet = store_sheet
 
     header = sheet["sheet_data"].get("header", {}) or {}
     operador = header.get("operador") or sheet.get("operador") or "?"
@@ -1309,9 +1514,12 @@ def sheet_page(
 
     tpl_ctx = _template_ctx_for_sheet(sheet)
 
-    # R136 — a barra "Validar" deixou de ter date-picker próprio; a data
-    # edita-se na célula header.data (date-picker via filtro `pt_to_iso`).
-    # Já não é preciso pré-calcular `data_iso_for_validate` aqui.
+    # The raw view may show the immutable OCR date, while a validated-date
+    # correction must always start from the canonical persisted sheet_data.
+    canonical_header = (sheet.get("sheet_data") or {}).get("header", {}) or {}
+    date_iso_for_correction = db._normalize_data_pt_to_iso(
+        canonical_header.get("data")
+    )
 
     # R111 — flag para a UI saber se a imagem servida em /image/<id> é cropped
     # (paper detectado) ou raw (fallback silencioso). Quando False, sheet.html
@@ -1338,6 +1546,7 @@ def sheet_page(
             "view_mode": view_mode,
             "back_url": back_url,
             "has_cropped": sheet_has_cropped,
+            "date_iso_for_correction": date_iso_for_correction,
             **tpl_ctx,  # template, template_name, row/footer/header_fields
         },
     )
@@ -1778,8 +1987,10 @@ async def sheet_edit(
             raise HTTPException(400, "FECHO aceita apenas vazio ou X")
     try:
         old, new = db.apply_edit(sheet_id, field_path, new_value)
+    except db.SheetValidatedError as e:
+        raise HTTPException(409, "Folha já validada — edits bloqueados") from e
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     sheet = db.get_sheet(sheet_id)
     if sheet is None:
         raise HTTPException(404, f"sheet {sheet_id} not found")
@@ -1836,6 +2047,88 @@ async def sheet_edit(
 
     _start_sheet_cross_check({sheet_id}, profile_trigger="sheet_edit")
     return HTMLResponse("".join(parts))
+
+
+def _invalidate_production_caches() -> None:
+    """Invalidate aggregates derived from validated production rows."""
+    try:
+        from app.pipeline.of_consumption import invalidate_cache
+        invalidate_cache()
+        from app.pipeline.obras_status import invalidate_cache as obras_inv
+        obras_inv()
+    except Exception:
+        traceback.print_exc()
+
+
+@app.post("/sheet/{sheet_id}/correct-date")
+async def sheet_correct_validated_date(
+    request: Request,
+    sheet_id: int,
+    new_date: str = Form(...),
+    reason: str = Form(""),
+    expected_revision: int = Form(...),
+) -> JSONResponse:
+    """Controlled, audited exception for ``header.data`` after validation."""
+    if _is_mobile_request(request):
+        raise HTTPException(403, "Correção da data só pode ser feita em desktop")
+    if db.get_sheet(sheet_id) is None:
+        raise HTTPException(404, f"sheet {sheet_id} not found")
+
+    try:
+        corrected = db.correct_validated_date(
+            sheet_id,
+            new_date,
+            expected_revision=expected_revision,
+            actor=_request_actor(request),
+            reason=reason,
+        )
+    except db.SheetNotValidatedError as exc:
+        raise HTTPException(
+            409, "A correção pós-validação só está disponível em folhas validadas"
+        ) from exc
+    except db.StaleSheetRevisionError as exc:
+        raise HTTPException(
+            409,
+            "A folha mudou entretanto — recarrega antes de corrigir a data",
+        ) from exc
+    except db.NoDateChangeError as exc:
+        raise HTTPException(409, "A nova data é igual à data atual") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        print(
+            f"[correct-date] sheet {sheet_id}: {traceback.format_exc()}",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise HTTPException(
+            500, "Não foi possível guardar a correção da data"
+        ) from exc
+
+    _invalidate_production_caches()
+    try:
+        kernel.emit_event(
+            "sheet_date_corrected",
+            {
+                "sheet_id": sheet_id,
+                "old_date": corrected["old_date"],
+                "new_date": corrected["new_date"],
+                "actor": corrected["actor"],
+                "reason": corrected["reason"],
+                "revision": corrected["revision"],
+                "audit_id": corrected["audit_id"],
+            },
+        )
+    except Exception:
+        traceback.print_exc()
+    try:
+        _start_sheet_cross_check(
+            {sheet_id}, profile_trigger="sheet_date_correction"
+        )
+    except Exception:
+        traceback.print_exc()
+
+    return JSONResponse({"ok": True, **corrected})
 
 
 # Factory deposit: CSVs go here automatically after OCR (worker, gated by
@@ -1990,7 +2283,12 @@ async def sheet_validate(
     # R126 — edição de cesta_n foi removida do sheet.html (validate desktop).
     # A cesta entra exclusivamente pelo fluxo mobile (capture.html → /mobile/qtds-batch).
 
-    db.validate_sheet(sheet_id, operador_final)
+    try:
+        db.validate_sheet(sheet_id, operador_final)
+    except db.SheetValidatedError as exc:
+        raise HTTPException(
+            409, "Folha já validada — não é possível re-validar"
+        ) from exc
     # R117 — kernel event: folha validada (lock confirmado pelo operador).
     try:
         kernel.emit_event("sheet_validated", {"sheet_id": sheet_id, "operador": operador_final})
@@ -1999,13 +2297,7 @@ async def sheet_validate(
     # R113 — folha acabada de validar entra no cálculo de consumption.
     # Invalida cache para o /of-lookup seguinte ver os números actualizados.
     # R115 — também invalida o agregado /obras (qtd produzida muda).
-    try:
-        from app.pipeline.of_consumption import invalidate_cache
-        invalidate_cache()
-        from app.pipeline.obras_status import invalidate_cache as obras_inv
-        obras_inv()
-    except Exception:
-        pass
+    _invalidate_production_caches()
     # Closed loop: drop CSV in the factory CSV dir so the next run of
     # ``kanban_csv2excel_novo_layout.py`` picks it up. Failure is silent —
     # the user can still pull the CSV via the /sheet/{id}/csv endpoint.
@@ -3849,10 +4141,11 @@ def sheet_of_lookup(
 async def sheet_apply_of_entry(sheet_id: int, request: Request) -> JSONResponse:
     """R112 — aplica os campos de uma entry do plan a uma linha do kanban.
 
-    Body: {row_index, of, entry_idx}. Escreve cliente, modelo, OV,
-    comp_mm, lbase, ltopo, esp via apply_edit(source='system'). Não
+    Body: {row_index, of, entry_idx}. Substitui OF, cliente, modelo, OV,
+    comp_mm, lbase, ltopo, esp numa única transação ``source='wizard'``. Não
     toca em qtd, lote, pri, coni, larg_mm (não estão no plan ou são
-    por bobine). Re-corre cross-check para refrescar cores.
+    por bobine). A escolha explícita é autoritativa contra o cross-check mas
+    não conta como texto digitado nas métricas/learning ``source='human'``.
     """
     sheet = db.get_sheet(sheet_id)
     if sheet is None:
@@ -3871,6 +4164,9 @@ async def sheet_apply_of_entry(sheet_id: int, request: Request) -> JSONResponse:
     of_raw = str(body.get("of", "")).strip()
     if row_index < 0 or entry_idx < 0 or not of_raw:
         raise HTTPException(400, "row_index, of, entry_idx obrigatórios")
+    rows = (sheet.get("sheet_data") or {}).get("rows") or []
+    if row_index >= len(rows) or not isinstance(rows[row_index], dict):
+        raise HTTPException(400, "row_index inválido")
 
     from app.pipeline.scoring_engine import normalize_of
     of_norm = normalize_of(of_raw)
@@ -3890,46 +4186,65 @@ async def sheet_apply_of_entry(sheet_id: int, request: Request) -> JSONResponse:
         "ltopo": e.get("ltopo"),
         "esp": e.get("esp"),
     }
-    # R260 — nunca clobrar uma correção manual da mesma linha. A varinha
-    # escrevia todos os campos com source='system', por cima de valores que
-    # o operador já tinha corrigido à mão (of/ov/cliente/modelo), tornando-os
-    # last-source=system → desprotegidos e revertidos ao plano na validação.
-    # Fail-closed: sem proteção determinada, não aplica (evita clobrar).
+
+    # R262 — "Aplicar à linha" is a full replacement contract for these eight
+    # plan-derived fields. Empty plan values deliberately clear stale values,
+    # preventing a hybrid row assembled from two different plan entries.
+    target_values = {
+        field: "" if value is None else str(value)
+        for field, value in fields_to_set.items()
+    }
+    current_row = rows[row_index]
+    edits_to_apply = [
+        (field, f"rows[{row_index}].{field}", value)
+        for field, value in target_values.items()
+        if ("" if current_row.get(field) is None else str(current_row.get(field))) != value
+    ]
+    applied: list[dict] = []
     try:
-        protected = _human_edited_paths(sheet_id)
-    except Exception:
-        raise HTTPException(503, "não foi possível verificar edições manuais — tenta novamente")
-    edits_to_apply = []
-    skipped = []
-    kept = []
-    for field, value in fields_to_set.items():
-        if value is None or value == "":
-            skipped.append(field)
-            continue
-        path = f"rows[{row_index}].{field}"
-        if path in protected:
-            # Correção manual do operador é autoritativa — preserva-a.
-            kept.append(field)
-            continue
-        edits_to_apply.append((field, path, str(value)))
-    applied = []
-    if edits_to_apply:
-        try:
-            batch = [(path, value) for _field, path, value in edits_to_apply]
-            # R260 — mantém source='system' (valores derivados do plano, não
-            # digitados pelo operador): marcá-los 'human' poluía o re-fit do
-            # cross e as métricas de esforço (learning/cross_refit.py:119,
-            # metrics.py:27 filtram source='human'). O que corrige o bug é o
-            # salto dos campos `protected` acima, não a mudança de source.
-            db.apply_edits_batch(sheet_id, batch, source="system")
+        if edits_to_apply:
+            batch_result = db.apply_edits_batch(
+                sheet_id,
+                [(path, value) for _field, path, value in edits_to_apply],
+                source="wizard",
+                expected_revision=int(sheet.get("revision") or 0),
+            )
             applied = [
-                {"field": field, "value": value}
-                for field, _path, value in edits_to_apply
+                {
+                    "field": field,
+                    "old_value": old,
+                    "value": new,
+                }
+                for (field, _path, _value), (_saved_path, old, new)
+                in zip(edits_to_apply, batch_result, strict=True)
             ]
-        except ValueError:
-            skipped.extend(field for field, _path, _value in edits_to_apply)
-        except Exception:
-            skipped.extend(field for field, _path, _value in edits_to_apply)
+    except db.SheetValidatedError as exc:
+        raise HTTPException(409, "Folha já validada — edits bloqueados") from exc
+    except db.StaleSheetRevisionError as exc:
+        raise HTTPException(
+            409,
+            "A linha mudou enquanto a varinha estava aberta — recarrega e tenta novamente",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        print(
+            f"[apply-of-entry] sheet {sheet_id}: {traceback.format_exc()}",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise HTTPException(
+            500, "Não foi possível guardar a linha — nenhuma alteração foi aplicada"
+        ) from exc
+
+    persisted = db.get_sheet(sheet_id)
+    if persisted is None:
+        raise HTTPException(500, "A folha deixou de estar disponível após a gravação")
+    persisted_rows = (persisted.get("sheet_data") or {}).get("rows") or []
+    if row_index >= len(persisted_rows):
+        raise HTTPException(500, "A linha deixou de estar disponível após a gravação")
+    final_row = persisted_rows[row_index]
+
     if applied:
         _start_sheet_cross_check({sheet_id}, profile_trigger="apply_of_entry")
     # R113 — após aplicar, refresca a cache de consumption (a próxima
@@ -3943,9 +4258,24 @@ async def sheet_apply_of_entry(sheet_id: int, request: Request) -> JSONResponse:
         "ok": True,
         "n_applied": len(applied),
         "applied": applied,
-        "skipped": skipped,
-        "kept": kept,  # R260 — campos preservados por já terem correção manual
+        "unchanged": [
+            field for field in target_values
+            if field not in {item["field"] for item in applied}
+        ],
+        "cleared": [
+            item["field"] for item in applied if item["value"] == ""
+        ],
+        # Backward-compatible keys. R262 deliberately keeps neither category:
+        # every contract field is replaced, including empty/manual values.
+        "skipped": [],
+        "kept": [],
         "of_used": of_norm,
+        "final_row": final_row,
+        "revision": int(persisted.get("revision") or 0),
+        "message": (
+            "A linha já continha exatamente esta entrada do plano"
+            if not applied else ""
+        ),
     })
 
 
@@ -3961,8 +4291,8 @@ async def sheet_apply_lote_medidas(
 
     Só escreve o que difere/está vazio, sempre recomputado server-side no
     momento do apply (nunca confia nos valores que o cliente viu). Escreve
-    com source='human': ao contrário da varinha apply-of-entry (R260 — 8
-    campos do plano que o operador nunca inspecionou, source='system'),
+    com source='human': ao contrário da varinha apply-of-entry (R262 — 8
+    campos do plano confirmados em bloco, source='wizard'),
     aqui o clique é confirmação humana de 1-3 valores mostrados no ecrã —
     ficam protegidos por _human_edited_paths contra o cross em background.
     Trade-off consciente: estes confirms contam nas métricas de esforço /
@@ -4399,6 +4729,7 @@ def kanban_viewer(
             "cc_obra_concluida_by_path": cc_obra_concluida_by_path,
             "valid_operadores": _get_operadores(),
             "data_iso_for_validate": data_iso_for_validate,
+            "date_iso_for_correction": data_iso_for_validate,
             "has_cropped": sheet_has_cropped,
             **_template_ctx_for_sheet(sheet),  # per-current-sheet template
         },
@@ -4864,7 +5195,7 @@ def pair_qr(request: Request) -> Response:
 
 def _learning_user(request: Request) -> str:
     """Best-effort reviewer identity for the learnings audit trail."""
-    return request.headers.get("X-Forwarded-User") or "web"
+    return _request_actor(request)
 
 
 def _refresh_overlay() -> None:

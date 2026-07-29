@@ -39,6 +39,9 @@
       {# Validate button + status pill — Round 34: at top of page #}
       {% if sheet.status == 'validated' %}
         <span class="pill ok">✓ Validada · {{ sheet.operador }}</span>
+        {% with date_correction_viewer=true %}
+          {% include "_validated_date_correction.html" %}
+        {% endwith %}
       {% else %}
         {# R94: validação pede confirmação de data + nº operador. #}
         <form id="validate-form" method="post" action="/sheet/{{ sheet.id }}/validate"
@@ -200,7 +203,7 @@
             {% set edited = audit.fix_chain | length > 0 if audit else false %}
             <tr>
               <th class="kv-label">{{ f.upper().replace('_', ' ') }}</th>
-              {% with field_path=field_path, value=value, audit=audit, edited=edited, sheet_id=sheet.id %}
+              {% with field_path=field_path, value=value, audit=audit, edited=edited, sheet_id=sheet.id, sheet_status=sheet.status %}
                 {% include "_cell.html" %}
               {% endwith %}
             </tr>
@@ -288,7 +291,7 @@
                   {% set value = row.get(f, '') %}
                   {% set audit = cells_by_path.get(field_path, {}) %}
                   {% set edited = audit.fix_chain | length > 0 if audit else false %}
-                  {% with field_path=field_path, value=value, audit=audit, edited=edited, sheet_id=sheet.id %}
+                  {% with field_path=field_path, value=value, audit=audit, edited=edited, sheet_id=sheet.id, sheet_status=sheet.status %}
                     {% include "_cell.html" %}
                   {% endwith %}
                 {% endfor %}
@@ -315,7 +318,7 @@
             {% set edited = audit.fix_chain | length > 0 if audit else false %}
             <tr>
               <th class="kv-label">{{ field_labels.get(f, f.upper().replace('_', ' ')) }}</th>
-              {% with field_path=field_path, value=value, audit=audit, edited=edited, sheet_id=sheet.id %}
+              {% with field_path=field_path, value=value, audit=audit, edited=edited, sheet_id=sheet.id, sheet_status=sheet.status %}
                 {% include "_cell.html" %}
               {% endwith %}
             </tr>

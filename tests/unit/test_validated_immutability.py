@@ -59,6 +59,84 @@ class TestValidatedIsFinal:
         assert r.status_code == 409
         assert db.get_sheet(sid)["status"] == "validated"
 
+    def test_db_rejects_single_and_batch_edits_after_validation(self, client):
+        sid = _mk_sheet(status="validated")
+
+        with pytest.raises(db.SheetValidatedError):
+            db.apply_edit(sid, "header.operador", "OUTRO")
+        with pytest.raises(db.SheetValidatedError):
+            db.apply_edits_batch(sid, [("header.operador", "OUTRO")])
+
+        sheet = db.get_sheet(sid)
+        assert sheet["sheet_data"]["header"]["operador"] == "Julio Lima"
+
+    def test_db_rejects_stale_revision_without_partial_write(self, client):
+        sid = _mk_sheet()
+        revision = db.get_sheet(sid)["revision"]
+        db.apply_edit(
+            sid,
+            "header.operador",
+            "PRIMEIRO",
+            expected_revision=revision,
+        )
+
+        with pytest.raises(db.StaleSheetRevisionError):
+            db.apply_edits_batch(
+                sid,
+                [
+                    ("header.operador", "STALE"),
+                    ("header.n_operador", "999"),
+                ],
+                expected_revision=revision,
+            )
+
+        header = db.get_sheet(sid)["sheet_data"]["header"]
+        assert header["operador"] == "PRIMEIRO"
+        assert header["n_operador"] == "537"
+
+    def test_validation_advances_final_revision(self, client):
+        sid = _mk_sheet()
+        before = db.get_sheet(sid)["revision"]
+        returned = db.validate_sheet(sid, "Julio Lima")
+        after = db.get_sheet(sid)
+
+        assert returned == before + 1
+        assert after["revision"] == returned
+        assert after["status"] == "validated"
+
+    def test_all_db_sheet_data_mutators_reject_validated_sheet(self, client):
+        sid = _mk_sheet(status="validated")
+        replacement = {
+            "header": {"operador": "OUTRO"},
+            "rows": [{"of": "999999"}],
+        }
+
+        with pytest.raises(db.SheetValidatedError):
+            db.update_extraction(sid, replacement, {}, replacement)
+        with pytest.raises(db.SheetValidatedError):
+            db.replace_sheet_data(sid, replacement)
+        with pytest.raises(db.SheetValidatedError):
+            db.add_row(sid)
+        with pytest.raises(db.SheetValidatedError):
+            db.delete_row(sid, 0)
+        with pytest.raises(db.SheetValidatedError):
+            db.validate_sheet(sid, "OUTRO")
+
+    def test_replace_sheet_data_rejects_missing_and_stale_sheet(self, client):
+        replacement = {"header": {}, "rows": []}
+        with pytest.raises(ValueError, match="not found"):
+            db.replace_sheet_data(999999, replacement)
+
+        sid = _mk_sheet()
+        stale_revision = db.get_sheet(sid)["revision"]
+        db.apply_edit(sid, "header.operador", "NOVO")
+        with pytest.raises(db.StaleSheetRevisionError):
+            db.replace_sheet_data(
+                sid,
+                replacement,
+                expected_revision=stale_revision,
+            )
+
     def test_reprocess_error_sheet_still_allowed(self, client, monkeypatch,
                                                  tmp_path):
         # O caminho legítimo (Round 59/71: re-processar folha com erro)

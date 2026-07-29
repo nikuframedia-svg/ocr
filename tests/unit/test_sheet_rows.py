@@ -12,6 +12,8 @@ neutralizados por monkeypatch (não toca em data/ nem kanban_refs/).
 """
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -263,12 +265,10 @@ class TestEndpoints:
         assert row["comp_mm"] == "5000"
         assert queued == [((sid,), {"profile_trigger": "apply_of_entry"})]
 
-    def test_apply_of_entry_preserves_human_edited_field(
+    def test_apply_of_entry_replaces_prior_human_edit_authoritatively(
         self, tmp_db, monkeypatch, client
     ):
-        """R260 — a varinha nunca clobra uma correção manual da mesma linha.
-        O operador corrige o modelo à mão; aplicar uma entrada do plano com
-        modelo diferente preserva o valor humano e aplica os restantes."""
+        """R262 — choosing a plan entry replaces the full eight-field contract."""
         sid = _seed([{"of": "", "cliente": "", "modelo": ""}])
         # Correção manual do operador (source='human' por defeito).
         db.apply_edit(sid, "rows[0].modelo", "CGC2E10D_ESPECIAL")
@@ -296,18 +296,144 @@ class TestEndpoints:
 
         assert r.status_code == 200
         body = r.json()
-        assert "modelo" in body["kept"]           # correção manual preservada
-        assert body["n_applied"] == 7             # os outros 7 aplicados
+        assert body["kept"] == []
+        assert body["skipped"] == []
+        assert body["n_applied"] == 8
         row = db.get_sheet(sid)["sheet_data"]["rows"][0]
-        assert row["modelo"] == "CGC2E10D_ESPECIAL"   # NÃO revertido ao plano
+        assert row["modelo"] == "CGC2E10D"
         assert row["of"] == "262892"
         assert row["cliente"] == "MTG"
-        # R260 — a correção manual continua protegida; os campos aplicados pela
-        # varinha são source='system' (valores do plano, não digitados) para
-        # não poluir as métricas/learning que filtram source='human'.
+        assert body["final_row"] == row
+        # Wizard choices are authoritative against cross-check but remain
+        # distinct from typed human edits used by learning/effort metrics.
         prot = main._human_edited_paths(sid)
-        assert "rows[0].modelo" in prot        # correção manual preservada
-        assert "rows[0].of" not in prot        # aplicado pela varinha = system
+        assert "rows[0].modelo" in prot
+        assert "rows[0].of" in prot
+        edits = _edits(sid)
+        assert edits[-1]["source"] == "wizard"
+        assert sum(e["source"] == "human" for e in edits) == 1
+
+    def test_apply_of_entry_clears_empty_contract_fields_and_keeps_unrelated(
+        self, tmp_db, monkeypatch, client
+    ):
+        sid = _seed([{
+            "of": "OLD", "cliente": "OLD", "ov": "OLD", "modelo": "OLD",
+            "comp_mm": "10", "lbase": "20", "ltopo": "30", "esp": "4",
+            "qtd": "7", "lote": "M123", "larg_mm": "1250",
+        }])
+        refs = {
+            "of_to_entries": {
+                "262892": [{
+                    "cliente": "", "ov": "", "designacao": "NOVO",
+                    "comp": None, "lbase": None, "ltopo": None, "esp": None,
+                }]
+            }
+        }
+
+        class _Watcher:
+            def get_refs(self):
+                return refs
+
+        monkeypatch.setattr(main, "get_watcher", lambda: _Watcher())
+        monkeypatch.setattr(main, "_start_sheet_cross_check", lambda *a, **k: None)
+
+        r = client.post(
+            f"/sheet/{sid}/apply-of-entry",
+            json={"row_index": 0, "of": "262892", "entry_idx": 0},
+            headers=_DESKTOP,
+        )
+
+        assert r.status_code == 200
+        row = r.json()["final_row"]
+        assert {k: row[k] for k in (
+            "of", "cliente", "ov", "modelo", "comp_mm", "lbase", "ltopo", "esp"
+        )} == {
+            "of": "262892", "cliente": "", "ov": "", "modelo": "NOVO",
+            "comp_mm": "", "lbase": "", "ltopo": "", "esp": "",
+        }
+        assert {k: row[k] for k in ("qtd", "lote", "larg_mm")} == {
+            "qtd": "7", "lote": "M123", "larg_mm": "1250",
+        }
+        assert set(r.json()["cleared"]) == {
+            "cliente", "ov", "comp_mm", "lbase", "ltopo", "esp",
+        }
+
+    def test_apply_of_entry_db_failure_is_not_reported_as_success(
+        self, tmp_db, monkeypatch, client
+    ):
+        sid = _seed([{"of": "OLD"}])
+        refs = {"of_to_entries": {"262892": [{"designacao": "NOVO"}]}}
+
+        class _Watcher:
+            def get_refs(self):
+                return refs
+
+        monkeypatch.setattr(main, "get_watcher", lambda: _Watcher())
+        monkeypatch.setattr(
+            db,
+            "apply_edits_batch",
+            lambda *a, **k: (_ for _ in ()).throw(sqlite3.OperationalError("locked")),
+        )
+
+        r = client.post(
+            f"/sheet/{sid}/apply-of-entry",
+            json={"row_index": 0, "of": "262892", "entry_idx": 0},
+            headers=_DESKTOP,
+        )
+
+        assert r.status_code == 500
+        assert "nenhuma alteração" in r.json()["detail"].lower()
+        assert db.get_sheet(sid)["sheet_data"]["rows"][0]["of"] == "OLD"
+
+    def test_apply_of_entry_rejects_invalid_or_stale_requests(
+        self, tmp_db, monkeypatch, client
+    ):
+        sid = _seed([{"of": "OLD"}])
+        refs = {"of_to_entries": {"262892": [{"designacao": "NOVO"}]}}
+
+        class _Watcher:
+            def get_refs(self):
+                return refs
+
+        monkeypatch.setattr(main, "get_watcher", lambda: _Watcher())
+
+        assert client.post(
+            "/sheet/999999/apply-of-entry",
+            json={"row_index": 0, "of": "262892", "entry_idx": 0},
+            headers=_DESKTOP,
+        ).status_code == 404
+        assert client.post(
+            f"/sheet/{sid}/apply-of-entry",
+            content=b"{",
+            headers={**_DESKTOP, "Content-Type": "application/json"},
+        ).status_code == 400
+        assert client.post(
+            f"/sheet/{sid}/apply-of-entry",
+            json={"row_index": "x", "of": "262892", "entry_idx": 0},
+            headers=_DESKTOP,
+        ).status_code == 400
+        assert client.post(
+            f"/sheet/{sid}/apply-of-entry",
+            json={"row_index": -1, "of": "", "entry_idx": -1},
+            headers=_DESKTOP,
+        ).status_code == 400
+        assert client.post(
+            f"/sheet/{sid}/apply-of-entry",
+            json={"row_index": 9, "of": "262892", "entry_idx": 0},
+            headers=_DESKTOP,
+        ).status_code == 400
+        assert client.post(
+            f"/sheet/{sid}/apply-of-entry",
+            json={"row_index": 0, "of": "999999", "entry_idx": 0},
+            headers=_DESKTOP,
+        ).status_code == 404
+
+        db.validate_sheet(sid, "AUGUSTO MONTEIRO")
+        assert client.post(
+            f"/sheet/{sid}/apply-of-entry",
+            json={"row_index": 0, "of": "262892", "entry_idx": 0},
+            headers=_DESKTOP,
+        ).status_code == 409
 
     def test_remove_row_out_of_range_400(self, tmp_db, isolate, client):
         sid = _seed([{"of": "111"}])

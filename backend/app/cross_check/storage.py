@@ -138,11 +138,32 @@ def store_cross_check(
     }
 
     with _lock:
+        previous = _read_index().get(str(sheet_id))
+        previous_rel = (
+            str(previous.get("file") or "") if isinstance(previous, dict) else ""
+        )
         _atomic_write(file_path, json.dumps(payload, indent=2, ensure_ascii=False, default=str))
         _update_index(
             sheet_id, operador, date_iso, sheet_status, summary, rel_key,
             engine_version=engine_version,
         )
+        # A corrected date/operator changes the canonical path. Once the
+        # index points at the new atomically-written payload, remove the old
+        # per-sheet JSON so it cannot survive as an orphan in old aggregates.
+        if previous_rel and previous_rel != rel_key:
+            base = _base_dir().resolve()
+            stale = (base / previous_rel).resolve()
+            try:
+                stale.relative_to(base)
+            except ValueError:
+                stale = None
+            if stale is not None:
+                try:
+                    stale.unlink(missing_ok=True)
+                    if stale.parent != base:
+                        stale.parent.rmdir()
+                except OSError:
+                    pass
         _update_summary()
         _update_to_analisar()
 

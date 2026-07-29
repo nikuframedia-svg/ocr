@@ -80,6 +80,11 @@
     {% endif %}
     {% if sheet.status == 'validated' %}
       <span class="pill ok">✓ Validada · {{ sheet.operador }}</span>
+      {% if view_mode != 'raw' %}
+        {% with date_correction_viewer=false %}
+          {% include "_validated_date_correction.html" %}
+        {% endwith %}
+      {% endif %}
       <a class="btn" href="/sheet/{{ sheet.id }}/csv">Baixar CSV</a>
     {% else %}
       {# R136 — a data, o nº de operador e o nome editam-se nas CÉLULAS do
@@ -469,6 +474,11 @@
           </div>
         </template>
 
+        <template x-if="applyError">
+          <div class="alert warn" style="padding:10px; margin-bottom:12px;"
+               x-text="applyError"></div>
+        </template>
+
         <!-- Actions -->
         <div style="display:flex; gap:8px;">
           <button type="button" class="btn lg" style="flex:1;" @click="cancel()">
@@ -492,7 +502,7 @@ function ofWizard(sheetId) {
     sheetId: sheetId,
     active: false, row_index: 0, ofInput: '', current_of: '',
     loading: false, lookupResult: null, selectedEntry: -1,
-    applying: false,
+    applying: false, applyError: '',
     includeDone: false,  // R113 — toggle "mostrar peças já fechadas"
     open(detail) {
       this.active = true;
@@ -502,6 +512,7 @@ function ofWizard(sheetId) {
       this.lookupResult = null;
       this.selectedEntry = -1;
       this.includeDone = false;
+      this.applyError = '';
       // Auto-lookup se já existe OF na linha
       if (this.ofInput.trim()) {
         this.$nextTick(() => this.lookup());
@@ -516,6 +527,7 @@ function ofWizard(sheetId) {
       const q = (this.ofInput || '').trim();
       if (!q) return;
       this.loading = true;
+      this.applyError = '';
       this.lookupResult = null;
       this.selectedEntry = -1;
       try {
@@ -537,6 +549,7 @@ function ofWizard(sheetId) {
     async apply() {
       if (!this.canApply || this.applying) return;
       this.applying = true;
+      this.applyError = '';
       try {
         // R116 — selectedEntry é índice na lista ordenada; apply precisa do
         // orig_idx (índice na lista não-ordenada). R128 — entry.of vence
@@ -551,15 +564,40 @@ function ofWizard(sheetId) {
             entry_idx: entry.orig_idx,
           }),
         });
-        const j = await r.json();
-        if (j.ok) {
-          this.active = false;
-          window.location.reload();
-        } else {
-          alert('Falhou: ' + (j.error || j.detail || 'erro desconhecido'));
+        const responseText = await r.text();
+        let j = {};
+        try {
+          j = responseText ? JSON.parse(responseText) : {};
+        } catch (_) {
+          j = {};
         }
+        if (!r.ok || !j.ok) {
+          this.applyError = j.error || j.detail
+            || ('Falha ao guardar (HTTP ' + r.status + '). Tenta novamente.');
+          return;
+        }
+        if (!j.final_row || typeof j.revision !== 'number') {
+          this.applyError = 'O servidor não confirmou o estado final da linha. '
+            + 'A janela ficou aberta por segurança.';
+          return;
+        }
+        const notApplied = []
+          .concat(j.kept || [])
+          .concat(j.skipped || []);
+        if (notApplied.length) {
+          this.applyError = 'A linha não foi substituída por completo. '
+            + 'Campos não aplicados: ' + notApplied.join(', ') + '.';
+          return;
+        }
+        if (!j.n_applied) {
+          this.applyError = j.message
+            || 'Nenhum campo mudou; a linha já poderá conter esta entrada.';
+          return;
+        }
+        this.active = false;
+        window.location.reload();
       } catch (e) {
-        alert('Erro de rede: ' + e.message);
+        this.applyError = 'Erro de rede: ' + e.message;
       } finally {
         this.applying = false;
       }

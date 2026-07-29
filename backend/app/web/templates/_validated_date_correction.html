@@ -1,0 +1,155 @@
+{# Controlled exception for correcting header.data after validation.
+   Caller supplies: sheet, date_iso_for_correction, date_correction_viewer. #}
+<div
+  x-data='validatedDateCorrection({
+    sheetId: {{ sheet.id }},
+    dateIso: {{ (date_iso_for_correction or "") | tojson }},
+    revision: {{ sheet.revision | int }},
+    kanbanViewer: {{ "true" if date_correction_viewer else "false" }}
+  })'
+  style="display:inline-flex;">
+  <button type="button" class="btn"
+          @click="show()"
+          :disabled="busy">
+    Corrigir data
+  </button>
+
+  <div x-show="visible" x-cloak
+       @keydown.escape.window="if (!busy) close()"
+       @click.self="if (!busy) close()"
+       role="dialog" aria-modal="true" aria-label="Corrigir data do Kanban"
+       style="position:fixed; inset:0; z-index:110; padding:20px;
+              background:rgba(0,0,0,0.5); display:flex;
+              align-items:center; justify-content:center;">
+    <div class="card" style="width:100%; max-width:460px; padding:24px;"
+         @click.stop>
+      <div class="page-eyebrow">Folha #{{ sheet.id }} · validada</div>
+      <h2 style="margin:4px 0 6px; font-size:20px;">Corrigir data</h2>
+      <p class="muted tiny" style="margin:0 0 18px;">
+        A folha permanece validada. Apenas a data do Kanban será alterada.
+      </p>
+
+      <form @submit.prevent="submit()" style="display:flex; flex-direction:column; gap:14px;">
+        <label>
+          <span class="lbl">NOVA DATA</span>
+          <input type="date" x-model="dateIso"
+                 min="2024-01-01" max="2030-12-31"
+                 required
+                 :disabled="busy"
+                 style="width:100%; padding:10px; font-family:var(--font-mono);
+                        font-size:16px; border:1px solid var(--rule-2);
+                        border-radius:6px;">
+        </label>
+        <label>
+          <span class="lbl">MOTIVO (OPCIONAL)</span>
+          <textarea x-model="reason" maxlength="500" rows="3"
+                    :disabled="busy"
+                    placeholder="Ex.: data escrita incorretamente no Kanban"
+                    style="width:100%; padding:10px; resize:vertical;
+                           border:1px solid var(--rule-2); border-radius:6px;
+                           font:inherit;"></textarea>
+          <span class="muted tiny" x-text="reason.length + '/500'"></span>
+        </label>
+
+        <div x-show="error" x-cloak class="alert crit" style="margin:0;">
+          <span x-text="error"></span>
+        </div>
+
+        <div style="display:flex; justify-content:flex-end; gap:8px;">
+          <button type="button" class="btn" @click="close()" :disabled="busy">
+            Cancelar
+          </button>
+          <button type="submit" class="btn primary"
+                  :disabled="busy || !dateIso">
+            <span x-show="!busy">Confirmar correção</span>
+            <span x-show="busy" x-cloak>A guardar…</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+function validatedDateCorrection(config) {
+  return {
+    visible: false,
+    busy: false,
+    error: '',
+    dateIso: config.dateIso || '',
+    originalDateIso: config.dateIso || '',
+    reason: '',
+    revision: Number(config.revision || 0),
+    show() {
+      this.error = '';
+      this.reason = '';
+      this.dateIso = this.originalDateIso;
+      this.visible = true;
+    },
+    close() {
+      if (!this.busy) this.visible = false;
+    },
+    async submit() {
+      if (this.busy || !this.dateIso) return;
+      this.busy = true;
+      this.error = '';
+      const submittedDate = this.dateIso;
+      const submittedRevision = this.revision;
+      const body = new URLSearchParams({
+        new_date: submittedDate,
+        reason: this.reason,
+        expected_revision: String(submittedRevision),
+      });
+      try {
+        const response = await fetch(
+          '/sheet/' + config.sheetId + '/correct-date',
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+              'Accept': 'application/json',
+            },
+            body: body.toString(),
+          }
+        );
+        let payload = {};
+        try {
+          payload = await response.json();
+        } catch (_) {
+          payload = {};
+        }
+        if (!response.ok) {
+          this.error = payload.detail || 'Não foi possível guardar a correção.';
+          return;
+        }
+        if (!payload.ok ||
+            Number(payload.sheet_id) !== Number(config.sheetId) ||
+            payload.status !== 'validated' ||
+            payload.new_date_iso !== submittedDate ||
+            Number(payload.revision) <= submittedRevision) {
+          this.error = 'O servidor não confirmou a data persistida. Recarrega a página.';
+          return;
+        }
+
+        this.revision = Number(payload.revision);
+        this.originalDateIso = submittedDate;
+        if (config.kanbanViewer) {
+          const url = new URL(window.location.href);
+          if (url.searchParams.has('data')) {
+            url.searchParams.set('data', submittedDate);
+          }
+          url.searchParams.set('sheet_id', String(config.sheetId));
+          window.location.assign(url.toString());
+        } else {
+          window.location.reload();
+        }
+      } catch (err) {
+        this.error = 'Erro de rede: ' +
+          (err && err.message ? err.message : 'tenta novamente');
+      } finally {
+        this.busy = false;
+      }
+    },
+  };
+}
+</script>

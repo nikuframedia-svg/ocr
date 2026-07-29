@@ -26,6 +26,34 @@ logger = logging.getLogger(__name__)
 
 _DB_PATH = Path(__file__).resolve().parents[3] / "data" / "app.db"
 
+# Explicit operator decisions. ``wizard`` is authoritative for overwrite
+# protection/rebuilds but intentionally remains distinct from typed ``human``
+# edits so learning and effort metrics can continue filtering source='human'.
+AUTHORITATIVE_EDIT_SOURCES = frozenset({"human", "wizard"})
+VALIDATED_DATE_CORRECTION_SOURCE = "validated_date_correction"
+KANBAN_DATE_MIN = _dt.date(2024, 1, 1)
+KANBAN_DATE_MAX = _dt.date(2030, 12, 31)
+
+
+class SheetMutationError(ValueError):
+    """Base error for rejected ``sheet_data`` mutations."""
+
+
+class SheetValidatedError(SheetMutationError):
+    """Raised when code tries to mutate an already validated sheet."""
+
+
+class StaleSheetRevisionError(SheetMutationError):
+    """Raised when a mutation was calculated from an obsolete sheet revision."""
+
+
+class SheetNotValidatedError(SheetMutationError):
+    """Raised when a validated-only correction targets an editable sheet."""
+
+
+class NoDateChangeError(SheetMutationError):
+    """Raised when a date correction would not change the stored value."""
+
 
 # R256 — o Python 3.12 deprecou os adapters/converters DEFAULT do sqlite3
 # (usados via detect_types=PARSE_DECLTYPES nas colunas TIMESTAMP). Sem isto,
@@ -82,7 +110,10 @@ CREATE TABLE IF NOT EXISTS sheets (
     page_hint TEXT,
     capture_group TEXT,
     needs_review INTEGER NOT NULL DEFAULT 0,
-    review_reason TEXT
+    review_reason TEXT,
+    -- R262 — optimistic concurrency token for every sheet/status mutation.
+    -- Cross-check results may only write against the revision they scored.
+    revision INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS edits (
@@ -91,7 +122,11 @@ CREATE TABLE IF NOT EXISTS edits (
     field_path TEXT NOT NULL,
     old_value TEXT,
     new_value TEXT NOT NULL,
-    edited_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    edited_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    source TEXT NOT NULL DEFAULT 'human',
+    actor TEXT,
+    reason TEXT,
+    sheet_revision INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS app_migrations (
@@ -403,6 +438,9 @@ def init_db() -> None:
             c.execute("ALTER TABLE sheets ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0")
         if "review_reason" not in cols:
             c.execute("ALTER TABLE sheets ADD COLUMN review_reason TEXT")
+        # R262 — optimistic concurrency + validated immutability at DB level.
+        if "revision" not in cols:
+            c.execute("ALTER TABLE sheets ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
         # Unidades fabris — folha carimbada com a unidade do template
         # detetado; NULL = Trofa (folhas anteriores ao conceito).
         if "unidade_id" not in cols:
@@ -464,7 +502,8 @@ def init_db() -> None:
                 if is_legacy_bobine:
                     data["template_name"] = "bobine_formato_legacy"
                     c.execute(
-                        "UPDATE sheets SET sheet_data = ? WHERE id = ?",
+                        "UPDATE sheets SET sheet_data = ?, revision = revision + 1 "
+                        "WHERE id = ?",
                         (json.dumps(data, ensure_ascii=False), row["id"]),
                     )
             c.execute("INSERT INTO app_migrations (name) VALUES (?)", (migration,))
@@ -474,6 +513,12 @@ def init_db() -> None:
         edit_cols = {r["name"] for r in c.execute("PRAGMA table_info(edits)").fetchall()}
         if "source" not in edit_cols:
             c.execute("ALTER TABLE edits ADD COLUMN source TEXT NOT NULL DEFAULT 'human'")
+        if "actor" not in edit_cols:
+            c.execute("ALTER TABLE edits ADD COLUMN actor TEXT")
+        if "reason" not in edit_cols:
+            c.execute("ALTER TABLE edits ADD COLUMN reason TEXT")
+        if "sheet_revision" not in edit_cols:
+            c.execute("ALTER TABLE edits ADD COLUMN sheet_revision INTEGER")
         # One-time backfill: edits on header.pernr / header.cod_maquina are
         # ALWAYS written by the system (operador_snap / codmaq fill), never
         # typed by a human. The 'source' column defaults to 'human', so pre-
@@ -570,13 +615,24 @@ def update_extraction(
     sheet_data: dict,
 ) -> None:
     with conn() as c:
-        c.execute(
+        c.execute("BEGIN IMMEDIATE")
+        current = c.execute(
+            "SELECT status FROM sheets WHERE id = ?", (sheet_id,)
+        ).fetchone()
+        if current is None:
+            raise ValueError(f"Sheet {sheet_id} not found")
+        if current["status"] == "validated":
+            raise SheetValidatedError(
+                f"Sheet {sheet_id} is validated and cannot be mutated"
+            )
+        cur = c.execute(
             """UPDATE sheets
                SET status = 'extracted',
                    raw_extraction = ?,
                    dq_audit = ?,
                    sheet_data = ?,
-                   extracted_at = CURRENT_TIMESTAMP
+                   extracted_at = CURRENT_TIMESTAMP,
+                   revision = revision + 1
                WHERE id = ?""",
             (
                 json.dumps(raw_extraction, ensure_ascii=False),
@@ -585,6 +641,8 @@ def update_extraction(
                 sheet_id,
             ),
         )
+        if cur.rowcount != 1:
+            raise ValueError(f"Sheet {sheet_id} not found")
         _sync_production_rows(c, sheet_id, sheet_data)
 
 
@@ -1465,6 +1523,8 @@ def apply_edit(
     field_path: str,
     new_value: str,
     source: str = "human",
+    *,
+    expected_revision: int | None = None,
 ) -> tuple[str, str]:
     """Apply edit + insert audit row. Returns (old_value, new_value).
 
@@ -1475,16 +1535,30 @@ def apply_edit(
     The learning engine's success metric only counts ``'human'`` edits.
     """
     with conn() as c:
+        # R262 — acquire the writer lock before reading status/revision. This
+        # makes "check editable + write" atomic with validate_sheet().
+        c.execute("BEGIN IMMEDIATE")
         row = c.execute(
-            "SELECT sheet_data FROM sheets WHERE id = ?", (sheet_id,)
+            "SELECT status, revision, sheet_data FROM sheets WHERE id = ?",
+            (sheet_id,),
         ).fetchone()
         if row is None or not row["sheet_data"]:
             raise ValueError(f"Sheet {sheet_id} has no extraction yet")
+        if row["status"] == "validated":
+            raise SheetValidatedError(
+                f"Sheet {sheet_id} is validated and cannot be mutated"
+            )
+        current_revision = int(row["revision"] or 0)
+        if expected_revision is not None and current_revision != int(expected_revision):
+            raise StaleSheetRevisionError(
+                f"Sheet {sheet_id} revision changed "
+                f"({expected_revision} -> {current_revision})"
+            )
         data = json.loads(row["sheet_data"])
         old = _get_by_path(data, field_path) or ""
         _set_by_path(data, field_path, new_value)
         c.execute(
-            "UPDATE sheets SET sheet_data = ? WHERE id = ?",
+            "UPDATE sheets SET sheet_data = ?, revision = revision + 1 WHERE id = ?",
             (json.dumps(data, ensure_ascii=False), sheet_id),
         )
         c.execute(
@@ -1501,6 +1575,8 @@ def apply_edits_batch(
     sheet_id: int,
     edits: list[tuple[str, str]],
     source: str = "human",
+    *,
+    expected_revision: int | None = None,
 ) -> list[tuple[str, str, str]]:
     """Apply multiple edits to one sheet in a single transaction.
 
@@ -1511,18 +1587,32 @@ def apply_edits_batch(
         return []
     applied: list[tuple[str, str, str]] = []
     with conn() as c:
+        # One writer transaction guarantees that validation cannot slip
+        # between the status check and the batch update.
+        c.execute("BEGIN IMMEDIATE")
         row = c.execute(
-            "SELECT sheet_data FROM sheets WHERE id = ?", (sheet_id,)
+            "SELECT status, revision, sheet_data FROM sheets WHERE id = ?",
+            (sheet_id,),
         ).fetchone()
         if row is None or not row["sheet_data"]:
             raise ValueError(f"Sheet {sheet_id} has no extraction yet")
+        if row["status"] == "validated":
+            raise SheetValidatedError(
+                f"Sheet {sheet_id} is validated and cannot be mutated"
+            )
+        current_revision = int(row["revision"] or 0)
+        if expected_revision is not None and current_revision != int(expected_revision):
+            raise StaleSheetRevisionError(
+                f"Sheet {sheet_id} revision changed "
+                f"({expected_revision} -> {current_revision})"
+            )
         data = json.loads(row["sheet_data"])
         for field_path, new_value in edits:
             old = _get_by_path(data, field_path) or ""
             _set_by_path(data, field_path, new_value)
             applied.append((field_path, old, new_value))
         c.execute(
-            "UPDATE sheets SET sheet_data = ? WHERE id = ?",
+            "UPDATE sheets SET sheet_data = ?, revision = revision + 1 WHERE id = ?",
             (json.dumps(data, ensure_ascii=False), sheet_id),
         )
         c.executemany(
@@ -1535,6 +1625,144 @@ def apply_edits_batch(
         )
         _sync_production_rows(c, sheet_id, data)
     return applied
+
+
+def correct_validated_date(
+    sheet_id: int,
+    new_date_iso: str,
+    *,
+    expected_revision: int,
+    actor: str = "web",
+    reason: str | None = None,
+) -> dict:
+    """Correct only ``header.data`` on an already validated sheet.
+
+    This is the sole controlled exception to validated-sheet immutability.
+    The status check, optimistic-revision check, JSON update, production-row
+    sync and audit insert all share one ``BEGIN IMMEDIATE`` transaction.
+    Generic sheet mutators deliberately remain locked after validation.
+    """
+    clean_iso = str(new_date_iso or "").strip()
+    try:
+        parsed = _dt.date.fromisoformat(clean_iso)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("new_date must be a real date in YYYY-MM-DD format") from exc
+    if parsed.isoformat() != clean_iso:
+        raise ValueError("new_date must use YYYY-MM-DD format")
+    if not KANBAN_DATE_MIN <= parsed <= KANBAN_DATE_MAX:
+        raise ValueError(
+            f"new_date must be between {KANBAN_DATE_MIN.isoformat()} "
+            f"and {KANBAN_DATE_MAX.isoformat()}"
+        )
+
+    clean_reason = str(reason or "").strip()
+    if len(clean_reason) > 500:
+        raise ValueError("reason must have at most 500 characters")
+    stored_reason = clean_reason or None
+    clean_actor = str(actor or "").strip()[:200] or "web"
+    new_date_pt = parsed.strftime("%d-%m-%Y")
+
+    with conn() as c:
+        c.execute("BEGIN IMMEDIATE")
+        row = c.execute(
+            "SELECT status, revision, sheet_data FROM sheets WHERE id = ?",
+            (sheet_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Sheet {sheet_id} not found")
+        if not row["sheet_data"]:
+            raise ValueError(f"Sheet {sheet_id} has no extraction yet")
+        if row["status"] != "validated":
+            raise SheetNotValidatedError(
+                f"Sheet {sheet_id} is not validated"
+            )
+
+        current_revision = int(row["revision"] or 0)
+        if current_revision != int(expected_revision):
+            raise StaleSheetRevisionError(
+                f"Sheet {sheet_id} revision changed "
+                f"({expected_revision} -> {current_revision})"
+            )
+
+        data = json.loads(row["sheet_data"])
+        old_date = str(_get_by_path(data, "header.data") or "")
+        if old_date == new_date_pt:
+            raise NoDateChangeError(
+                f"Sheet {sheet_id} already has date {new_date_pt}"
+            )
+
+        _set_by_path(data, "header.data", new_date_pt)
+        new_revision = current_revision + 1
+        c.execute(
+            "UPDATE sheets SET sheet_data = ?, revision = ? WHERE id = ?",
+            (json.dumps(data, ensure_ascii=False), new_revision, sheet_id),
+        )
+        _sync_production_rows(c, sheet_id, data)
+        cursor = c.execute(
+            "INSERT INTO edits "
+            "(sheet_id, field_path, old_value, new_value, source, actor, reason, "
+            " sheet_revision) "
+            "VALUES (?, 'header.data', ?, ?, ?, ?, ?, ?)",
+            (
+                sheet_id,
+                old_date,
+                new_date_pt,
+                VALIDATED_DATE_CORRECTION_SOURCE,
+                clean_actor,
+                stored_reason,
+                new_revision,
+            ),
+        )
+        audit_id = int(cursor.lastrowid)
+
+    return {
+        "sheet_id": sheet_id,
+        "old_date": old_date,
+        "new_date": new_date_pt,
+        "new_date_iso": clean_iso,
+        "revision": new_revision,
+        "status": "validated",
+        "audit_id": audit_id,
+        "actor": clean_actor,
+        "reason": stored_reason,
+    }
+
+
+def replace_sheet_data(
+    sheet_id: int,
+    sheet_data: dict,
+    *,
+    expected_revision: int | None = None,
+) -> int:
+    """Replace editable ``sheet_data`` without creating cell audit rows.
+
+    Used only for rebuilding a stale system-generated snapshot from raw OCR.
+    Returns the new revision. The status/revision check is in the same writer
+    transaction, so a concurrent validation or user edit wins safely.
+    """
+    with conn() as c:
+        c.execute("BEGIN IMMEDIATE")
+        row = c.execute(
+            "SELECT status, revision FROM sheets WHERE id = ?", (sheet_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Sheet {sheet_id} not found")
+        if row["status"] == "validated":
+            raise SheetValidatedError(
+                f"Sheet {sheet_id} is validated and cannot be mutated"
+            )
+        current_revision = int(row["revision"] or 0)
+        if expected_revision is not None and current_revision != int(expected_revision):
+            raise StaleSheetRevisionError(
+                f"Sheet {sheet_id} revision changed "
+                f"({expected_revision} -> {current_revision})"
+            )
+        c.execute(
+            "UPDATE sheets SET sheet_data = ?, revision = revision + 1 WHERE id = ?",
+            (json.dumps(sheet_data, ensure_ascii=False), sheet_id),
+        )
+        _sync_production_rows(c, sheet_id, sheet_data)
+    return current_revision + 1
 
 
 def max_edit_id(sheet_id: int) -> int:
@@ -1567,6 +1795,19 @@ def human_edits_after(sheet_id: int, seq: int) -> frozenset[str]:
     return frozenset(str(r["field_path"]) for r in rows)
 
 
+def authoritative_edits_after(sheet_id: int, seq: int) -> frozenset[str]:
+    """Paths explicitly chosen by an operator after an edit high-water mark."""
+    placeholders = ",".join("?" for _ in AUTHORITATIVE_EDIT_SOURCES)
+    params = (sheet_id, *sorted(AUTHORITATIVE_EDIT_SOURCES), int(seq))
+    with conn() as c:
+        rows = c.execute(
+            "SELECT DISTINCT field_path FROM edits "
+            f"WHERE sheet_id = ? AND source IN ({placeholders}) AND id > ?",
+            params,
+        ).fetchall()
+    return frozenset(str(r["field_path"]) for r in rows)
+
+
 def add_row(sheet_id: int, *, source: str = "human") -> int:
     """R136 — append an empty row to ``sheet_data["rows"]``. Returns the new
     row index.
@@ -1579,11 +1820,16 @@ def add_row(sheet_id: int, *, source: str = "human") -> int:
     existing ``rows[i].field`` edit path.
     """
     with conn() as c:
+        c.execute("BEGIN IMMEDIATE")
         row = c.execute(
-            "SELECT sheet_data FROM sheets WHERE id = ?", (sheet_id,)
+            "SELECT status, sheet_data FROM sheets WHERE id = ?", (sheet_id,)
         ).fetchone()
         if row is None or not row["sheet_data"]:
             raise ValueError(f"Sheet {sheet_id} has no extraction yet")
+        if row["status"] == "validated":
+            raise SheetValidatedError(
+                f"Sheet {sheet_id} is validated and cannot be mutated"
+            )
         data = json.loads(row["sheet_data"])
         rows = data.setdefault("rows", [])
         if len(rows) > _MAX_ROW_INDEX:
@@ -1591,7 +1837,7 @@ def add_row(sheet_id: int, *, source: str = "human") -> int:
         rows.append({})
         new_idx = len(rows) - 1
         c.execute(
-            "UPDATE sheets SET sheet_data = ? WHERE id = ?",
+            "UPDATE sheets SET sheet_data = ?, revision = revision + 1 WHERE id = ?",
             (json.dumps(data, ensure_ascii=False), sheet_id),
         )
         c.execute(
@@ -1612,11 +1858,16 @@ def delete_row(sheet_id: int, row_index: int, *, source: str = "human") -> dict:
     ``production_rows``.
     """
     with conn() as c:
+        c.execute("BEGIN IMMEDIATE")
         row = c.execute(
-            "SELECT sheet_data FROM sheets WHERE id = ?", (sheet_id,)
+            "SELECT status, sheet_data FROM sheets WHERE id = ?", (sheet_id,)
         ).fetchone()
         if row is None or not row["sheet_data"]:
             raise ValueError(f"Sheet {sheet_id} has no extraction yet")
+        if row["status"] == "validated":
+            raise SheetValidatedError(
+                f"Sheet {sheet_id} is validated and cannot be mutated"
+            )
         data = json.loads(row["sheet_data"])
         rows = data.get("rows", []) or []
         if row_index < 0 or row_index >= len(rows):
@@ -1626,7 +1877,7 @@ def delete_row(sheet_id: int, row_index: int, *, source: str = "human") -> dict:
         removed = rows.pop(row_index)
         data["rows"] = rows
         c.execute(
-            "UPDATE sheets SET sheet_data = ? WHERE id = ?",
+            "UPDATE sheets SET sheet_data = ?, revision = revision + 1 WHERE id = ?",
             (json.dumps(data, ensure_ascii=False), sheet_id),
         )
         c.execute(
@@ -1644,7 +1895,7 @@ def delete_row(sheet_id: int, row_index: int, *, source: str = "human") -> dict:
     return removed
 
 
-def validate_sheet(sheet_id: int, operador: str) -> None:
+def validate_sheet(sheet_id: int, operador: str) -> int:
     """Mark sheet validated. Dropdown ``operador`` overrides whatever
     OCR / manual edits put in production_rows — the dropdown is the
     KPI source of truth (``sheets.operador``).
@@ -1657,13 +1908,26 @@ def validate_sheet(sheet_id: int, operador: str) -> None:
     autoritativa para KPI groupings.
     """
     with conn() as c:
+        # R262 — validation is the final revision transition. BEGIN IMMEDIATE
+        # serializes it with apply_edit/apply_edits_batch, so either the edit
+        # commits first or validation does; writes can never land afterwards.
+        c.execute("BEGIN IMMEDIATE")
+        row = c.execute(
+            "SELECT status, revision FROM sheets WHERE id = ?", (sheet_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Sheet {sheet_id} not found")
+        if row["status"] == "validated":
+            raise SheetValidatedError(f"Sheet {sheet_id} is already validated")
+        new_revision = int(row["revision"] or 0) + 1
         c.execute(
             """UPDATE sheets
                SET status = 'validated',
                    operador = ?,
-                   validated_at = CURRENT_TIMESTAMP
+                   validated_at = CURRENT_TIMESTAMP,
+                   revision = ?
                WHERE id = ?""",
-            (operador, sheet_id),
+            (operador, new_revision, sheet_id),
         )
         # Always overwrite — dropdown is authoritative for KPI groupings.
         # Without this, a mis-OCR of operador name silently splits one
@@ -1676,6 +1940,7 @@ def validate_sheet(sheet_id: int, operador: str) -> None:
                WHERE sheet_id = ?""",
             (operador, sheet_id),
         )
+    return new_revision
 
 
 def set_image_rotation(sheet_id: int, rotation: int) -> int:

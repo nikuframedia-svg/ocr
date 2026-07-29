@@ -58,6 +58,7 @@ _LOCK = threading.Lock()
 EVENT_TYPES = frozenset({
     "sheet_uploaded",
     "sheet_validated",
+    "sheet_date_corrected",
     "proposal_created",
     "proposal_decided",
     "policy_promoted",
