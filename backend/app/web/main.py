@@ -21,6 +21,7 @@ import threading
 import time  # R224 — timing por etapa (profiling)
 import traceback
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import quote_plus
 
 import httpx  # R120 — endpoint /admin/qwen-tools-test
@@ -4947,6 +4948,47 @@ def excel_page(
     )
 
 
+def _normalize_selected_export_dates(
+    date_mode: str | None,
+    selected_dates: list[str] | None,
+    date_from: str | None,
+    date_to: str | None,
+) -> tuple[str, ...] | None:
+    """Validate and canonicalize the optional CPIS selected-day mode."""
+    mode = (date_mode or "").strip().lower()
+    values = selected_dates or []
+    if mode not in ("", "period", "selected"):
+        raise HTTPException(400, "date_mode must be 'period' or 'selected'")
+
+    if mode != "selected":
+        if values:
+            raise HTTPException(
+                400,
+                "selected_dates requires date_mode=selected",
+            )
+        return None
+
+    if date_from or date_to:
+        raise HTTPException(
+            400,
+            "selected dates cannot be combined with date_from/date_to",
+        )
+    if not values:
+        raise HTTPException(400, "select at least one date")
+
+    normalized: set[str] = set()
+    for raw in values:
+        value = (raw or "").strip()
+        if not _ISO_DATE_RE.match(value):
+            raise HTTPException(400, "selected_dates must be YYYY-MM-DD")
+        try:
+            dt.date.fromisoformat(value)
+        except ValueError as exc:
+            raise HTTPException(400, f"invalid selected date: {value}") from exc
+        normalized.add(value)
+    return tuple(sorted(normalized))
+
+
 @app.get("/export/cpis")
 def export_cpis(
     date_from: str | None = None,
@@ -4954,6 +4996,8 @@ def export_cpis(
     operador: str | None = None,
     sector: str | None = None,
     validated_only: bool = False,
+    date_mode: str | None = None,
+    selected_dates: Annotated[list[str] | None, Query()] = None,
 ) -> Response:
     """CPIS migration export — single-sheet .xlsx matching
     `MigracaoNikufraCPIS.xlsx` (`Folha1`).
@@ -4961,12 +5005,20 @@ def export_cpis(
     One row per kanban production row in the period. Weight metrics are
     resolved via app.production.weights using plan/SAP before OCR.
     `Cód. Máquina` derived from setor_maquina (BOBINE-FORMATO → M032, etc.).
-    Query params identical to `/export` (R69: same date / sector semantics).
+    Query params inherit `/export` semantics. Additionally,
+    ``date_mode=selected`` + repeated ``selected_dates=YYYY-MM-DD`` filters
+    exact production dates, including non-consecutive days.
     R130: ``validated_only`` exclui rascunhos quando True.
     """
     df = (date_from or "").strip() or None
     dt_ = (date_to or "").strip() or None
     sec = (sector or "").strip() or None
+    dates = _normalize_selected_export_dates(
+        date_mode,
+        selected_dates,
+        df,
+        dt_,
+    )
     if bool(df) != bool(dt_):
         raise HTTPException(400, "provide both date_from and date_to, or neither (= sempre)")
     if df and dt_:
@@ -4976,8 +5028,22 @@ def export_cpis(
             raise HTTPException(400, "date_to must be >= date_from")
     if sec and sec not in PRODUCTION_SECTORS:
         raise HTTPException(400, f"sector must be one of {list(PRODUCTION_SECTORS)}")
-    xlsx_bytes = export.build_cpis_workbook(df, dt_, operador, sec, validated_only)
-    filename = export.cpis_filename_for(df, dt_, operador, sec, validated_only)
+    xlsx_bytes = export.build_cpis_workbook(
+        df,
+        dt_,
+        operador,
+        sec,
+        validated_only,
+        selected_dates=dates,
+    )
+    filename = export.cpis_filename_for(
+        df,
+        dt_,
+        operador,
+        sec,
+        validated_only,
+        selected_dates=dates,
+    )
     return Response(
         content=xlsx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

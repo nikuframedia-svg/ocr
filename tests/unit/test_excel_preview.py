@@ -91,9 +91,11 @@ def test_excel_preview_formats_shared_weight_columns(tmp_db, monkeypatch):
     assert "Peso Produzido (t)" in html
     assert "Desperdício (t)" in html
     assert "% Desperdício" in html
+    assert "<th>Lote</th>" in html
     assert "0.153" in html
     assert "0.089" in html
     assert "0.064" in html
+    assert re.search(r">\s*L1\s*<", html)
     assert re.search(r">\s*2\.6\s*<", html)
 
 

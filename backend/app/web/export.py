@@ -444,6 +444,8 @@ CPIS_COLUMNS: tuple[tuple[str, str], ...] = (
     # R261 — Sucata (rev00) no fim para não deslocar as colunas do template
     # original do importador CPIS.
     ("sucata", "Sucata"),
+    # Lote fica no fim para preservar todas as posições CPIS existentes.
+    ("lote", "Lote"),
 )
 
 
@@ -453,6 +455,7 @@ def _query_cpis_rows(
     operador: str | None,
     sector: str | None = None,
     validated_only: bool = False,
+    selected_dates: tuple[str, ...] | None = None,
 ) -> list[dict]:
     """Pull production_rows + header.n_operador joined from sheets.
 
@@ -461,11 +464,22 @@ def _query_cpis_rows(
     via post-filter using ``detect_template``.
 
     R130: ``validated_only=True`` restringe a folhas com ``sheets.status =
-    'validated'``.
+    'validated'``. ``selected_dates`` filtra datas individuais e tem
+    precedência sobre o intervalo; a rota valida que os dois modos não são
+    misturados.
     """
     where: list[str] = []
     params: list = []
-    if date_from and date_to:
+    if selected_dates is not None:
+        if selected_dates:
+            placeholders = ",".join("?" for _ in selected_dates)
+            where.append(f"pr.sheet_iso_date IN ({placeholders})")
+            params.extend(selected_dates)
+        else:
+            # Defesa em profundidade: uma seleção explícita vazia nunca pode
+            # cair silenciosamente no comportamento "Sempre".
+            where.append("1 = 0")
+    elif date_from and date_to:
         where.append("pr.sheet_iso_date BETWEEN ? AND ?")
         params.extend([date_from, date_to])
     if operador:
@@ -717,6 +731,8 @@ def _build_cpis_row(row: dict, refs: dict | None = None) -> dict:
         ),
         # R261 — sucata (rev00), inteiro por linha.
         "sucata": _to_int(row.get("sucata")),
+        # Identificador textual; preservar exatamente o valor validado.
+        "lote": row.get("lote") or "",
     }
 
 
@@ -726,6 +742,7 @@ def build_cpis_workbook(
     operador: str | None = None,
     sector: str | None = None,
     validated_only: bool = False,
+    selected_dates: tuple[str, ...] | None = None,
 ) -> bytes:
     """Return .xlsx bytes matching MigracaoNikufraCPIS.xlsx schema.
 
@@ -734,13 +751,21 @@ def build_cpis_workbook(
     as numbers.
 
     R69: dates may be None (= "sempre"); sector filter via canonical
-    ``detect_template`` post-fetch.
+    ``detect_template`` post-fetch. ``selected_dates`` permite datas
+    individuais, inclusive não consecutivas.
     R130: ``validated_only=True`` exclui folhas em rascunho (status != 'validated').
 
     Empty-period: still returns a valid file with just the header row, so
     the user can confirm column layout.
     """
-    raw_rows = _query_cpis_rows(date_from, date_to, operador, sector, validated_only)
+    raw_rows = _query_cpis_rows(
+        date_from,
+        date_to,
+        operador,
+        sector,
+        validated_only,
+        selected_dates,
+    )
     # R96 — load refs once so _build_cpis_row can derive OV from plan
     # when the row doesn't have it (Gemini templates).
     try:
@@ -782,7 +807,7 @@ def build_cpis_workbook(
     widths = [
         12, 16, 24, 24, 12, 10, 10, 20, 24, 8, 12, 10,
         14, 10, 10, 16, 14, 12, 10, 10, 16, 16, 14, 12,
-        10,
+        10, 14,
     ]
     for ci, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(ci)].width = w
@@ -801,14 +826,24 @@ def cpis_filename_for(
     operador: str | None = None,
     sector: str | None = None,
     validated_only: bool = False,
+    selected_dates: tuple[str, ...] | None = None,
 ) -> str:
     """Slugged filename for the CPIS download. R69: "sempre" + sector.
     R130: sufixo `_validadas` quando o filtro de validação está activo."""
-    period = (
-        f"{date_from}_{date_to}"
-        if (date_from and date_to)
-        else "sempre"
-    )
+    if selected_dates is not None:
+        dates = tuple(sorted(set(selected_dates)))
+        if len(dates) == 1:
+            period = f"1-dia_{dates[0]}"
+        elif dates:
+            period = f"{len(dates)}-dias_{dates[0]}_{dates[-1]}"
+        else:
+            period = "0-dias"
+    else:
+        period = (
+            f"{date_from}_{date_to}"
+            if (date_from and date_to)
+            else "sempre"
+        )
     sector_suffix = f"_{_slugify(sector)}" if sector else ""
     op_suffix = ""
     if operador:

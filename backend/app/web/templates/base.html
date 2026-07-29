@@ -147,41 +147,99 @@
         Resumo: múltiplas folhas (1 aba "Resumo" + 1 aba por dia com sub-tabelas por operador).<br>
         CPIS: folha única no formato de migração atual (MigracaoNikufraCPIS).
       </p>
-      <form x-ref="exportForm" method="get" style="display:flex; flex-direction:column; gap:12px;">
-        {# Period presets — set date_from = today − N days, date_to = today #}
+      <form x-ref="exportForm" method="get"
+            @submit="guardExport($event)"
+            style="display:flex; flex-direction:column; gap:12px;">
         <div>
-          <div class="lbl">PERÍODO</div>
+          <div class="lbl">SELEÇÃO DE DATAS</div>
           <div style="display:flex; gap:6px; flex-wrap:wrap;">
-            <template x-for="p in presets" :key="p.label">
-              <button type="button" class="btn"
-                      :class="{ 'primary': activePreset === p.label }"
-                      style="font-size:12px; padding:6px 10px;"
-                      @click="applyPreset(p)"
-                      x-text="p.label"></button>
-            </template>
+            <button type="button" class="btn"
+                    :class="{ 'primary': dateMode === 'period' }"
+                    :aria-pressed="dateMode === 'period'"
+                    style="font-size:12px; padding:6px 10px;"
+                    @click="dateMode='period'">Período</button>
+            <button type="button" class="btn"
+                    :class="{ 'primary': dateMode === 'selected' }"
+                    :aria-pressed="dateMode === 'selected'"
+                    style="font-size:12px; padding:6px 10px;"
+                    @click="dateMode='selected'">Selecionar dias</button>
           </div>
         </div>
-        <div style="display:flex; gap:10px;">
-          <label style="flex:1;">
-            <div class="lbl">DE</div>
-            {# R92: min/max contra anos absurdos. #}
-            <input type="date" name="date_from" :value="dateFrom"
-                   :disabled="!dateFrom"
-                   min="2024-01-01" max="2030-12-31"
-                   placeholder="aaaa-mm-dd" pattern="\d{4}-\d{2}-\d{2}"
-                   @change="dateFrom=$event.target.value; activePreset=null"
-                   style="width:100%; padding:8px; border:1px solid var(--rule-2); border-radius:6px;">
-          </label>
-          <label style="flex:1;">
-            <div class="lbl">ATÉ</div>
-            <input type="date" name="date_to" :value="dateTo"
-                   :disabled="!dateTo"
-                   min="2024-01-01" max="2030-12-31"
-                   placeholder="aaaa-mm-dd" pattern="\d{4}-\d{2}-\d{2}"
-                   @change="dateTo=$event.target.value; activePreset=null"
-                   style="width:100%; padding:8px; border:1px solid var(--rule-2); border-radius:6px;">
-          </label>
+
+        {# Period presets — unchanged: date_from = today − N days, date_to = today. #}
+        <div x-show="dateMode === 'period'"
+             style="display:flex; flex-direction:column; gap:12px;">
+          <div>
+            <div class="lbl">PERÍODO</div>
+            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+              <template x-for="p in presets" :key="p.label">
+                <button type="button" class="btn"
+                        :class="{ 'primary': activePreset === p.label }"
+                        style="font-size:12px; padding:6px 10px;"
+                        @click="applyPreset(p)"
+                        x-text="p.label"></button>
+              </template>
+            </div>
+          </div>
+          <div style="display:flex; gap:10px;">
+            <label style="flex:1;">
+              <div class="lbl">DE</div>
+              {# R92: min/max contra anos absurdos. #}
+              <input type="date" name="date_from" :value="dateFrom"
+                     :disabled="dateMode === 'selected' || !dateFrom"
+                     min="2024-01-01" max="2030-12-31"
+                     placeholder="aaaa-mm-dd" pattern="\d{4}-\d{2}-\d{2}"
+                     @change="dateFrom=$event.target.value; activePreset=null"
+                     style="width:100%; padding:8px; border:1px solid var(--rule-2); border-radius:6px;">
+            </label>
+            <label style="flex:1;">
+              <div class="lbl">ATÉ</div>
+              <input type="date" name="date_to" :value="dateTo"
+                     :disabled="dateMode === 'selected' || !dateTo"
+                     min="2024-01-01" max="2030-12-31"
+                     placeholder="aaaa-mm-dd" pattern="\d{4}-\d{2}-\d{2}"
+                     @change="dateTo=$event.target.value; activePreset=null"
+                     style="width:100%; padding:8px; border:1px solid var(--rule-2); border-radius:6px;">
+            </label>
+          </div>
         </div>
+
+        <div x-show="dateMode === 'selected'"
+             style="display:flex; flex-direction:column; gap:10px;">
+          <input type="hidden" name="date_mode" value="selected"
+                 :disabled="dateMode !== 'selected'">
+          <div>
+            <div class="lbl">ADICIONAR DIA</div>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <input type="date" x-model="pendingDate"
+                     min="2024-01-01" max="2030-12-31"
+                     @keydown.enter.prevent="addSelectedDate()"
+                     style="flex:1; padding:8px; border:1px solid var(--rule-2); border-radius:6px;">
+              <button type="button" class="btn"
+                      :disabled="!pendingDate"
+                      @click="addSelectedDate()">Adicionar</button>
+            </div>
+          </div>
+          <div x-show="selectedDates.length > 0"
+               style="display:flex; gap:6px; flex-wrap:wrap;">
+            <template x-for="date in selectedDates" :key="date">
+              <span class="pill neutral"
+                    style="display:inline-flex; align-items:center; gap:6px;">
+                <span x-text="formatSelectedDate(date)"></span>
+                <button type="button"
+                        @click="removeSelectedDate(date)"
+                        :aria-label="'Remover ' + formatSelectedDate(date)"
+                        style="border:0; background:transparent; color:inherit; cursor:pointer; padding:0; font-size:15px; line-height:1;">×</button>
+                <input type="hidden" name="selected_dates" :value="date"
+                       :disabled="dateMode !== 'selected'">
+              </span>
+            </template>
+          </div>
+          <div x-show="selectedDates.length === 0" class="muted tiny">
+            Seleciona pelo menos um dia para exportar o CPIS.
+          </div>
+        </div>
+
         <label>
           <div class="lbl">SETOR (opcional)</div>
           <select name="sector" style="width:100%; padding:8px; border:1px solid var(--rule-2); border-radius:6px;">
@@ -211,11 +269,18 @@
             </span>
           </span>
         </label>
+        <div x-show="dateMode === 'selected'" class="muted tiny"
+             style="text-align:right;">
+          A seleção de dias específicos está disponível apenas no CPIS.
+        </div>
         <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:8px;">
           <button type="button" class="btn" @click="visible=false">Cancelar</button>
           <button type="submit" class="btn"
+                  :disabled="dateMode === 'selected' && selectedDates.length === 0"
                   @click="$refs.exportForm.action='/export/cpis'">CPIS (migração)</button>
           <button type="submit" class="btn primary"
+                  :disabled="dateMode === 'selected'"
+                  :title="dateMode === 'selected' ? 'Disponível apenas para export CPIS' : ''"
                   @click="$refs.exportForm.action='/export'">Resumo</button>
         </div>
       </form>
@@ -228,6 +293,9 @@ function exportModal() {
     visible: false,
     dateFrom: '',
     dateTo: '',
+    dateMode: 'period',
+    pendingDate: '',
+    selectedDates: [],
     activePreset: '1 mês',
     presets: [
       { label: '1 dia',     days: 1 },
@@ -253,8 +321,32 @@ function exportModal() {
       }
       this.activePreset = p.label;
     },
+    addSelectedDate() {
+      const value = (this.pendingDate || '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return;
+      if (!this.selectedDates.includes(value)) {
+        this.selectedDates.push(value);
+        this.selectedDates.sort();
+      }
+      this.pendingDate = '';
+    },
+    removeSelectedDate(value) {
+      this.selectedDates = this.selectedDates.filter(d => d !== value);
+    },
+    formatSelectedDate(value) {
+      const [year, month, day] = value.split('-');
+      return `${day}-${month}-${year}`;
+    },
+    guardExport(event) {
+      if (this.dateMode === 'selected' && this.selectedDates.length === 0) {
+        event.preventDefault();
+      }
+    },
     open() {
       // Default preset: 1 mês
+      this.dateMode = 'period';
+      this.pendingDate = '';
+      this.selectedDates = [];
       this.applyPreset(this.presets[2]);
       this.visible = true;
     }

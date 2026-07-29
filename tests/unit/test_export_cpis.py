@@ -45,6 +45,8 @@ EXPECTED_HEADER_LABELS = [
     "% Desperdício",
     # R261 — Sucata (rev00) acrescentada no fim do schema CPIS.
     "Sucata",
+    # Lote acrescentado no fim para preservar as posições anteriores.
+    "Lote",
 ]
 
 
@@ -162,6 +164,7 @@ def test_build_cpis_row_bobine_formato_with_waste() -> None:
     assert out["desperdicio_t"] == 0.064
     assert out["desperdicio_pct"] is not None
     assert out["sucata"] == 3  # R261
+    assert out["lote"] == "L1"
 
 
 def test_build_cpis_row_sucata_empty_is_none() -> None:
@@ -175,6 +178,7 @@ def test_build_cpis_row_sucata_empty_is_none() -> None:
     }
     out = _build_cpis_row(raw)
     assert out["sucata"] is None
+    assert out["lote"] == ""
 
 
 def test_build_cpis_row_header_cod_maquina_wins_over_derivation() -> None:
@@ -353,6 +357,36 @@ def test_cpis_filename_includes_operador_slug() -> None:
     assert "JLIOLIMA" in f_op or "JULIOLIMA" in f_op or "LIMA" in f_op
 
 
+def test_cpis_filename_for_selected_dates_is_compact_and_deterministic() -> None:
+    selected = ("2026-07-29", "2026-07-23", "2026-07-27", "2026-07-23")
+    filename = cpis_filename_for(
+        None,
+        None,
+        selected_dates=selected,
+    )
+    assert filename == "MigracaoNikufraCPIS_3-dias_2026-07-23_2026-07-29.xlsx"
+
+    one_day = cpis_filename_for(
+        None,
+        None,
+        selected_dates=("2026-07-23",),
+    )
+    assert one_day == "MigracaoNikufraCPIS_1-dia_2026-07-23.xlsx"
+
+    filtered = cpis_filename_for(
+        None,
+        None,
+        operador="OPERADOR TESTE",
+        sector="Bobine Formato",
+        validated_only=True,
+        selected_dates=("2026-07-23", "2026-07-29"),
+    )
+    assert filtered == (
+        "MigracaoNikufraCPIS_2-dias_2026-07-23_2026-07-29"
+        "_bobine_formato_OPERADORTESTE_validadas.xlsx"
+    )
+
+
 def test_workbook_header_row_matches_template() -> None:
     """End-to-end: build a workbook from a synthetic row and read it back.
 
@@ -381,6 +415,7 @@ def test_workbook_header_row_matches_template() -> None:
         "ltopo": 150,
         "esp": 3.0,
         "coni": "10",
+        "lote": "M26B0330",
     }]
     original_query = export._query_cpis_rows
     export._query_cpis_rows = lambda *a, **kw: synthetic  # type: ignore[attr-defined]
@@ -396,23 +431,26 @@ def test_workbook_header_row_matches_template() -> None:
     assert header_row == EXPECTED_HEADER_LABELS
 
     data_row = [c.value for c in ws[2]]
+    data_by_header = dict(zip(header_row, data_row, strict=True))
     # openpyxl reads date cells back as datetime; compare the date portion.
     assert isinstance(data_row[0], (dt.date, dt.datetime))
     assert (data_row[0].date() if isinstance(data_row[0], dt.datetime)
             else data_row[0]) == dt.date(2026, 4, 9)
-    assert data_row[1] == 10000537                    # Cód. Funcionário
-    assert data_row[2] == "JÚLIO LIMA"                # Nome
-    assert data_row[3] == "BOBINE-FORMATO"            # Setor / Máquina
-    assert data_row[4] == "M032"                      # Cód. Máquina
-    assert data_row[5] == "999999"                    # OF
-    assert data_row[7] == "ENEDIS"                    # Cliente
-    assert data_row[9] == 5                           # QTD
-    assert data_row[15] == 5000                       # Comprimento
-    assert data_row[16] == 1500                       # Largura
-    assert data_row[17] == 3.0                        # Espessura
-    assert data_row[19] is not None                   # Nº Chapas
-    assert data_row[20] is not None and data_row[20] > 0   # Peso consumido
-    assert data_row[22] is not None and data_row[22] >= 0  # Desperdício t
+    assert data_by_header["Cód. Funcionário"] == 10000537
+    assert data_by_header["Nome Funcionário"] == "JÚLIO LIMA"
+    assert data_by_header["Setor / Máquina Desc."] == "BOBINE-FORMATO"
+    assert data_by_header["Cód. Máquina"] == "M032"
+    assert data_by_header["OF"] == "999999"
+    assert data_by_header["Cliente"] == "ENEDIS"
+    assert data_by_header["QTD"] == 5
+    assert data_by_header["Comprimento (mm)"] == 5000
+    assert data_by_header["Largura (mm)"] == 1500
+    assert data_by_header["Espessura (mm)"] is not None
+    assert data_by_header["Nº Chapas"] is not None
+    assert data_by_header["Peso Consumido (t)"] > 0
+    assert data_by_header["Desperdício (t)"] >= 0
+    assert header_row[-1] == "Lote"
+    assert data_row[-1] == "M26B0330"
 
 
 def test_workbook_empty_period_still_has_header() -> None:
