@@ -40,6 +40,22 @@ def _refs():
     }
 
 
+def _tecpoles_refs():
+    entry = {
+        "of": "251651",
+        "ov": "2500854",
+        "cliente": "TECPOLES GMBH",
+        "designacao": "TSA20 16-20M 1234TJ23 - Nº2 1234T823 1/2",
+        "comp": 5154,
+        "lbase": 1170,
+        "ltopo": 900,
+        "esp": 5,
+        "npecas": 1,
+        "pesounit": 416,
+    }
+    return {"of_to_entries": {"251651": [entry]}}
+
+
 def test_excel_preview_formats_shared_weight_columns(tmp_db, monkeypatch):
     class _Watcher:
         def get_refs(self):
@@ -97,6 +113,51 @@ def test_excel_preview_formats_shared_weight_columns(tmp_db, monkeypatch):
     assert "0.064" in html
     assert re.search(r">\s*L1\s*<", html)
     assert re.search(r">\s*2\.6\s*<", html)
+
+
+def test_excel_preview_bobine_uses_geometric_produced_weight(tmp_db, monkeypatch):
+    class _Watcher:
+        def get_refs(self):
+            return _tecpoles_refs()
+
+    monkeypatch.setattr(main, "get_watcher", _Watcher)
+
+    sid = db.insert_sheet("tecpoles.jpg")
+    sheet_data = {
+        "header": {
+            "operador": "LUÍS",
+            "n_operador": "0001",
+            "data": "02-08-2026",
+            "setor_maquina": "BOBINE-FORMATO",
+            "cod_maquina": "",
+        },
+        "rows": [{
+            "of": "251651",
+            "ov": "2500854",
+            "cliente": "TECPOLES GMBH",
+            "modelo": "1234TJ23",
+            "qtd": "8",
+            "comp_mm": "5154",
+            "larg_mm": "1250",
+            "esp": "5",
+        }],
+        "footer": {},
+    }
+    db.update_extraction(
+        sid,
+        raw_extraction=sheet_data,
+        dq_audit={"cells": {}},
+        sheet_data=sheet_data,
+    )
+
+    response = TestClient(main.app).get("/excel?of=251651", headers=_DESKTOP)
+
+    assert response.status_code == 200
+    html = response.text
+    assert "2.023" in html
+    assert "1.675" in html
+    assert "0.348" in html
+    assert "17.20" in html
 
 
 def test_excel_preview_shows_expedicao_produced_weight_by_ov_model(tmp_db, monkeypatch):

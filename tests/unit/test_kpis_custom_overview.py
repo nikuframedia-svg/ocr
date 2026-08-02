@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 
 import pytest
-
 from app.web import db, kpi_params, kpis
 
 
@@ -26,7 +25,7 @@ def tmp_env(tmp_path, monkeypatch):
             return {}
 
     import app.cross_check.ref_watcher as rw
-    monkeypatch.setattr(rw, "get_watcher", lambda: _W())
+    monkeypatch.setattr(rw, "get_watcher", _W)
     yield
     kpi_params.invalidate_cache()
 
@@ -42,6 +41,22 @@ def _seed(qtd=12, hours=4.0, day="2026-07-01", operador="ANA"):
             "sheet_iso_date, sheet_hours, qtd) VALUES (?,?,?,?,?,?)",
             (sid, 0, operador, day, hours, qtd))
     return sid
+
+
+def _tecpoles_refs():
+    entry = {
+        "of": "251651",
+        "ov": "2500854",
+        "cliente": "TECPOLES GMBH",
+        "designacao": "TSA20 16-20M 1234TJ23 - Nº2 1234T823 1/2",
+        "comp": 5154,
+        "lbase": 1170,
+        "ltopo": 900,
+        "esp": 5,
+        "npecas": 1,
+        "pesounit": 416,
+    }
+    return {"of_to_entries": {"251651": [entry]}}
 
 
 class TestRegressionNoFile:
@@ -98,6 +113,48 @@ class TestRegressionNoFile:
         assert cards["col_per_h"]["value"] == 3.0
         assert cards["col_per_h"]["meets_target"] is None  # sem meta default
         assert ov["kpi_variables"]["totals"]["qtd"] == 12
+
+    def test_bobine_totals_use_geometric_produced_weight(self, monkeypatch):
+        class _Watcher:
+            def get_refs(self):
+                return _tecpoles_refs()
+
+        import app.cross_check.ref_watcher as rw
+        monkeypatch.setattr(rw, "get_watcher", _Watcher)
+
+        with db.conn() as c:
+            c.execute(
+                "INSERT INTO sheets (image_path, status, sheet_data) VALUES (?,?,?)",
+                (
+                    "tecpoles.jpg",
+                    "validated",
+                    json.dumps({"header": {"setor_maquina": "Bobine Formato"}}),
+                ),
+            )
+            sid = c.execute("SELECT MAX(id) AS i FROM sheets").fetchone()["i"]
+            c.execute(
+                "INSERT INTO production_rows ("
+                "sheet_id, row_index, operador, sheet_iso_date, sheet_hours, "
+                "of, modelo, qtd, comp_mm, larg_mm, esp, lbase, ltopo"
+                ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    sid, 0, "LUÍS", "2026-08-02", 1.0,
+                    "251651", "1234TJ23", 8, 5154, 1250, 5, 1170, 900,
+                ),
+            )
+
+        overview = kpis.production_overview("2026-08-02", "day")
+        variables = overview["kpi_variables"]["totals"]
+        totals = overview["totals"]
+
+        assert variables["kg_consumido"] == pytest.approx(2022.945)
+        assert variables["kg_produzido"] == pytest.approx(1674.99846)
+        assert variables["kg_desperdicio"] == pytest.approx(347.94654)
+        assert variables["chapas"] == 8
+        assert totals["toneladas_consumido"] == 2.0
+        assert totals["toneladas_produzido"] == 1.7
+        assert totals["perc_desperdicio"] == 17.2
+        assert totals["chapas_total"] == 8
 
 
 class TestOverrides:

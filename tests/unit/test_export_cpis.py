@@ -106,6 +106,22 @@ def _refs():
     }
 
 
+def _tecpoles_refs():
+    entry = {
+        "of": "251651",
+        "ov": "2500854",
+        "cliente": "TECPOLES GMBH",
+        "designacao": "TSA20 16-20M 1234TJ23 - Nº2 1234T823 1/2",
+        "comp": 5154,
+        "lbase": 1170,
+        "ltopo": 900,
+        "esp": 5,
+        "npecas": 1,
+        "pesounit": 416,
+    }
+    return {"of_to_entries": {"251651": [entry]}}
+
+
 def test_cpis_columns_match_template_exactly() -> None:
     """The header labels must match the CPIS export contract."""
     labels = [label for _, label in CPIS_COLUMNS]
@@ -451,6 +467,54 @@ def test_workbook_header_row_matches_template() -> None:
     assert data_by_header["Desperdício (t)"] >= 0
     assert header_row[-1] == "Lote"
     assert data_row[-1] == "M26B0330"
+
+
+def test_workbook_bobine_uses_geometric_produced_weight(monkeypatch) -> None:
+    """CPIS preserves its schema while exporting the phase-correct weights."""
+    from app import cross_check
+    from app.web import export
+
+    synthetic = [{
+        "sheet_iso_date": "2026-08-02",
+        "operador": "LUÍS",
+        "validated_operador": "LUÍS",
+        "n_operador": "0001",
+        "setor_maquina": "BOBINE-FORMATO",
+        "header_cod_maquina": None,
+        "of": "251651",
+        "ov": "2500854",
+        "cliente": "TECPOLES GMBH",
+        "modelo": "1234TJ23",
+        "qtd": 8,
+        "comp_mm": 5154,
+        "larg_mm": 1250,
+        "esp": 5,
+    }]
+
+    class _Watcher:
+        def get_refs(self):
+            return _tecpoles_refs()
+
+    monkeypatch.setattr(export, "_query_cpis_rows", lambda *a, **kw: synthetic)
+    monkeypatch.setattr(cross_check, "get_watcher", _Watcher)
+
+    xlsx_bytes = export.build_cpis_workbook("2026-08-02", "2026-08-02")
+    wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes))
+    ws = wb["Folha1"]
+    header_row = [c.value for c in ws[1]]
+    data_by_header = dict(zip(header_row, [c.value for c in ws[2]], strict=True))
+
+    assert header_row == EXPECTED_HEADER_LABELS
+    assert data_by_header["Nº Chapas"] == 8
+    assert data_by_header["Peso Consumido (t)"] == 2.023
+    assert data_by_header["Peso Produzido (t)"] == 1.675
+    assert data_by_header["Desperdício (t)"] == 0.348
+    assert data_by_header["% Desperdício"] == 17.2
+
+    columns = {cell.value: cell.column for cell in ws[1]}
+    for label in ("Peso Consumido (t)", "Peso Produzido (t)", "Desperdício (t)"):
+        assert ws.cell(2, columns[label]).number_format == "0.000"
+    assert ws.cell(2, columns["% Desperdício"]).number_format == "0.00"
 
 
 def test_workbook_empty_period_still_has_header() -> None:

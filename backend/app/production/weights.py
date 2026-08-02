@@ -1,8 +1,9 @@
 """Central weight calculations for CPIS exports and production KPIs.
 
 The important split is:
-- produced weight can be derived for any production phase when the plan has
-  a canonical unit weight;
+- Bobine/Formato produced weight represents cut pieces and therefore prefers
+  geometry, falling back to the plan unit weight only when geometry is absent;
+- later production phases prefer the canonical plan unit weight;
 - consumed weight and waste are only material-cutting metrics, currently
   limited to Bobine/Formato rows.
 """
@@ -224,6 +225,7 @@ def calculate_row_weights(row: dict, refs: dict | None = None) -> RowWeightMetri
     """Calculate produced/consumed/waste weights for one production row."""
     qtd = _to_float(row.get("qtd"))
     plan_entry = find_plan_entry(row, refs)
+    direct = is_direct_consumption_row(row)
     lote = str(row.get("lote") or "").strip().upper()
     sap_entry = ((refs or {}).get("lotes_sap_full") or {}).get(lote) if lote else None
 
@@ -256,22 +258,27 @@ def calculate_row_weights(row: dict, refs: dict | None = None) -> RowWeightMetri
             esp_mm=esp,
             lbase=lbase,
             ltopo=ltopo,
-            direct_consumption=is_direct_consumption_row(row),
+            direct_consumption=direct,
         )
 
     peso_produzido_kg: float | None = None
     produced_source: str | None = None
     pesounit = _to_float(plan_entry.get("pesounit")) if plan_entry else None
-    if pesounit is not None and pesounit > 0:
+    geom_weight = row_weight_kg(qtd, lbase, ltopo, comp, esp)
+
+    # Quantities in Bobine/Formato count cut pieces, so their produced weight
+    # must be comparable with the rectangular stock consumed in this phase.
+    # Later phases count finished units and keep the official plan weight.
+    if direct and geom_weight > 0:
+        peso_produzido_kg = geom_weight
+        produced_source = "geometry"
+    elif pesounit is not None and pesounit > 0:
         peso_produzido_kg = qtd * pesounit
         produced_source = "plan_pesounit"
-    else:
-        geom_weight = row_weight_kg(qtd, lbase, ltopo, comp, esp)
-        if geom_weight > 0:
-            peso_produzido_kg = geom_weight
-            produced_source = "geometry"
+    elif geom_weight > 0:
+        peso_produzido_kg = geom_weight
+        produced_source = "geometry"
 
-    direct = is_direct_consumption_row(row)
     if not direct:
         return RowWeightMetrics(
             peso_produzido_kg=peso_produzido_kg,

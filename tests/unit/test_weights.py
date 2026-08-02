@@ -77,11 +77,73 @@ def test_plan_npecas_above_legacy_formula_is_respected():
     assert out.n_chapas == 2
 
 
-def test_plan_pesounit_wins_for_produced_weight():
+def test_bobine_geometry_wins_over_plan_pesounit():
     out = calculate_row_weights(_bobine_row(qtd=3), _refs(pesounit=50))
 
+    assert out.produced_source == "geometry"
+    assert out.peso_produzido_kg == pytest.approx(
+        3 * column_weight_kg(200, 150, 5000, 2.6)
+    )
+
+
+def test_bobine_tecpoles_regression_uses_cut_piece_geometry():
+    entry = {
+        "of": "251651",
+        "designacao": "TSA20 16-20M 1234TJ23 - Nº2 1234T823 1/2",
+        "comp": 5154,
+        "lbase": 1170,
+        "ltopo": 900,
+        "esp": 5,
+        "npecas": 1,
+        "pesounit": 416,
+    }
+    refs = {"of_to_entries": {"251651": [entry]}}
+    row = {
+        "setor_maquina": "BOBINE-FORMATO",
+        "of": "251651",
+        "modelo": "1234TJ23",
+        "qtd": 8,
+        "comp_mm": 5154,
+        "larg_mm": 1250,
+        "esp": 5,
+    }
+
+    out = calculate_row_weights(row, refs)
+
+    assert out.produced_source == "geometry"
+    assert out.n_chapas == 8
+    assert out.peso_consumido_kg == pytest.approx(2022.945)
+    assert out.peso_produzido_kg == pytest.approx(1674.99846)
+    assert out.desperdicio_kg == pytest.approx(347.94654)
+    assert out.desperdicio_pct == pytest.approx(17.2)
+
+
+def test_bobine_missing_geometry_falls_back_to_plan_weight():
+    entry = {
+        "of": "261860",
+        "comp": 5000,
+        "esp": 5,
+        "npecas": 1,
+        "pesounit": 500,
+    }
+    refs = {
+        "of_to_entries": {"261860": [entry]},
+        "lotes_sap_full": {"L1": {"esp": 5, "larg": 1250}},
+    }
+    row = {
+        "setor_maquina": "BOBINE-FORMATO",
+        "of": "261860",
+        "qtd": 1,
+        "lote": "L1",
+    }
+
+    out = calculate_row_weights(row, refs)
+
     assert out.produced_source == "plan_pesounit"
-    assert out.peso_produzido_kg == pytest.approx(150)
+    assert out.peso_consumido_kg == pytest.approx(245.3125)
+    assert out.peso_produzido_kg == pytest.approx(500)
+    assert out.desperdicio_kg == 0
+    assert out.desperdicio_pct == 0
 
 
 def test_waste_percent_is_over_consumed_weight():
