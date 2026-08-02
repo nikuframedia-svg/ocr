@@ -513,6 +513,28 @@ window.addEventListener('keydown', (e) => {
     if (a && !a.hasAttribute('aria-disabled')) a.click();
   }
 });
+
+// R263 — validate por fetch: o submit nativo navegava para o JSON cru do
+// FastAPI em erro (ex.: 409 "Folha marcada para revisão de lado"). Agora o
+// detail aparece num alert e a página fica onde está. FormData inclui os
+// inputs de cesta associados via form="validate-form" (R95).
+document.getElementById('validate-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const btn = f.querySelector('button[type=submit]');
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch(f.action, { method: 'POST', body: new FormData(f) });
+    if (r.ok) { window.location = r.redirected ? r.url : window.location.href; return; }
+    let d = '';
+    try { d = (await r.json()).detail || ''; } catch (_) {}
+    alert('Validação falhou: ' + (d || ('HTTP ' + r.status)));
+  } catch (err) {
+    alert('Erro de rede: ' + err.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
 </script>
 
 {% endblock %}

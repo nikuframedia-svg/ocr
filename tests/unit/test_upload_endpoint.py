@@ -27,6 +27,10 @@ _PNG_1x1 = base64.b64decode(
 
 _DESKTOP = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
 
+# R263 — referência capturada no import (antes do monkeypatch do fixture `env`)
+# para os testes que precisam do bloco de lado REAL do run_pipeline.
+_REAL_RUN_PIPELINE = ocr_runner.run_pipeline
+
 
 def _make_pdf_bytes(n_pages: int = 3, size: tuple[int, int] = (842, 595)) -> bytes:
     """rev01 — PDF sintético (via Pillow) para testar a ingestão sem rede."""
@@ -269,8 +273,122 @@ def test_resolve_side_sets_hint_clears_review_requeues(env, client):
     assert resp.status_code == 303
     sheet = db.get_sheet(sheet_id)
     assert sheet["page_hint"] == "V"
+    assert sheet["side_locked"] == 1  # R263 — decisão humana tranca o lado
     assert not sheet["needs_review"]
     assert sheet["status"] == "pending"
+
+
+# --- R263 — o lock humano sobrevive ao reprocess (fix do loop 409) ---
+
+
+def _mock_real_pipeline_internals(monkeypatch, *, rows):
+    """Restaura o run_pipeline REAL (o fixture `env` mocka-o) e isola só os
+    internos de OCR — o bloco de lado corre a sério (padrão de
+    test_rev00_new_format._mock_pipeline)."""
+    monkeypatch.setattr(ocr_runner, "run_pipeline", _REAL_RUN_PIPELINE)
+    pass1 = {"header": {"setor_maquina": "GUILHOTINA"}, "rows": rows, "footer": {}}
+    monkeypatch.setattr(ocr_runner, "_run_ocr", lambda *a, **k: (pass1, None))
+    monkeypatch.setattr(ocr_runner, "_merge_pass2_into_pass1", lambda p1, p2: p1)
+    monkeypatch.setattr(ocr_runner, "_build_current_and_dq", lambda raw, tpl: (dict(raw), {}))
+
+
+_FRENTE_ROWS = [{"of": "262107", "modelo": "OMEGA"}, {"of": "262559", "modelo": "CGC2"}]
+
+
+def test_worker_passes_side_lock_to_pipeline(env, client, monkeypatch):
+    """Depois do resolve-side, o worker chama run_pipeline com side_locked=True."""
+    sheet_id = client.post(
+        "/upload?return=json",
+        files={"image": ("kanban.png", _PNG_1x1, "image/png")},
+        headers=_DESKTOP,
+    ).json()["sheet_id"]
+    main._process_sheet_ocr(sheet_id)
+    db.set_needs_review(sheet_id, "side_hint_conflict")
+    client.post(
+        f"/sheet/{sheet_id}/resolve-side",
+        data={"side": "V"},
+        headers=_DESKTOP,
+        follow_redirects=False,
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        ocr_runner,
+        "run_pipeline",
+        lambda _p, **kw: (captured.update(kw), _fake_extraction())[1],
+    )
+    main._process_sheet_ocr(sheet_id)
+    assert captured["side_locked"] is True
+    assert captured["page_hint"] == "V"
+
+
+def test_resolve_against_heuristic_stays_clean_and_deposits(env, client, monkeypatch):
+    """Regressão do loop 409: Pass-1 com cara de frente + humano diz "É Verso"
+    → o reprocess NÃO re-marca side_hint_conflict, deposita e o validate deixa
+    de responder "resolve o lado antes de validar"."""
+    _mock_real_pipeline_internals(monkeypatch, rows=_FRENTE_ROWS)
+    deposited: list[int] = []
+    monkeypatch.setattr(main, "_deposit_csv_to_factory", lambda sid: deposited.append(sid))
+
+    sheet_id = client.post(
+        "/upload?return=json",
+        files={"image": ("kanban.png", _PNG_1x1, "image/png")},
+        data={"page": "V"},
+        headers=_DESKTOP,
+    ).json()["sheet_id"]
+    main._process_sheet_ocr(sheet_id)
+    sheet = db.get_sheet(sheet_id)
+    assert sheet["needs_review"]  # heurística marcou (pista=V mas parece frente)
+    assert sheet["review_reason"] == "side_hint_conflict"
+    assert deposited == []
+
+    resp = client.post(
+        f"/sheet/{sheet_id}/resolve-side",
+        data={"side": "V"},  # humano contradiz a heurística
+        headers=_DESKTOP,
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    main._process_sheet_ocr(sheet_id)  # reprocess enfileirado pelo resolve-side
+
+    sheet = db.get_sheet(sheet_id)
+    assert not sheet["needs_review"]  # antes do R263 voltava a 1 → loop
+    assert deposited == [sheet_id]
+    v = client.post(f"/sheet/{sheet_id}/validate", headers=_DESKTOP)
+    assert "revisão de lado" not in v.text
+
+
+def test_reprocess_without_resolution_still_reflags(env, client, monkeypatch):
+    """Guarda anti-regressão do default: sem resolução humana, o reprocess
+    continua a re-marcar o conflito (proteção do CSV intacta)."""
+    _mock_real_pipeline_internals(monkeypatch, rows=_FRENTE_ROWS)
+    sheet_id = client.post(
+        "/upload?return=json",
+        files={"image": ("kanban.png", _PNG_1x1, "image/png")},
+        data={"page": "V"},
+        headers=_DESKTOP,
+    ).json()["sheet_id"]
+    main._process_sheet_ocr(sheet_id)
+    db.update_status(sheet_id, "pending")  # reprocess manual, sem resolve-side
+    main._process_sheet_ocr(sheet_id)
+    sheet = db.get_sheet(sheet_id)
+    assert sheet["needs_review"]
+    assert sheet["review_reason"] == "side_hint_conflict"
+
+
+def test_set_page_hint_lock_semantics(env):
+    """R263 — migração + setter: default 0; locked=True grava 1; chamada sem
+    locked não faz downgrade do lock. init_db é idempotente com a coluna."""
+    db.init_db()  # 2ª chamada (o fixture já correu uma) — idempotente
+    sid = db.insert_sheet("x.png")
+    assert db.get_sheet(sid)["side_locked"] == 0
+    db.set_page_hint(sid, "V", locked=True)
+    sheet = db.get_sheet(sid)
+    assert sheet["page_hint"] == "V"
+    assert sheet["side_locked"] == 1
+    db.set_page_hint(sid, "F")  # sem locked → não despromove
+    sheet = db.get_sheet(sid)
+    assert sheet["page_hint"] == "F"
+    assert sheet["side_locked"] == 1
 
 
 def test_resolve_side_rejects_bad_side(env, client):

@@ -569,6 +569,33 @@ def test_hint_f_but_nonproduction_flags_review(monkeypatch):
     assert res["review_reason"] == "side_hint_conflict"
 
 
+# --- R263 — lado trancado por humano: o check de conflito NÃO re-questiona ---
+
+
+def test_side_locked_v_suppresses_hint_conflict(monkeypatch):
+    # Humano disse "É Verso" contra a heurística (Pass-1 com cara de frente):
+    # sem lock isto re-marcava side_hint_conflict em loop (validate 409 eterno).
+    _mock_pipeline(monkeypatch, rows=_PROD_ROWS)
+    monkeypatch.setattr(ocr_runner, "_detect_side", _detect_must_not_run)
+    res = ocr_runner.run_pipeline(Path("x.jpg"), page_hint="V", side_locked=True)
+    assert res["template_name"] == "paragens"
+    assert res["side"] == "V"
+    assert res["side_source"] == "human"
+    assert res["needs_review"] is False
+    assert res["review_reason"] == ""
+
+
+def test_side_locked_f_suppresses_nonproduction_flag(monkeypatch):
+    # Humano disse "É Frente" contra a heurística (Pass-1 sem produção).
+    _mock_pipeline(monkeypatch, rows=[{"a": "x"}, {"b": "y"}])
+    monkeypatch.setattr(ocr_runner, "_detect_side", _detect_must_not_run)
+    res = ocr_runner.run_pipeline(Path("x.jpg"), page_hint="F", side_locked=True)
+    assert res["template_name"] == "guilhotina"
+    assert res["side"] == "F"
+    assert res["side_source"] == "human"
+    assert res["needs_review"] is False
+
+
 def test_hint_f_with_production_not_flagged(monkeypatch):
     _mock_pipeline(monkeypatch, rows=_PROD_ROWS)
     monkeypatch.setattr(ocr_runner, "_detect_side", _detect_must_not_run)

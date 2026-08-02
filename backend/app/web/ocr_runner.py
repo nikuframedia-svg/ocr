@@ -467,6 +467,8 @@ def run_pipeline(
     image_path: Path,
     page_hint: str | None = None,
     template_name_hint: str | None = None,
+    *,
+    side_locked: bool = False,
 ) -> dict:
     """R109 — corre OCR + detecção de template. Sem DQ.
 
@@ -483,8 +485,14 @@ def run_pipeline(
         devolver '?' (indeterminado), extrai como frente MAS marca
         `needs_review=True` para o depósito ficar suspenso até revisão humana.
 
+    R263 — `side_locked=True` (lado resolvido por humano via /resolve-side)
+    suprime o check estrutural de conflito: a decisão humana é final e o
+    reprocess não a re-questiona. O ramo `side_indeterminate` não precisa de
+    supressão — com lock há sempre pista 'F'/'V', o ramo é inalcançável.
+
     Devolve, além do habitual, chaves de lado no dict: `side` ('F'/'V'),
-    `side_source` ('hint'/'detect'/'na') e `needs_review` (bool) + `review_reason`.
+    `side_source` ('hint'/'human'/'detect'/'na') e `needs_review` (bool) +
+    `review_reason`.
     """
     timing: dict[str, int] = {}  # R224 — ms por etapa (profiling)
 
@@ -532,18 +540,20 @@ def run_pipeline(
         if hint in ("F", "V"):
             # Pista da captura guiada é autoritativa para o routing.
             side = hint
-            side_source = "hint"
+            side_source = "human" if side_locked else "hint"
             # rev00 — check estrutural INLINE (custo zero, corre ANTES do
             # depósito): se a pista contradiz o que o Pass-1 mostra, marca a
             # folha para revisão (o gate de depósito trava-a). Substitui o
             # cross-check assíncrono (removido: era assimétrico e corria tarde
             # demais). Conservador — só as direcções de baixo falso-positivo.
-            if hint == "V" and _looks_confidently_frente(pass1_raw):
-                needs_review = True          # verso marcado, mas parece frente
-                review_reason = "side_hint_conflict"
-            elif hint == "F" and _pass1_looks_nonproduction(pass1_raw):
-                needs_review = True          # frente marcada, mas sem produção
-                review_reason = "side_hint_conflict"
+            # R263 — suprimido com `side_locked`: a decisão humana é final.
+            if not side_locked:
+                if hint == "V" and _looks_confidently_frente(pass1_raw):
+                    needs_review = True      # verso marcado, mas parece frente
+                    review_reason = "side_hint_conflict"
+                elif hint == "F" and _pass1_looks_nonproduction(pass1_raw):
+                    needs_review = True      # frente marcada, mas sem produção
+                    review_reason = "side_hint_conflict"
         elif _looks_confidently_frente(pass1_raw):
             # Fast-path estrutural: Pass-1 já mostra produção → é frente, salta
             # o mini-OCR (custo zero). Nunca declara verso por estrutura.

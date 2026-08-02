@@ -438,6 +438,9 @@ def init_db() -> None:
             c.execute("ALTER TABLE sheets ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0")
         if "review_reason" not in cols:
             c.execute("ALTER TABLE sheets ADD COLUMN review_reason TEXT")
+        # R263 — lado resolvido por humano: o reprocess não re-questiona.
+        if "side_locked" not in cols:
+            c.execute("ALTER TABLE sheets ADD COLUMN side_locked INTEGER NOT NULL DEFAULT 0")
         # R262 — optimistic concurrency + validated immutability at DB level.
         if "revision" not in cols:
             c.execute("ALTER TABLE sheets ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
@@ -597,15 +600,27 @@ def clear_needs_review(sheet_id: int) -> None:
         )
 
 
-def set_page_hint(sheet_id: int, side: str) -> None:
+def set_page_hint(sheet_id: int, side: str, *, locked: bool = False) -> None:
     """rev00 — força a pista de página ('F'/'V') numa folha. Usado pela
     resolução humana de `needs_review` (banner "é frente ou verso?"): a seguir
-    faz-se reprocess e o `run_pipeline` honra a pista como autoritativa."""
+    faz-se reprocess e o `run_pipeline` honra a pista como autoritativa.
+
+    R263 — `locked=True` marca `side_locked=1` (decisão humana): o worker
+    passa-o ao `run_pipeline`, que suprime o check inline de conflito de lado
+    — senão o reprocess re-marcava `side_hint_conflict` sempre que a escolha
+    humana contradiz a heurística e o validate ficava em 409 para sempre.
+    Sem `locked` o lock existente nunca é despromovido."""
     s = (side or "").strip().upper()
     if s not in ("F", "V"):
         raise ValueError(f"side must be 'F' or 'V', got {side!r}")
     with conn() as c:
-        c.execute("UPDATE sheets SET page_hint = ? WHERE id = ?", (s, sheet_id))
+        if locked:
+            c.execute(
+                "UPDATE sheets SET page_hint = ?, side_locked = 1 WHERE id = ?",
+                (s, sheet_id),
+            )
+        else:
+            c.execute("UPDATE sheets SET page_hint = ? WHERE id = ?", (s, sheet_id))
 
 
 def update_extraction(

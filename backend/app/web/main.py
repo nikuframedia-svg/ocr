@@ -171,6 +171,9 @@ def _process_sheet_ocr(sheet_id: int) -> None:
         was_reprocess = bool(sheet.get("raw_extraction"))
         # rev00 — pista de página da captura guiada (autoritativa p/ o routing).
         page_hint = (sheet.get("page_hint") or "").strip().upper() or None
+        # R263 — lado trancado por resolução humana: o check inline de
+        # conflito não corre (senão re-marcava side_hint_conflict em loop).
+        side_locked = bool(sheet.get("side_locked"))
         template_hint = None
         if was_reprocess and db.get_sheet_template_name(sheet) == "bobine_formato_legacy":
             template_hint = "bobine_formato_legacy"
@@ -178,6 +181,7 @@ def _process_sheet_ocr(sheet_id: int) -> None:
             img_path,
             page_hint=page_hint,
             template_name_hint=template_hint,
+            side_locked=side_locked,
         )
         db.update_extraction(
             sheet_id=sheet_id,
@@ -3900,10 +3904,12 @@ def sheet_reprocess(sheet_id: int) -> RedirectResponse:
 @app.post("/sheet/{sheet_id}/resolve-side")
 def sheet_resolve_side(sheet_id: int, side: str = Form(...)) -> RedirectResponse:
     """rev00 — resolve uma folha marcada `needs_review`: o humano diz se é
-    frente ('F') ou verso ('V'). Força a pista, limpa a flag e reprocessa —
-    o worker relê `page_hint` (autoritativo) e encaminha para o template de
-    produção ou para `paragens`. O cross-check não corre num reprocess
-    (`was_reprocess`), portanto a escolha humana não é re-questionada."""
+    frente ('F') ou verso ('V'). Força a pista COM LOCK (`side_locked=1`),
+    limpa a flag e reprocessa — o worker relê `page_hint` (autoritativo) e
+    encaminha para o template de produção ou para `paragens`. R263 — o worker
+    passa `side_locked=True` ao `run_pipeline`, que suprime o check estrutural
+    inline de conflito: a escolha humana não é re-questionada (sem o lock, o
+    reprocess re-marcava `side_hint_conflict` e o validate ficava em 409)."""
     s = (side or "").strip().upper()
     if s not in ("F", "V"):
         raise HTTPException(400, f"side must be F or V, got {side!r}")
@@ -3916,7 +3922,7 @@ def sheet_resolve_side(sheet_id: int, side: str = Form(...)) -> RedirectResponse
     img_path = _DATA_DIR / sheet["image_path"]
     if not img_path.exists():
         raise HTTPException(404, "image file missing")
-    db.set_page_hint(sheet_id, s)
+    db.set_page_hint(sheet_id, s, locked=True)
     db.clear_needs_review(sheet_id)
     # Reusa a cauda do reprocess (R71): reenfileira para o worker.
     db.update_status(sheet_id, "pending")
