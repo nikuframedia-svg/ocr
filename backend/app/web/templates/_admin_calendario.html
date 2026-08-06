@@ -1,0 +1,125 @@
+{# R265 — Tab Calendário: o que é dia útil na fábrica. Decide a data que o
+   sistema carimba em cada kanban processado (dia útil anterior ao upload). #}
+
+{% if flash_ok %}
+<div class="refs-flash ok">✓ {{ flash_ok }}</div>
+{% endif %}
+{% if flash_err %}
+<div class="refs-flash err">✕ {{ flash_err }}</div>
+{% endif %}
+
+<div class="card" style="margin-bottom:14px;">
+  <div class="card-h">
+    <div class="card-h-title">Data dos kanbans</div>
+    <div class="card-h-sub">
+      o sistema não usa o campo Data manuscrito: cada folha processada fica com
+      o dia útil anterior ao dia em que a foto entrou (o kanban é preenchido na
+      produção e fotografado na manhã seguinte)
+    </div>
+  </div>
+  <div class="card-b">
+    {% if cal_modo == 'dia_util_anterior' %}
+    <div>
+      Hoje é <strong>{{ cal_preview.hoje }}</strong> ({{ cal_preview.hoje_dia }}) →
+      uma folha carregada hoje fica com
+      <strong>{{ cal_preview.anterior }}</strong> ({{ cal_preview.anterior_dia }}).
+    </div>
+    {% else %}
+    <div class="refs-flash err" style="margin:0;">
+      ✕ regra desligada (KANBAN_DATE_MODE={{ cal_modo }}) — a data vem do que o
+      OCR lê na folha. Este calendário fica sem efeito até voltar a
+      <code>dia_util_anterior</code>.
+    </div>
+    {% endif %}
+    <div class="muted tiny" style="margin-top:8px;">
+      Uma data corrigida à mão numa folha é definitiva — o reprocessamento não
+      a volta a carimbar.
+    </div>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:14px;">
+  <div class="card-h">
+    <div class="card-h-title">Dias da semana trabalhados</div>
+    <div class="card-h-sub">
+      por defeito segunda a sábado (a fábrica trabalha sábado de manhã); os
+      sábados que não forem trabalhados marcam-se em baixo, um a um
+    </div>
+  </div>
+  <div class="card-b">
+    <form method="post" action="/admin/calendario/dias" class="refs-form">
+      <input type="hidden" name="expected_version" value="{{ cal_state.version }}">
+      <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:center;">
+        {% for i in range(7) %}
+        <label style="display:flex; gap:6px; align-items:center;">
+          <input type="checkbox" name="dia" value="{{ i }}"
+                 {% if i in cal_state.calendario.dias_semana %}checked{% endif %}>
+          {{ cal_labels[i] }}
+        </label>
+        {% endfor %}
+      </div>
+      <div style="margin-top:12px; display:flex; gap:10px; align-items:center;">
+        <button class="btn primary" type="submit">Guardar dias</button>
+        <span class="muted tiny">
+          versão {{ cal_state.version }} · defeito:
+          {% for i in cal_default_dias %}{{ cal_labels[i] }}{% if not loop.last %}, {% endif %}{% endfor %}
+        </span>
+      </div>
+    </form>
+    <form method="post" action="/admin/calendario/repor" style="margin-top:10px;">
+      <button class="btn" type="submit">Repor calendário de fábrica</button>
+    </form>
+  </div>
+</div>
+
+{% for bloco in [
+     {'tipo': 'nao_uteis',   'titulo': 'Feriados e dias parados',
+      'sub': 'dias que o sistema salta ao recuar — feriados, pontes e sábados não trabalhados',
+      'vazio': 'Sem feriados registados.'},
+     {'tipo': 'uteis_extra', 'titulo': 'Dias trabalhados fora do normal',
+      'sub': 'exceções ao contrário: um domingo ou um feriado em que se produziu',
+      'vazio': 'Sem dias extra registados.'}] %}
+<div class="card" style="margin-bottom:14px;">
+  <div class="card-h">
+    <div class="card-h-title">{{ bloco.titulo }}</div>
+    <div class="card-h-sub">{{ bloco.sub }}</div>
+  </div>
+  <div class="card-b">
+    <form method="post" action="/admin/calendario/excecao" class="refs-form"
+          style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+      <input type="hidden" name="expected_version" value="{{ cal_state.version }}">
+      <input type="hidden" name="tipo" value="{{ bloco.tipo }}">
+      <input type="date" name="data" required min="2024-01-01" max="2030-12-31">
+      <input type="text" name="nota" maxlength="200" placeholder="nota (ex.: Natal)"
+             style="flex:1; max-width:320px;">
+      <button class="btn primary" type="submit">Adicionar</button>
+    </form>
+
+    {% set entradas = cal_state.calendario[bloco.tipo] %}
+    {% if not entradas %}
+    <div class="muted" style="margin-top:12px;">{{ bloco.vazio }}</div>
+    {% else %}
+    <table class="tbl" style="margin-top:12px;">
+      <thead><tr><th>Data</th><th>Nota</th><th></th></tr></thead>
+      <tbody>
+        {% for e in entradas %}
+        <tr>
+          <td>{{ e.data }}</td>
+          <td class="muted">{{ e.nota or '—' }}</td>
+          <td style="text-align:right;">
+            <form method="post" action="/admin/calendario/excecao/remover"
+                  style="display:inline;">
+              <input type="hidden" name="expected_version" value="{{ cal_state.version }}">
+              <input type="hidden" name="tipo" value="{{ bloco.tipo }}">
+              <input type="hidden" name="data" value="{{ e.data }}">
+              <button class="btn" type="submit">Remover</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+</div>
+{% endfor %}

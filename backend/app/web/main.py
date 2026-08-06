@@ -39,7 +39,7 @@ sys.path.insert(0, str(_REPO / "backend"))
 
 from app import kernel
 from app.config import get_settings
-from app.web import attractors, db, export, kpi_params, kpis, llm_assistant, ocr_queue, ocr_runner, pdf_ingest, template_store
+from app.web import attractors, calendario, db, export, kpi_params, kpis, llm_assistant, ocr_queue, ocr_runner, pdf_ingest, template_store
 from app.cross_check import (
     cross_check_sheet,
     get_watcher,
@@ -146,6 +146,61 @@ templates.env.globals["production_sectors"] = PRODUCTION_SECTORS  # type: ignore
 # header.data guarda-se em DD-MM-YYYY; o <input type="date"> precisa de ISO.
 templates.env.filters["pt_to_iso"] = db._normalize_data_pt_to_iso  # type: ignore[assignment]
 
+# R265 — source do audit trail das datas carimbadas pelo sistema. FORA de
+# db.AUTHORITATIVE_EDIT_SOURCES de propósito: documenta o que o sistema
+# escreveu, não uma decisão do operador (senão o carimbo passaria a proteger
+# a célula contra o auto-overwrite do cross-check).
+DIA_UTIL_EDIT_SOURCE = "dia_util_anterior"
+
+
+def _stamp_dia_util_anterior(
+    sheet_id: int, current: dict, *, audit: bool = True,
+) -> str | None:
+    """R265 — carimba `header.data` com o dia útil anterior ao dia do UPLOAD.
+
+    A folha é preenchida durante a produção e fotografada na manhã seguinte,
+    por isso o sistema deixou de querer saber do campo Data manuscrito: a
+    data é derivada, não lida. A leitura do OCR não se perde — fica no
+    `raw_extraction` e numa linha de `edits` (audit EN 1090).
+
+    Âncora = `captured_at` (dia do upload, hora local) e NÃO `date.today()`:
+    assim um reprocesso dias mais tarde devolve exatamente a mesma data.
+
+    Devolve a data escrita (DD-MM-YYYY) ou None se não carimbou.
+    """
+    if (get_settings().kanban_date_mode or "").strip().lower() != "dia_util_anterior":
+        return None  # KANBAN_DATE_MODE=ocr — vale o que o modelo leu
+    header = current.get("header") if isinstance(current, dict) else None
+    if not isinstance(header, dict):
+        return None  # template sem cabeçalho (nada a carimbar)
+    # R133/R260 — uma correção humana da data é autoritativa e o reprocesso
+    # não a reverte. FAIL-CLOSED: se a consulta às edições falhar (ex.: BD
+    # bloqueada) NÃO carimbamos — melhor manter o valor atual do que escrever
+    # por cima de uma decisão do operador que não conseguimos ver.
+    try:
+        if "header.data" in _human_edited_paths(sheet_id):
+            return None
+    except Exception as e:
+        print(f"[dia_util] sheet {sheet_id}: edições ilegíveis, não carimba: {e}",
+              file=sys.stderr)
+        return None
+    anchor = db.captured_local_date(sheet_id)
+    if anchor is None:
+        return None
+    novo = calendario.dia_util_anterior(anchor).strftime("%d-%m-%Y")
+    antigo = str(header.get("data") or "")
+    header["data"] = novo
+    if audit and antigo != novo:
+        try:
+            db.record_auto_edit(
+                sheet_id, "header.data", antigo, novo,
+                source=DIA_UTIL_EDIT_SOURCE,
+                reason=f"dia util anterior a {anchor.isoformat()} (upload)",
+            )
+        except Exception as e:  # audit best-effort: nunca falha o OCR
+            print(f"[dia_util audit] sheet {sheet_id}: {e}", file=sys.stderr)
+    return novo
+
 
 def _process_sheet_ocr(sheet_id: int) -> None:
     """R71 — worker callback. Runs OCR + DQ + cross-check + CSV deposit
@@ -183,6 +238,11 @@ def _process_sheet_ocr(sheet_id: int) -> None:
             template_name_hint=template_hint,
             side_locked=side_locked,
         )
+        # R265 — a data do kanban é derivada (dia útil anterior ao upload),
+        # não lida. Carimbar ANTES do update_extraction para que o sheet_data
+        # gravado, os production_rows, o cross-check e o CSV da fábrica vejam
+        # todos o mesmo valor.
+        _stamp_dia_util_anterior(sheet_id, result["current"])
         db.update_extraction(
             sheet_id=sheet_id,
             raw_extraction=result["raw"],
@@ -736,6 +796,13 @@ def _rebuild_sheet_data_from_raw(sheet_id: int, sheet: dict) -> bool:
             db._set_by_path(rebuilt, path, value)
         except Exception:
             continue
+    # R265 — a data é DERIVADA, não vem do raw: sem isto, um rebuild (bump de
+    # ENGINE_VERSION) ressuscitava a data manuscrita que o OCR leu. Só para
+    # folhas que JÁ tinham sido carimbadas — o rebuild reconstrói o que lá
+    # estava, não aplica a regra nova a folhas antigas. `audit` off: a linha
+    # do audit trail já foi escrita no processamento.
+    if db.has_edit_source(sheet_id, DIA_UTIL_EDIT_SOURCE):
+        _stamp_dia_util_anterior(sheet_id, rebuilt, audit=False)
     if rebuilt == current:
         return False
     try:
@@ -3323,7 +3390,7 @@ def admin_refs_lookup(q: str = "", include_done: int = 0) -> JSONResponse:
 # registadas ACIMA, por isso ganham ao wildcard /admin/{tab}.
 # ---------------------------------------------------------------------------
 
-_ADMIN_TABS = ("referencias", "kanbans", "unidades", "kpis")
+_ADMIN_TABS = ("referencias", "kanbans", "unidades", "kpis", "calendario")
 
 
 def _admin_redirect(tab: str, param: str, message: str) -> RedirectResponse:
@@ -3402,8 +3469,91 @@ def admin_page(request: Request, tab: str) -> Response:
         ctx["kpi_default_ids"] = [k["id"] for k in kpi_params.DEFAULT_KPIS]
         ctx["kpi_scope_variables"] = kpi_params.SCOPE_VARIABLES
         ctx["kpi_preview_date"] = _kpi_last_production_day()
+    elif tab == "calendario":
+        # R265 — o calendário que decide a data carimbada nos kanbans.
+        state = calendario.load_state()
+        ctx["cal_state"] = state
+        ctx["cal_labels"] = calendario.DIAS_SEMANA_LABELS
+        ctx["cal_default_dias"] = calendario.DEFAULT_CALENDARIO["dias_semana"]
+        ctx["cal_modo"] = get_settings().kanban_date_mode
+        hoje = dt.date.today()
+        anterior = calendario.dia_util_anterior(hoje, state["calendario"])
+        ctx["cal_preview"] = {
+            "hoje": hoje.strftime("%d-%m-%Y"),
+            "hoje_dia": calendario.DIAS_SEMANA_LABELS[hoje.weekday()],
+            "anterior": anterior.strftime("%d-%m-%Y"),
+            "anterior_dia": calendario.DIAS_SEMANA_LABELS[anterior.weekday()],
+        }
     ctx["active_tab"] = "admin"
     return templates.TemplateResponse(request, "admin.html", ctx)
+
+
+def _cal_save_or_redirect(cal: dict, expected_version: int, ok_msg: str) -> Response:
+    """Grava o calendário e traduz os erros para o flash da tab."""
+    try:
+        calendario.save_calendario(cal, expected_version)
+    except calendario.CalendarioVersionConflict:
+        return _admin_redirect(
+            "calendario", "err",
+            "o calendário foi alterado noutro separador — recarrega a página")
+    except ValueError as e:
+        return _admin_redirect("calendario", "err", str(e))
+    return _admin_redirect("calendario", "ok", ok_msg)
+
+
+@app.post("/admin/calendario/dias")
+def admin_calendario_dias(
+    expected_version: int = Form(...),
+    dia: Annotated[list[int], Form()] = [],  # noqa: B006 — FastAPI Form list
+) -> Response:
+    """R265 — dias da semana em que a fábrica trabalha (0=segunda … 6=domingo)."""
+    cal = dict(calendario.load_state()["calendario"])
+    cal["dias_semana"] = sorted(set(dia))
+    nomes = ", ".join(calendario.DIAS_SEMANA_LABELS[d] for d in cal["dias_semana"]) or "—"
+    return _cal_save_or_redirect(cal, expected_version, f"dias úteis: {nomes}")
+
+
+@app.post("/admin/calendario/excecao")
+def admin_calendario_add_excecao(
+    expected_version: int = Form(...),
+    tipo: str = Form(...),
+    data: str = Form(...),
+    nota: str = Form(""),
+) -> Response:
+    """R265 — acrescenta um feriado/paragem (`nao_uteis`) ou um dia trabalhado
+    fora do normal (`uteis_extra`)."""
+    if tipo not in ("nao_uteis", "uteis_extra"):
+        return _admin_redirect("calendario", "err", "tipo de exceção inválido")
+    cal = dict(calendario.load_state()["calendario"])
+    outro = "uteis_extra" if tipo == "nao_uteis" else "nao_uteis"
+    alvo = [e for e in cal.get(tipo) or [] if e["data"] != data.strip()]
+    alvo.append({"data": data.strip(), "nota": nota.strip()})
+    cal[tipo] = alvo
+    # Um dia não pode estar nas duas listas: a entrada nova ganha (senão o
+    # validate devolvia erro e obrigava a remover à mão primeiro).
+    cal[outro] = [e for e in cal.get(outro) or [] if e["data"] != data.strip()]
+    rotulo = "feriado/paragem" if tipo == "nao_uteis" else "dia trabalhado"
+    return _cal_save_or_redirect(cal, expected_version, f"{rotulo} {data} adicionado")
+
+
+@app.post("/admin/calendario/excecao/remover")
+def admin_calendario_del_excecao(
+    expected_version: int = Form(...),
+    tipo: str = Form(...),
+    data: str = Form(...),
+) -> Response:
+    if tipo not in ("nao_uteis", "uteis_extra"):
+        return _admin_redirect("calendario", "err", "tipo de exceção inválido")
+    cal = dict(calendario.load_state()["calendario"])
+    cal[tipo] = [e for e in cal.get(tipo) or [] if e["data"] != data.strip()]
+    return _cal_save_or_redirect(cal, expected_version, f"{data} removido")
+
+
+@app.post("/admin/calendario/repor")
+def admin_calendario_repor() -> Response:
+    """Repõe os defaults de fábrica (segunda a sábado, sem exceções)."""
+    calendario.revert_calendario("defaults")
+    return _admin_redirect("calendario", "ok", "calendário reposto (segunda a sábado)")
 
 
 def _kpi_last_production_day() -> str | None:

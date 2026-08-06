@@ -173,6 +173,19 @@ class Settings(BaseSettings):
         ),
     )
 
+    kanban_date_mode: str = Field(
+        default="dia_util_anterior",
+        description=(
+            "R265 — origem da data do kanban. 'dia_util_anterior' (default) = "
+            "o sistema IGNORA o campo Data manuscrito e carimba o dia útil "
+            "anterior ao dia do upload (captured_at), pelo calendário de "
+            "app.web.calendario (editável em /admin/calendario). 'ocr' = "
+            "comportamento anterior (vale o que o modelo leu na folha). "
+            "Qualquer outro valor = 'ocr'. Existe para reverter na fábrica "
+            "sem deploy: KANBAN_DATE_MODE=ocr + restart."
+        ),
+    )
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

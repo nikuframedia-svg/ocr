@@ -21,6 +21,8 @@
        style="text-decoration:none;" href="/admin/unidades">Unidades</a>
     <a class="tab {% if admin_tab == 'kpis' %}active{% endif %}"
        style="text-decoration:none;" href="/admin/kpis">KPIs</a>
+    <a class="tab {% if admin_tab == 'calendario' %}active{% endif %}"
+       style="text-decoration:none;" href="/admin/calendario">Calendário</a>
   </div>
 
   {% if admin_tab == 'referencias' %}
@@ -31,6 +33,8 @@
     {% include "_admin_unidades.html" %}
   {% elif admin_tab == 'kpis' %}
     {% include "_admin_kpis.html" %}
+  {% elif admin_tab == 'calendario' %}
+    {% include "_admin_calendario.html" %}
   {% endif %}
 
 </div>

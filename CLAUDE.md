@@ -53,7 +53,7 @@ fine-tune por operador · 7 LiLT (opcional). Hoje: Fase 0.5 + R104-R106
 (refs uploads + fine-tuning scaffolding R105).
 
 ## Administração (Task C — unidades, registo de kanbans, KPIs)
-- `/admin` com separadores Referências | Kanbans | Unidades | KPIs;
+- `/admin` com separadores Referências | Kanbans | Unidades | KPIs | Calendário;
   o corpo do `/refs` vive em `_refs_content.html` (URL /refs mantém-se)
 - **Unidades fabris**: tabela `unidades` (seed 'Trofa' = sede);
   `sheets.unidade_id` NULL = Trofa; filtro por unidade em /queue e /kanbans
@@ -72,6 +72,20 @@ fine-tune por operador · 7 LiLT (opcional). Hoje: Fase 0.5 + R104-R106
   todos os dados runtime); defaults em código (`kpi_params.DEFAULT_KPIS`)
   byte-idênticos às fórmulas históricas; avaliador `kpi_expr.py` é um
   walker AST com whitelist — NUNCA trocar por eval
+- **Calendário / data dos kanbans (R265)**: a data NÃO vem do campo `Data`
+  manuscrito. Cada folha processada é carimbada com o **dia útil anterior ao
+  dia do upload** (`captured_at` convertido para hora local — âncora estável:
+  reprocessar não muda a data). Carimbo em `main._stamp_dia_util_anterior`,
+  antes do `update_extraction`; a leitura do OCR fica no `raw_extraction` e
+  numa linha de `edits` com `source='dia_util_anterior'` (fora de
+  `AUTHORITATIVE_EDIT_SOURCES` — documenta, não protege). Uma correção humana
+  de `header.data` é autoritativa e o reprocesso não a reverte.
+  Regra em `web/calendario.py`: dias úteis = **segunda a sábado** por defeito
+  (a fábrica trabalha sábado de manhã), com `nao_uteis` (feriados, pontes e
+  sábados não trabalhados) e `uteis_extra` (domingo/feriado trabalhado);
+  editável em `/admin/calendario`, ficheiro `data/calendario_util.json`
+  (gitignored). Recuo dia-a-dia com cap de 14 (config degenerada nunca dá loop
+  no worker). Reverter na fábrica sem deploy: `KANBAN_DATE_MODE=ocr`.
 - `ADMIN_TOKEN` (env, opcional): protege /admin* e /refs*; sem env → aberto
   como sempre
 

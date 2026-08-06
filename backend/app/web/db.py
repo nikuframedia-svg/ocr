@@ -623,6 +623,71 @@ def set_page_hint(sheet_id: int, side: str, *, locked: bool = False) -> None:
             c.execute("UPDATE sheets SET page_hint = ? WHERE id = ?", (s, sheet_id))
 
 
+def captured_local_date(sheet_id: int) -> _dt.date | None:
+    """R265 — dia (LOCAL) em que a foto entrou no sistema.
+
+    `sheets.captured_at` é `CURRENT_TIMESTAMP`, ou seja **UTC**, enquanto todo
+    o resto do sistema compara com `DATE('now','localtime')`. Sem a conversão,
+    um upload às 23h30 no verão (WEST = UTC+1) contaria como sendo do dia
+    seguinte — e o carimbo do dia útil anterior saltaria um dia. Deixamos a
+    conversão ao SQLite, que é quem conhece o fuso do processo.
+    """
+    with conn() as c:
+        row = c.execute(
+            "SELECT DATE(captured_at, 'localtime') AS d FROM sheets WHERE id = ?",
+            (sheet_id,),
+        ).fetchone()
+    if row is None or not row["d"]:
+        return None
+    try:
+        return _dt.date.fromisoformat(str(row["d"]))
+    except ValueError:
+        return None
+
+
+def record_auto_edit(
+    sheet_id: int,
+    field_path: str,
+    old_value: str,
+    new_value: str,
+    *,
+    source: str,
+    actor: str = "system",
+    reason: str | None = None,
+) -> int:
+    """Regista no audit trail (EN 1090) uma escrita AUTOMÁTICA numa célula.
+
+    `source` tem de ficar FORA de AUTHORITATIVE_EDIT_SOURCES: estas linhas
+    documentam o que o sistema escreveu, não uma decisão do operador, e não
+    podem passar a proteger a célula contra o auto-overwrite do cross-check.
+    Só regista — quem chama já escreveu o valor no sheet_data.
+    """
+    if source in AUTHORITATIVE_EDIT_SOURCES:
+        raise ValueError(
+            f"source {source!r} é autoritativa — record_auto_edit só regista "
+            "escritas automáticas")
+    with conn() as c:
+        cur = c.execute(
+            "INSERT INTO edits "
+            "(sheet_id, field_path, old_value, new_value, source, actor, reason) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (sheet_id, field_path, old_value, new_value, source,
+             (actor or "system")[:200],
+             (reason.strip()[:500] or None) if reason else None),
+        )
+        return int(cur.lastrowid or 0)
+
+
+def has_edit_source(sheet_id: int, source: str) -> bool:
+    """True se a folha já tem alguma edição registada com este `source`."""
+    with conn() as c:
+        row = c.execute(
+            "SELECT 1 FROM edits WHERE sheet_id = ? AND source = ? LIMIT 1",
+            (sheet_id, source),
+        ).fetchone()
+    return row is not None
+
+
 def update_extraction(
     sheet_id: int,
     raw_extraction: dict,

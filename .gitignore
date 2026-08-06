@@ -126,6 +126,8 @@ data/images/
 data/events.jsonl
 data/kernel_state.json
 data/kpi_params.json
+# R265 — calendário de dias úteis (a app reescreve pelo /admin/calendario)
+data/calendario_util.json
 # R253 — proveniência do plano por content-hash (a app reescreve em runtime)
 data/plan_provenance.json
 kanban_refs/03_Cross_Check/
