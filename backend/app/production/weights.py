@@ -214,11 +214,33 @@ def _resolve_npecas(
     ltopo: float | None,
     comp: float | None,
 ) -> int | None:
-    if plan_entry is not None and "npecas" in plan_entry:
+    # R266 — a plan entry always carries the "npecas" key (ref_watcher), but
+    # a large share of plan rows have it blank/0; those must still fall back
+    # to the legacy geometric formula instead of blanking consumption KPIs.
+    if plan_entry is not None:
         n = _to_int(plan_entry.get("npecas"))
-        return n if n and n > 0 else None
+        if n and n > 0:
+            return n
     n = calc_npecas(larg, lbase, ltopo, comp, comp)
     return n if n > 0 else None
+
+
+def _sap_entry_for_row(row: dict, refs: dict | None) -> dict | None:
+    """StockSAP entry for the row's lote, resolved like the R261 banner.
+
+    R266 — the raw dict lookup previously used here missed lotes written with
+    the H↔M OCR confusion, so sibling rows of the same physical bobine could
+    export with and without consumption KPIs. Delegates to the banner's
+    resolver (exact/alias match or divergence-guarded H→M correction).
+    """
+    if not refs or not refs.get("lotes_sap_full"):
+        return None
+    # Local import: keeps this light module importable without pulling the
+    # whole cross engine at import time (and safe against future cycles).
+    from app.pipeline.scoring_engine import _sap_entry_for_measures
+
+    _, entry = _sap_entry_for_measures(refs, row)
+    return entry
 
 
 def calculate_row_weights(row: dict, refs: dict | None = None) -> RowWeightMetrics:
@@ -226,8 +248,7 @@ def calculate_row_weights(row: dict, refs: dict | None = None) -> RowWeightMetri
     qtd = _to_float(row.get("qtd"))
     plan_entry = find_plan_entry(row, refs)
     direct = is_direct_consumption_row(row)
-    lote = str(row.get("lote") or "").strip().upper()
-    sap_entry = ((refs or {}).get("lotes_sap_full") or {}).get(lote) if lote else None
+    sap_entry = _sap_entry_for_row(row, refs)
 
     comp = _first_positive(
         plan_entry.get("comp") if plan_entry else None,
