@@ -182,6 +182,40 @@ def submit_scans(files: list[Path], app_url: str, state: dict,
     return novos, repetidos
 
 
+def mirror_tree(staging: Path, mirror: Path, dry_run: bool) -> int:
+    """Espelha a pasta do Drive (com subpastas) para um diretório estável —
+    é daí que as apps kanban do PC ingerem (MES_DRIVE_DIR nas subpastas do
+    setor). Só copia o que mudou (sha256); nunca apaga do espelho."""
+    copiados = 0
+    for src in sorted(p for p in staging.rglob("*") if p.is_file()):
+        rel = src.relative_to(staging)
+        dst = mirror / rel
+        if dst.exists() and sha256_file(dst) == sha256_file(src):
+            continue
+        if dry_run:
+            log(f"[dry-run] espelho {rel}")
+        else:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+            log(f"espelhado: {rel}")
+        copiados += 1
+    return copiados
+
+
+def notify(urls: list[str], dry_run: bool) -> None:
+    """Avisa as apps kanban para ingerirem do espelho. Elas deduplicam por
+    sha (PDF e página), por isso avisar a mais nunca duplica folhas."""
+    for url in urls:
+        if dry_run:
+            log(f"[dry-run] POST {url}")
+            continue
+        try:
+            resp = httpx.post(url, timeout=120.0)
+            log(f"notificado {url}: {resp.status_code} {resp.text[:120]}")
+        except httpx.HTTPError as exc:
+            log(f"AVISO: notificação {url} falhou (app em baixo?): {exc}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dry-run", action="store_true",
@@ -191,7 +225,18 @@ def main() -> int:
     ap.add_argument("--app-url",
                     default=os.environ.get("DRIVE_PULL_APP_URL",
                                            "http://127.0.0.1:8080"))
+    ap.add_argument("--mirror-to",
+                    default=os.environ.get("DRIVE_PULL_MIRROR_TO", ""),
+                    help="espelhar a pasta do Drive para este diretório "
+                         "(para as apps kanban do PC ingerirem)")
+    ap.add_argument("--notify", action="append", metavar="URL", default=None,
+                    help="POST depois do espelho (repetível) — ex. "
+                         "http://127.0.0.1:8100/ingest/drive")
     args = ap.parse_args()
+    notify_urls = args.notify if args.notify is not None else [
+        u.strip() for u in os.environ.get("DRIVE_PULL_NOTIFY", "").split(";")
+        if u.strip()
+    ]
 
     log(f"drive_pull início (dry_run={args.dry_run})")
     try:
@@ -205,8 +250,12 @@ def main() -> int:
     refs = place_refs(files, refs_import_dir(), args.dry_run)
     novos, repetidos = submit_scans(files, args.app_url.rstrip("/"), state,
                                     args.dry_run)
+    espelhados = 0
+    if args.mirror_to:
+        espelhados = mirror_tree(_STAGING, Path(args.mirror_to), args.dry_run)
+        notify(notify_urls, args.dry_run)
     log(f"drive_pull fim: {refs} ref(s), {novos} PDF(s) novo(s), "
-        f"{repetidos} já submetido(s)")
+        f"{repetidos} já submetido(s), {espelhados} espelhado(s)")
     return 0
 
 
