@@ -182,6 +182,67 @@ def submit_scans(files: list[Path], app_url: str, state: dict,
     return novos, repetidos
 
 
+def fetch_exports(specs: list[str], saida: Path, dry_run: bool) -> list[Path]:
+    """GET aos exports das apps kanban (specs «nome=url») → SAIDA local.
+    As apps geram o BaseDados na hora; se uma estiver em baixo, log e segue."""
+    fetched: list[Path] = []
+    for spec in specs:
+        if "=" not in spec:
+            continue
+        name, url = spec.split("=", 1)
+        dest = saida / f"{name.strip()}.xlsx"
+        if dry_run:
+            log(f"[dry-run] GET {url.strip()} -> {dest.name}")
+            continue
+        try:
+            resp = httpx.get(url.strip(), timeout=120.0)
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            log(f"AVISO: export {name.strip()} falhou (app em baixo?): {exc}")
+            continue
+        saida.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(resp.content)
+        fetched.append(dest)
+        log(f"export gerado: {dest.name} ({len(resp.content)} bytes)")
+    return fetched
+
+
+def push_outputs(remote: str, paths: list[Path], rclone: str,
+                 dry_run: bool) -> int:
+    """Sobe ficheiros/pastas para a pasta SAIDA/ do Drive via rclone
+    (config feita uma vez no PC com `rclone config` — login Google).
+    Ficheiro → copyto (nome preservado); diretório → copy (recursivo).
+    Falhas: log e continua — a corrida seguinte volta a tentar."""
+    import subprocess
+
+    subidos = 0
+    for path in paths:
+        if not path.exists():
+            continue
+        if path.is_dir():
+            cmd = [rclone, "copy", str(path), remote, "--transfers", "2"]
+        else:
+            cmd = [rclone, "copyto", str(path), f"{remote}/{path.name}",
+                   "--transfers", "2"]
+        if dry_run:
+            log(f"[dry-run] {' '.join(cmd)}")
+            subidos += 1
+            continue
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True,
+                                    timeout=600)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            log(f"AVISO: rclone falhou para {path.name}: {exc}")
+            continue
+        if result.returncode != 0:
+            log(f"AVISO: rclone devolveu {result.returncode} para "
+                f"{path.name}: {result.stderr.strip()[:200]}")
+            continue
+        log(f"subido ao Drive: {path.name}")
+        subidos += 1
+    return subidos
+
+
 def mirror_tree(staging: Path, mirror: Path, dry_run: bool) -> int:
     """Espelha a pasta do Drive (com subpastas) para um diretório estável —
     é daí que as apps kanban do PC ingerem (MES_DRIVE_DIR nas subpastas do
@@ -232,11 +293,23 @@ def main() -> int:
     ap.add_argument("--notify", action="append", metavar="URL", default=None,
                     help="POST depois do espelho (repetível) — ex. "
                          "http://127.0.0.1:8100/ingest/drive")
+    ap.add_argument("--push-remote",
+                    default=os.environ.get("DRIVE_PULL_PUSH_REMOTE", ""),
+                    help="destino rclone da pasta SAIDA no Drive (ex. "
+                         "«gdrive:MTG | Kanban Digital/SAIDA»); vazio = sem subida")
+    ap.add_argument("--rclone",
+                    default=os.environ.get("DRIVE_PULL_RCLONE", "rclone"))
     args = ap.parse_args()
     notify_urls = args.notify if args.notify is not None else [
         u.strip() for u in os.environ.get("DRIVE_PULL_NOTIFY", "").split(";")
         if u.strip()
     ]
+    push_files = [Path(p.strip()) for p in
+                  os.environ.get("DRIVE_PULL_PUSH_FILES", "").split(";")
+                  if p.strip()]
+    export_specs = [s.strip() for s in
+                    os.environ.get("DRIVE_PULL_EXPORT_FETCH", "").split(";")
+                    if s.strip()]
 
     log(f"drive_pull início (dry_run={args.dry_run})")
     try:
@@ -254,8 +327,19 @@ def main() -> int:
     if args.mirror_to:
         espelhados = mirror_tree(_STAGING, Path(args.mirror_to), args.dry_run)
         notify(notify_urls, args.dry_run)
+
+    # Perna de subida: exports das apps + ficheiros locais → SAIDA/ do Drive.
+    # É por aqui que o Kanbans_Producao_NOVO.xlsx (e os BaseDados dos kanban)
+    # chegam ao ciclo diário do servidor e entram no Postgres.
+    subidos = 0
+    if args.push_remote:
+        saida_local = _REPO / "data" / "_saida_staging"
+        fetched = fetch_exports(export_specs, saida_local, args.dry_run)
+        subidos = push_outputs(args.push_remote.strip(),
+                               fetched + push_files, args.rclone, args.dry_run)
     log(f"drive_pull fim: {refs} ref(s), {novos} PDF(s) novo(s), "
-        f"{repetidos} já submetido(s), {espelhados} espelhado(s)")
+        f"{repetidos} já submetido(s), {espelhados} espelhado(s), "
+        f"{subidos} subido(s) à SAIDA")
     return 0
 
 
