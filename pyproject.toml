@@ -59,6 +59,12 @@ dev = [
     "mypy>=1.10",
     "types-Pillow",
 ]
+# Poller do Google Drive (scripts/drive_pull.py): traz scans e refs da pasta
+# partilhada sem uploads manuais. Extra opcional — o runtime da app não
+# depende disto.
+drive = [
+    "gdown>=5.1",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["backend/app"]
