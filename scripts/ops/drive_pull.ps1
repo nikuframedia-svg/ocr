@@ -1,6 +1,7 @@
-# Poller do Google Drive (scans + refs) — corre via tarefa agendada do
-# Windows (ver register_drive_pull.ps1). Carrega o .env (mesmo padrão do
+# Poller do Google Drive (scans + refs) - corre via tarefa agendada do
+# Windows (ver register_drive_pull.ps1). Carrega o .env (mesmo padrao do
 # start.ps1) e corre scripts/drive_pull.py no venv do repo.
+# R227/R268: ASCII PURO neste ficheiro (PS5.1 le UTF-8 como ANSI).
 $ErrorActionPreference = "Stop"
 
 $root = (Resolve-Path "$PSScriptRoot\..\..").Path
