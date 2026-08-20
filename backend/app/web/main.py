@@ -39,7 +39,7 @@ sys.path.insert(0, str(_REPO / "backend"))
 
 from app import kernel
 from app.config import get_settings
-from app.web import attractors, calendario, db, export, kpi_params, kpis, llm_assistant, ocr_queue, ocr_runner, pdf_ingest, template_store
+from app.web import attractors, calendario, db, db_backup, export, kpi_params, kpis, llm_assistant, ocr_queue, ocr_runner, pdf_ingest, template_store
 from app.cross_check import (
     cross_check_sheet,
     get_watcher,
@@ -413,6 +413,16 @@ def _startup() -> None:
             )
     except Exception as e:
         print(f"[refs-import startup] {e}", file=sys.stderr)
+    try:
+        if db_backup.start_background_backup():
+            st = db_backup.status()
+            print(
+                "[db-backup] copy -> "
+                f"{st.get('dest_dir')} every {st.get('interval_seconds')}s",
+                file=sys.stderr,
+            )
+    except Exception as e:
+        print(f"[db-backup startup] {e}", file=sys.stderr)
 
 
 _MOBILE_UA_PATTERNS = ("mobile", "iphone", "android", "ipad", "ipod")
@@ -2676,6 +2686,7 @@ def admin_refs_status() -> JSONResponse:
     return JSONResponse({
         "refs": get_watcher().status(),
         "refs_importer": ref_importer.status(),
+        "db_backup": db_backup.status(),
         "summary": load_summary(),
     })
 
@@ -2684,6 +2695,13 @@ def admin_refs_status() -> JSONResponse:
 def admin_import_refs() -> JSONResponse:
     """Manually import refs from the configured shared folder."""
     result = ref_importer.import_refs_from_config()
+    return JSONResponse(result, status_code=200 if result.get("ok") else 400)
+
+
+@app.post("/admin/db-backup")
+def admin_db_backup() -> JSONResponse:
+    """Snapshot manual da app.db para a pasta Drive (update.ps1 pré-deploy)."""
+    result = db_backup.run_backup_once(force=True)
     return JSONResponse(result, status_code=200 if result.get("ok") else 400)
 
 

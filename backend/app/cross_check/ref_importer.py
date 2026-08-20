@@ -208,6 +208,10 @@ def inspect_refs_xlsx(path: Path, kind: str) -> tuple[str | None, dict[str, Any]
             info["n_ofs"] = len(ofs)
             info["n_ovs"] = len(ovs)
             info["n_plan_rows"] = info["n_rows"]
+            # R267 — feeds the stale-plan guard in import_refs_from_dir.
+            info["max_of"] = max(
+                (int(o) for o in ofs if o.isdigit()), default=0
+            )
             if info["n_rows"] <= 0:
                 return "sem linhas de plano — ficheiro vazio", info
             if info["n_ofs"] <= 0:
@@ -380,6 +384,35 @@ def _target_for_kind(watcher: RefWatcher, kind: str) -> Path:
     return Path(getattr(watcher, REF_KINDS[kind]["watcher_attr"]))
 
 
+def _plan_regression_reason(cand: RefCandidate, watcher: RefWatcher) -> str | None:
+    """R267 — guard contra plano STALE na pasta partilhada (Drive).
+
+    Um export SAP mais novo pode ter MENOS linhas (ordens concluídas saem do
+    plano), mas nunca um max OF inferior ao ativo — as OFs são 6 dígitos
+    crescentes. Contagens dariam falsos positivos; o max OF só dispara em
+    ficheiros genuinamente antigos. Só bloqueia o caminho automático; o
+    upload manual em /refs continua livre (rollback deliberado).
+
+    Fail-open: sem refs ativos, sem OFs no ativo ou sem max_of no candidato
+    ⇒ passa (o guard nunca pode brickar o importador).
+    """
+    cand_max = cand.info.get("max_of")
+    if not isinstance(cand_max, int) or cand_max <= 0:
+        return None
+    try:
+        active_ofs = watcher.get_refs().get("ofs_plan_str") or frozenset()
+    except Exception:
+        return None
+    active_max = max((int(o) for o in active_ofs if str(o).isdigit()), default=0)
+    if active_max <= 0 or cand_max >= active_max:
+        return None
+    return (
+        f"plano mais antigo que o ativo (max OF {cand_max} < {active_max}) — "
+        "para reverter de propósito usa o upload manual em /refs e remove "
+        "este ficheiro da pasta partilhada"
+    )
+
+
 def _copy_into_target(cand: RefCandidate, target: Path) -> _ImportedRef:
     target.parent.mkdir(parents=True, exist_ok=True)
     token = f"{os.getpid()}-{time.time_ns()}"
@@ -550,7 +583,10 @@ def import_refs_from_dir(
             RefCandidate(
                 kind=c["kind"],
                 path=Path(c["file"]),
-                info={k: v for k, v in c.items() if k.startswith("n_") or k == "size"},
+                info={
+                    k: v for k, v in c.items()
+                    if k.startswith("n_") or k in ("size", "max_of")
+                },
                 sha256=c["sha256"],
                 mtime=float(c["mtime"]),
                 size=int(c["size"]),
@@ -574,6 +610,19 @@ def import_refs_from_dir(
                     "sha256": cand.sha256,
                 })
                 continue
+            if kind == "plan":
+                reason = _plan_regression_reason(cand, watcher)
+                if reason:
+                    skipped.append({
+                        "kind": kind,
+                        "file": str(cand.path),
+                        "filename": cand.path.name,
+                        "target": str(target),
+                        "reason": reason,
+                        "guard": "plan_recency",
+                        "sha256": cand.sha256,
+                    })
+                    continue
             to_import.append((cand, target))
 
         imported: list[_ImportedRef] = []

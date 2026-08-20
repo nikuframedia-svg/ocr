@@ -110,6 +110,9 @@ build/
 # A migração inicial PC↔Portátil já foi feita; manter tracked causava
 # conflitos no `git pull` (R121 update.ps1).
 data/app.db
+# R268 — sidecars WAL do SQLite (aparecem quando a app corre localmente)
+data/app.db-wal
+data/app.db-shm
 data/cross_sheet.json
 lexicons/sap_plan_mined.json
 lexicons/learned_overlay.json

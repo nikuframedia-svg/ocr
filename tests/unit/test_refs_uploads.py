@@ -356,6 +356,72 @@ def test_ref_importer_starts_for_windows_absolute_source_even_if_missing(monkeyp
     assert status["last_error"] == "pasta de importação não existe"
 
 
+def test_inspect_plan_reports_max_of(tmp_path):
+    plan = tmp_path / "plan.xlsx"
+    _write_plan(plan, [
+        ["A", "2603977", "263348", "CAC4E10B", 1, 0, 0, 0, 0, 0, 0, 0, 4, 659, 242, 11050],
+        ["B", "2512130", "260108", "CFH2F07RI", 9, 0, 0, 0, 0, 0, 0, 0, 4, 659, 242, 11050],
+        ["C", "2512131", "ABC999", "SEMNUMERO", 1, 0, 0, 0, 0, 0, 0, 0, 4, 659, 242, 11050],
+    ])
+
+    err, info = ref_importer.inspect_refs_xlsx(plan, "plan")
+
+    assert err is None
+    assert info["max_of"] == 263348
+
+
+def test_ref_importer_plan_recency_guard_blocks_stale_plan(tmp_path, log_path):
+    doc_dir = tmp_path / "docs"
+    source_dir = tmp_path / "source"
+    doc_dir.mkdir()
+    source_dir.mkdir()
+    active_plan = doc_dir / "plan_colunas_cpis.xlsx"
+    _write_plan(active_plan, [
+        ["A", "2603977", "263348", "CAC4E10B", 1, 0, 0, 0, 0, 0, 0, 0, 4, 659, 242, 11050],
+    ])
+    _write_plan(source_dir / "plan_antigo.xlsx", [
+        ["B", "2512130", "260108", "CFH2F07RI", 9, 0, 0, 0, 0, 0, 0, 0, 4, 659, 242, 11050],
+    ])
+    watcher = ref_watcher.RefWatcher(doc_dir=doc_dir, repo_root=tmp_path)
+    before_sha = ref_watcher.file_sha256(active_plan)
+
+    result = ref_importer.import_refs_from_dir(source_dir, watcher=watcher)
+
+    assert result["ok"] is True
+    assert result["imported"] == []
+    guard_skips = [s for s in result["skipped"] if s.get("guard") == "plan_recency"]
+    assert len(guard_skips) == 1
+    assert "260108" in guard_skips[0]["reason"]
+    assert "263348" in guard_skips[0]["reason"]
+    assert ref_watcher.file_sha256(active_plan) == before_sha
+
+
+def test_ref_importer_plan_recency_guard_allows_equal_and_newer(tmp_path, log_path):
+    doc_dir = tmp_path / "docs"
+    source_dir = tmp_path / "source"
+    doc_dir.mkdir()
+    source_dir.mkdir()
+    _write_plan(doc_dir / "plan_colunas_cpis.xlsx", [
+        ["A", "2603977", "263348", "CAC4E10B", 1, 0, 0, 0, 0, 0, 0, 0, 4, 659, 242, 11050],
+    ])
+    # Same max OF, extra row (intra-day edit) — must import.
+    _write_plan(source_dir / "plan_igual.xlsx", [
+        ["A", "2603977", "263348", "CAC4E10B", 1, 0, 0, 0, 0, 0, 0, 0, 4, 659, 242, 11050],
+        ["B", "2512130", "260108", "CFH2F07RI", 9, 0, 0, 0, 0, 0, 0, 0, 4, 659, 242, 11050],
+    ])
+    watcher = ref_watcher.RefWatcher(doc_dir=doc_dir, repo_root=tmp_path)
+
+    result = ref_importer.import_refs_from_dir(source_dir, watcher=watcher)
+    assert [i["kind"] for i in result["imported"]] == ["plan"]
+
+    # Higher max OF — must import.
+    _write_plan(source_dir / "plan_igual.xlsx", [
+        ["C", "2605000", "265000", "NOVO", 1, 0, 0, 0, 0, 0, 0, 0, 4, 659, 242, 11050],
+    ])
+    result = ref_importer.import_refs_from_dir(source_dir, watcher=watcher)
+    assert [i["kind"] for i in result["imported"]] == ["plan"]
+
+
 def test_plan_inspection_rejects_missing_required_columns(tmp_path):
     bad = tmp_path / "bad_plan.xlsx"
     wb = Workbook()

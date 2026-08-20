@@ -418,6 +418,60 @@ def conn_at(path: Path | str) -> Iterator[sqlite3.Connection]:
         c.close()
 
 
+def backup_to(dest: Path | str) -> dict[str, Any]:
+    """Online snapshot of the live DB into ``dest`` — a standalone file with
+    no ``-wal``/``-shm`` sidecars (a raw file copy of a WAL database would be
+    torn). Uses the sqlite3 backup API, which is consistent under WAL with
+    concurrent writers.
+
+    Writes to a tmp file in the SAME directory before ``os.replace``: the
+    destination may live on another volume (e.g. a Drive-synced ``G:\\``
+    folder) where a cross-volume replace would fail. The final replace is
+    retried on ``PermissionError`` (Drive client / Excel holding a handle),
+    mirroring ``ref_importer._copy_into_target``.
+    """
+    import os
+    import time
+
+    dest = Path(dest)
+    started = time.monotonic()
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return {"ok": False, "error": f"pasta de destino indisponível: {e}"}
+    tmp = dest.with_name(f"{dest.name}.tmp-{os.getpid()}-{time.time_ns()}")
+    try:
+        src = sqlite3.connect(_DB_PATH, timeout=10.0)
+        try:
+            dst = sqlite3.connect(tmp)
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+        finally:
+            src.close()
+        last_exc: PermissionError | None = None
+        for _ in range(5):
+            try:
+                os.replace(tmp, dest)
+                last_exc = None
+                break
+            except PermissionError as e:
+                last_exc = e
+                time.sleep(0.5)
+        if last_exc is not None:
+            raise last_exc
+    except Exception as e:
+        tmp.unlink(missing_ok=True)
+        return {"ok": False, "error": str(e)}
+    return {
+        "ok": True,
+        "dest": str(dest),
+        "size": dest.stat().st_size,
+        "duration_ms": int((time.monotonic() - started) * 1000),
+    }
+
+
 def init_db() -> None:
     with conn() as c:
         # WAL mode: writers don't block readers (H1). Persists across

@@ -45,6 +45,42 @@ Audit trail do agente Qwen em `backend/app/pipeline/qwen_agent.py` +
 - `docs/MIGRATION.md` — runbook PC→Portátil (R105)
 - `prompts/ocr6_v3.txt` — prompt canónico
 
+## Portal & ingestão Drive (R268)
+- **Portal único** https://ocr.nikufra.ai com 3 sistemas: este + 2 kanban MES
+  (repo SEPARADO, correm no mesmo PC da fábrica em 127.0.0.1:8100/8101 —
+  **não tocar a partir deste repo**). Este sistema é servido em
+  https://mtg2.nikufra.ai via **túnel SSH invertido** para nikufra-dev-01;
+  a ponte corre como tarefa Windows «OCR PC Bridge» (fora do repo, em
+  `C:\OCR-Suite\kit`). **A app TEM de ficar em 127.0.0.1:8080** — é essa a
+  porta que a ponte expõe. O cloudflared/QR do start.ps1 ficou redundante:
+  não remover ainda, mas não investir mais nele.
+- **Ingestão Drive** (`feature/drive-pull`): `scripts/drive_pull.py` +
+  wrappers em `scripts/ops/`. Poller 2×/dia descarrega a pasta partilhada
+  do Google Drive e (a) pousa os refs (StockSAP, plan_colunas_cpis,
+  ListaColaboradores, maquinas) no `KANBAN_REFS_IMPORT_DIR` — instala-os o
+  `ref_importer` nativo, logo o guard `plan_recency` (R267) aplica-se;
+  (b) submete os PDFs da subpasta **«Kanban's MTG2»** ao `POST /upload`.
+  **INVARIANTE: o /upload NÃO deduplica folhas — a idempotência vive no
+  poller (`data/drive_pull_state.json`, sha256 por PDF). Ao mexer no upload
+  OU no poller, preservar isto.**
+- **Layout da pasta Drive**: scans em subpastas por setor («Kanban's MTG2»
+  é a nossa); os nomes de PDF REPETEM-SE entre setores — nunca assumir nome
+  único. O upload manual de refs em /refs continua a funcionar, mas a via
+  normal é o Drive.
+- **Instalação na fábrica** (uma vez): merge da branch, `pip install -e
+  .[drive]`, no .env `DRIVE_PULL_MIRROR_TO=C:\OCR-Suite\drive` (espelho de
+  ENTRADA) e `DRIVE_PULL_NOTIFY=http://127.0.0.1:8100/ingest/drive;http://127.0.0.1:8101/ingest/drive`,
+  e correr `scripts\ops\register_drive_pull.ps1`. O espelho/notify alimenta
+  os dois kanban MES.
+- **Backup app.db (R267)**: `KANBAN_DB_BACKUP_DIR=C:\OCR-Suite\saida` —
+  pasta de SAÍDA dedicada (não misturar com `C:\OCR-Suite\drive`, que é a
+  ENTRADA do drive_pull). A subida ao Drive da pasta de saída é do
+  drive_pull (PUSH_FILES).
+- **Transporte Ollama duplicado**: as lições do `ocr6.py` (sem json mode,
+  múltiplos de 28, `/no_think` reforçado, salvage de JSON truncado) foram
+  replicadas nos kanban MES — um bug encontrado nessa zona vive em DOIS
+  sítios: corrigir aqui e avisar o user para portar ao outro repo.
+
 ## Roadmap (8 fases — briefing original)
 0 baseline · 0.5 pré-processamento OpenCV (default OFF — regrediu em VLMs) ·
 1 PWA captura · 2 ingestor Dossiers de Fabrico (PostgreSQL) · 3 crops +

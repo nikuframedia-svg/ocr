@@ -44,6 +44,25 @@ foreach ($f in $protect) {
   }
 }
 
+# --- Snapshot pre-deploy da app.db (R267; best-effort, nunca aborta) ------
+# Pede ao servidor AINDA ANTIGO um backup da app.db para a pasta Drive antes
+# de trocar de codigo - se o deploy correr mal, ha uma copia de ha segundos.
+# Servidor parado ou backup desligado (sem KANBAN_DB_BACKUP_DIR) -> segue.
+try {
+  $tok = ""
+  if (Test-Path "$root\.env") {
+    $m = Select-String -Path "$root\.env" -Pattern '^\s*ADMIN_TOKEN\s*=\s*(.+)$' | Select-Object -First 1
+    if ($m) { $tok = $m.Matches[0].Groups[1].Value.Trim().Trim('"').Trim("'") }
+  }
+  $hdr = @{}
+  if ($tok) { $hdr["X-Admin-Token"] = $tok }
+  Invoke-WebRequest -Uri "http://127.0.0.1:8080/admin/db-backup" -Method POST `
+    -Headers $hdr -TimeoutSec 30 -UseBasicParsing -ErrorAction Stop | Out-Null
+  Write-Host "  snapshot da app.db para o Drive: OK"
+} catch {
+  Write-Host "  (snapshot pre-deploy nao feito - servidor parado ou backup desligado; segue)"
+}
+
 # --- Buscar o codigo novo -------------------------------------------------
 # --ff-only: se por algum motivo nao for um avanco simples, para com erro
 # em vez de criar um merge confuso. Nesse caso copia o ecra e mostra ao Claude.
