@@ -35,6 +35,11 @@ def main() -> int:
         action="store_true",
         help="inclui todas as maquinas (default: so linhas direct-consumption)",
     )
+    ap.add_argument(
+        "--all-status",
+        action="store_true",
+        help="inclui folhas nao validadas (default: so status='validated')",
+    )
     args = ap.parse_args()
 
     from app.cross_check import get_watcher
@@ -50,17 +55,22 @@ def main() -> int:
     refs = get_watcher().get_refs()
     con = sqlite3.connect(args.db)
     con.row_factory = sqlite3.Row
+    # R269 — --all-status: a folha em analise pode ainda nao estar validada
+    # (ex.: folha 5226 em revisao); sem o filtro o diag dizia "sem rows".
+    status_filter = "" if args.all_status else "AND s.status = 'validated'"
     rows = con.execute(
-        """
-        SELECT pr.*, json_extract(s.sheet_data, '$.header.setor_maquina') AS setor_maquina
+        f"""
+        SELECT pr.*, s.status AS _status,
+               json_extract(s.sheet_data, '$.header.setor_maquina') AS setor_maquina
         FROM production_rows pr JOIN sheets s ON s.id = pr.sheet_id
-        WHERE pr.sheet_iso_date = ? AND s.status = 'validated'
+        WHERE pr.sheet_iso_date = ? {status_filter}
         ORDER BY pr.operador, pr.sheet_id, pr.row_index
         """,
         (args.date,),
     ).fetchall()
     if not rows:
-        print(f"sem production_rows validadas para {args.date} em {args.db}")
+        print(f"sem production_rows para {args.date} em {args.db}"
+              + ("" if args.all_status else " (so validadas; tenta --all-status)"))
         return 1
 
     n_shown = n_blank = 0
@@ -87,16 +97,22 @@ def main() -> int:
             npecas,
         )
         blank = out.n_chapas is None
-        n_blank += 1 if blank else 0
-        tag = "VAZIO" if blank else "ok   "
+        # R269 — caso "H1": consumo calculado mas desperdicio vazio porque o
+        # peso PRODUZIDO nao se derivou (lbase/ltopo/esp em falta e sem
+        # pesounit do plano). O check antigo (so n_chapas) nao o via.
+        no_waste = not blank and out.desperdicio_kg is None
+        n_blank += 1 if (blank or no_waste) else 0
+        tag = "VAZIO" if blank else ("S/DESP" if no_waste else "ok    ")
         plan_np = plan_entry.get("npecas") if plan_entry else "(sem plano)"
         print(
             f"[{tag}] sheet={row['sheet_id']} row={row['row_index']} "
             f"op={row['operador']} of={row['of']} modelo={str(row['modelo'])[:20]!r}"
+            + (f" status={row['_status']}" if args.all_status else "")
         )
         print(
             f"        plano: match={'sim' if plan_entry else 'NAO'} npecas={plan_np} | "
-            f"lote: '{row.get('lote') or ''}' -> {canonical or '-'} ({lote_kind})"
+            f"lote: '{row.get('lote') or ''}' -> {canonical or '-'} ({lote_kind}) | "
+            f"humano: {row.get('human_fields') or '-'}"
         )
         print(
             f"        resolvido: qtd={row.get('qtd')} larg={out.larg_mm} "
@@ -113,13 +129,20 @@ def main() -> int:
             print(f"        CAUSA: {why}")
         else:
             chapas = ceil(float(row["qtd"]) / npecas) if npecas else None
+            desp = ("-" if out.desperdicio_kg is None
+                    else f"{out.desperdicio_kg:.1f}kg")
             print(
                 f"        chapas={chapas} consumido={out.peso_consumido_kg:.1f}kg "
                 f"produzido={out.peso_produzido_kg or 0:.1f}kg "
-                f"desperdicio={(out.desperdicio_kg or 0):.1f}kg"
+                f"desperdicio={desp}"
             )
+            if no_waste:
+                print(
+                    "        CAUSA: peso produzido inderivavel -> desperdicio vazio "
+                    "(lbase/ltopo/esp em falta E sem pesounit no plano)"
+                )
     print()
-    print(f"{n_shown} linhas analisadas, {n_blank} com bloco de consumo vazio")
+    print(f"{n_shown} linhas analisadas, {n_blank} com consumo/desperdicio vazio")
     return 0
 
 

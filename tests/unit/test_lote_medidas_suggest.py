@@ -8,8 +8,10 @@ confirmação (lição R260).
   - POST /sheet/{id}/edit em rows[i].(lote|larg_mm|esp) → banner OOB
     `#lote-cc-banner` na resposta (_lote_suggest.html), SEM escritas.
   - POST /sheet/{id}/apply-lote-medidas → escreve lote canónico + medidas
-    divergentes/em falta via apply_edits_batch(source='human'), devolve
-    banner "applied" + células OOB.
+    do StockSAP via apply_edits_batch(source='human'), devolve banner
+    "applied" + células OOB. R269 — escreve TUDO o que o banner mostrou e
+    difere do valor atual, mesmo dentro da tolerância de sinalização
+    (folha 5226: "confirmamos mas não aplica").
 
 DB isolada por teste (monkeypatch `_DB_PATH`); efeitos de disco do
 cross-check neutralizados, como em test_sheet_edit_oob.py.
@@ -229,6 +231,26 @@ class TestApplyLoteMedidas:
         row = _row(sid)
         assert row["larg_mm"] == "1280"
         assert row["esp"] == "2,6"
+
+    def test_apply_within_tolerance_still_writes(self, tmp_db, isolate, client):
+        # R269 — folha 5226: a Fátima confirma e as medidas dentro da
+        # tolerância (larg ±50, esp ±0,5) ficavam por escrever. Confirmação
+        # explícita escreve sempre o valor SAP mostrado no banner.
+        sid = _seed([{"lote": "M26B0358", "larg_mm": "1250", "esp": ""}])
+        r = _apply(client, sid, 0, "M26B0358")
+        assert r.status_code == 200
+        assert "Aplicado do StockSAP" in r.text
+        row = _row(sid)
+        assert row["larg_mm"] == "1280"  # 1250 vs 1280 ≤ tol 50 — escrito na mesma
+        assert row["esp"] == "2,6"
+
+    def test_apply_normalizes_format_variants(self, tmp_db, isolate, client):
+        # R269 — "2.6" é o mesmo número do SAP noutra grafia: o apply
+        # normaliza a célula para o formato canónico do banner.
+        sid = _seed([{"lote": "M26B0358", "larg_mm": "1280", "esp": "2.6"}])
+        r = _apply(client, sid, 0, "M26B0358")
+        assert r.status_code == 200
+        assert _row(sid)["esp"] == "2,6"
 
     def test_apply_coherent_row_writes_nothing(self, tmp_db, isolate, client):
         sid = _seed([{"lote": "M26B0358", "larg_mm": "1280", "esp": "2,6"}])

@@ -184,6 +184,10 @@ CREATE TABLE IF NOT EXISTS production_rows (
     sucata INTEGER,
     -- TPL103 Bobine Formato v3 — closure mark (blank/X).
     fecho TEXT,
+    -- R269 — CSV dos campos desta linha cuja última edição é humana/wizard
+    -- (subset WEIGHT_INPUT_FIELDS). O cálculo de pesos dá-lhes precedência
+    -- sobre plano/StockSAP. NULL = sem edições autoritativas.
+    human_fields TEXT,
     UNIQUE (sheet_id, row_index)
 );
 
@@ -528,6 +532,9 @@ def init_db() -> None:
             # rev00 — SUCATA (nº de peças sucatadas).
             ("sucata", "INTEGER"),
             ("fecho", "TEXT"),
+            # R269 — campos com última edição humana/wizard (precedência
+            # sobre plano/SAP no cálculo de pesos).
+            ("human_fields", "TEXT"),
         ):
             if col not in pr_cols:
                 c.execute(f"ALTER TABLE production_rows ADD COLUMN {col} {type_}")
@@ -610,6 +617,36 @@ def init_db() -> None:
         shadow_cols = {r["name"] for r in c.execute("PRAGMA table_info(shadow_runs)").fetchall()}
         if "cells_very_different" not in shadow_cols:
             c.execute("ALTER TABLE shadow_runs ADD COLUMN cells_very_different INTEGER")
+        # R269 — backfill de production_rows.human_fields: folhas históricas
+        # só re-sincronizam quando voltam a ser editadas, mas o cálculo de
+        # pesos passou a respeitar edições humanas — re-sync único das folhas
+        # que já têm edições autoritativas em campos de linha.
+        migration = "production_rows_human_fields_backfill"
+        done = c.execute(
+            "SELECT 1 FROM app_migrations WHERE name = ?", (migration,)
+        ).fetchone()
+        if done is None:
+            placeholders = ",".join("?" for _ in AUTHORITATIVE_EDIT_SOURCES)
+            sheet_ids = [
+                r["sheet_id"] for r in c.execute(
+                    f"SELECT DISTINCT sheet_id FROM edits "
+                    f"WHERE source IN ({placeholders}) "
+                    "AND field_path LIKE 'rows[%'",
+                    tuple(sorted(AUTHORITATIVE_EDIT_SOURCES)),
+                ).fetchall()
+            ]
+            for sid in sheet_ids:
+                srow = c.execute(
+                    "SELECT sheet_data FROM sheets WHERE id = ?", (sid,)
+                ).fetchone()
+                if srow is None or not srow["sheet_data"]:
+                    continue
+                try:
+                    data = json.loads(srow["sheet_data"])
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                _sync_production_rows(c, sid, data)
+            c.execute("INSERT INTO app_migrations (name) VALUES (?)", (migration,))
 
 
 def insert_sheet(
@@ -1339,6 +1376,39 @@ def _parse_date_iso(s: Any) -> str | None:
         return None
 
 
+# R269 — campos de linha que entram no cálculo de pesos (weights.py). A
+# precedência humana só é rastreada para estes: os restantes campos não
+# alteram consumo/desperdício.
+WEIGHT_INPUT_FIELDS = frozenset(
+    {"lote", "comp_mm", "larg_mm", "esp", "lbase", "ltopo", "qtd"}
+)
+
+_ROW_FIELD_PATH_RE = re.compile(r"^rows\[(\d+)\]\.([a-z_0-9]+)$")
+
+
+def _authoritative_row_fields(
+    c: sqlite3.Connection, sheet_id: int
+) -> dict[int, set[str]]:
+    """R269 — por linha, os WEIGHT_INPUT_FIELDS cuja última edição é
+    humana/wizard (mesma semântica last-write de _human_edited_paths no
+    main.py: itera por id ASC, o último source ganha)."""
+    last: dict[tuple[int, str], str] = {}
+    for r in c.execute(
+        "SELECT field_path, source FROM edits "
+        "WHERE sheet_id = ? ORDER BY id ASC",
+        (sheet_id,),
+    ).fetchall():
+        m = _ROW_FIELD_PATH_RE.match(str(r["field_path"] or ""))
+        if not m or m.group(2) not in WEIGHT_INPUT_FIELDS:
+            continue
+        last[(int(m.group(1)), m.group(2))] = r["source"]
+    out: dict[int, set[str]] = {}
+    for (idx, field), src in last.items():
+        if src in AUTHORITATIVE_EDIT_SOURCES:
+            out.setdefault(idx, set()).add(field)
+    return out
+
+
 def _sync_production_rows(c: sqlite3.Connection, sheet_id: int, sheet_data: dict) -> None:
     """Replace production_rows for this sheet. Called on every
     update_extraction() and apply_edit() to keep aggregates in sync.
@@ -1416,6 +1486,9 @@ def _sync_production_rows(c: sqlite3.Connection, sheet_id: int, sheet_data: dict
 
     total_qty = sum((_parse_int(r.get("qtd")) or 0) for r in rows if isinstance(r, dict))
 
+    # R269 — precedência humana no cálculo de pesos.
+    human_by_row = _authoritative_row_fields(c, sheet_id)
+
     # R117 — M3: filter template-aware. Se o template tem
     # ``cross_check_fields`` definidos (caso geral), usamos esses para
     # decidir se a linha é "vazia". Caso contrário, fallback ao
@@ -1447,8 +1520,8 @@ def _sync_production_rows(c: sqlite3.Connection, sheet_id: int, sheet_data: dict
                 dbase, dtopo,
                 m2, nesting,
                 qtd_metros, cesta_n, inicio, fim,
-                sucata, fecho)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                sucata, fecho, human_fields)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 sheet_id, i,
                 operador, sheet_date_raw, sheet_iso, captured_at, validated_at,
@@ -1482,6 +1555,7 @@ def _sync_production_rows(c: sqlite3.Connection, sheet_id: int, sheet_data: dict
                 # rev00 — SUCATA (nº de peças sucatadas). NULL se vazio.
                 _parse_int(row.get("sucata")),
                 "X" if str(row.get("fecho") or "").strip().upper() == "X" else None,
+                ",".join(sorted(human_by_row.get(i, ()))) or None,
             ),
         )
 

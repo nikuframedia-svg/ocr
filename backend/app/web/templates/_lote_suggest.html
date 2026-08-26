@@ -30,7 +30,10 @@
       {% for f in s.missing %}
         <span class="pill warn" style="margin-left:4px;">{{ 'larg' if f == 'larg_mm' else 'esp' }}: (vazio) → <b>{{ s.sap.larg if f == 'larg_mm' else s.sap.esp }}</b></span>
       {% endfor %}
-      <span class="muted tiny" style="display:block;">Nada é alterado sem confirmares.</span>
+      {# R269 — o StockSAP não tem comprimento: gap de expectativa da folha
+         5226 ("alterei o lote mas o comp não mudou"). #}
+      <span class="muted tiny" style="display:block;">Nada é alterado sem confirmares.
+        O lote só traz largura e espessura — o comprimento vem do plano (varinha da OF).</span>
     </span>
     {% if s.divergences or s.missing or s.status == 'h_candidate' %}
     <button type="button" class="btn primary"

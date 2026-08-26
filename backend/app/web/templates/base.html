@@ -415,6 +415,26 @@ function liveBanner(initialWatermark) {
   document.body.addEventListener('htmx:afterSwap', function (e) {
     if (window.Alpine && e.target) Alpine.initTree(e.target);
   });
+  // R269 — respostas não-2xx não fazem swap em htmx: um 400/403/409 num
+  // botão (ex.: "Aplicar medidas do StockSAP") ficava sem QUALQUER feedback
+  // ("clico e não acontece nada"). Faixa de erro global, dispensável ao clique.
+  document.body.addEventListener('htmx:responseError', function (e) {
+    var msg = (e.detail && e.detail.xhr && e.detail.xhr.responseText) || '';
+    try { msg = JSON.parse(msg).detail || msg; } catch (err) {}
+    var status = e.detail && e.detail.xhr ? e.detail.xhr.status : '';
+    var bar = document.getElementById('htmx-error-bar');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'htmx-error-bar';
+      bar.style.cssText = 'position:fixed;bottom:12px;left:50%;transform:translateX(-50%);' +
+        'z-index:9999;background:#b91c1c;color:#fff;padding:8px 14px;border-radius:6px;' +
+        'font-size:13px;max-width:80vw;box-shadow:0 2px 8px rgba(0,0,0,.35);cursor:pointer;';
+      bar.title = 'Fechar';
+      bar.addEventListener('click', function () { bar.remove(); });
+      document.body.appendChild(bar);
+    }
+    bar.textContent = 'Erro ' + status + (msg ? ' — ' + String(msg).slice(0, 300) : '');
+  });
 </script>
 </body>
 </html>

@@ -122,6 +122,41 @@ def test_lote_h_with_divergent_measures_keeps_ocr_inputs():
     assert out.esp_mm == 2.6  # plan esp, not the rejected SAP entry's 5
 
 
+def test_human_edited_measures_win_over_plan_and_sap():
+    # R269 — folha 5226: a operadora corrigiu comp/larg/esp à mão e o
+    # desperdício continuava a usar o plano/SAP. Campos com última edição
+    # humana (production_rows.human_fields) ganham às referências.
+    out = calculate_row_weights(
+        _bobine_row(comp_mm=6000, larg_mm=1250, esp=3,
+                    human_fields="comp_mm,esp,larg_mm"),
+        _refs(),
+    )
+
+    assert out.comp_mm == 6000
+    assert out.larg_mm == 1250
+    assert out.esp_mm == 3
+
+
+def test_human_precedence_is_per_field():
+    # esp humano ganha; larg sem edição humana continua a vir do SAP e o
+    # comp do plano (ruído de OCR continua a ser ignorado nesses campos).
+    out = calculate_row_weights(_bobine_row(esp=3, human_fields="esp"), _refs())
+
+    assert out.esp_mm == 3
+    assert out.larg_mm == 1500
+    assert out.comp_mm == 5000
+
+
+def test_human_field_empty_falls_back_to_refs():
+    # Campo marcado humano mas vazio na linha: não pode anular o cálculo —
+    # cai nas referências como antes.
+    out = calculate_row_weights(
+        _bobine_row(esp="", human_fields="esp"), _refs()
+    )
+
+    assert out.esp_mm == 2.6  # SAP
+
+
 def test_bobine_geometry_wins_over_plan_pesounit():
     out = calculate_row_weights(_bobine_row(qtd=3), _refs(pesounit=50))
 

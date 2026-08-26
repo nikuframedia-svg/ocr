@@ -4490,7 +4490,6 @@ async def sheet_apply_lote_medidas(
 
     from app.pipeline.scoring_engine import (
         _format_value,
-        _lote_measures_divergences,
         _resolve_row_lote,
     )
     try:
@@ -4512,7 +4511,11 @@ async def sheet_apply_lote_medidas(
     if str(row.get("lote") or "").strip().upper() != canonical:
         batch.append((f"rows[{row_index}].lote", canonical))
         applied_fields.append(("lote", canonical))
-    divergent = {d["field"] for d in _lote_measures_divergences(row, entry)}
+    # R269 — folha 5226: a confirmação explícita escreve SEMPRE o que o
+    # banner mostrou. O filtro por _lote_measures_divergences deixava valores
+    # dentro da tolerância (larg ±50, esp ±0,5) por escrever e ainda
+    # respondia "Aplicado do StockSAP" — confirmava sem aplicar. A tolerância
+    # continua a decidir só a SINALIZAÇÃO (banner/pills), nunca o apply.
     for field, key in (("larg_mm", "larg"), ("esp", "esp")):
         if field not in row_fields:
             continue
@@ -4520,7 +4523,7 @@ async def sheet_apply_lote_medidas(
         if not sap_val:
             continue
         cur = str(row.get(field) or "").strip()
-        if (field in divergent or not cur) and cur != sap_val:
+        if cur != sap_val:
             batch.append((f"rows[{row_index}].{field}", sap_val))
             applied_fields.append((field, sap_val))
 

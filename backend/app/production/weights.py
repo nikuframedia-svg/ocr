@@ -74,6 +74,30 @@ def _first_positive(*values: Any) -> float | None:
     return None
 
 
+def _human_fields(row: dict) -> frozenset[str]:
+    """R269 — `production_rows.human_fields`: campos desta linha cuja última
+    edição é humana/wizard (CSV escrito por db._sync_production_rows)."""
+    raw = row.get("human_fields")
+    if not raw:
+        return frozenset()
+    return frozenset(p.strip() for p in str(raw).split(",") if p.strip())
+
+
+def _resolved_input(
+    field: str,
+    human: frozenset[str],
+    row_value: Any,
+    *ref_values: Any,
+) -> float | None:
+    """R269 — precedência humana: um campo editado pelo operador ganha ao
+    plano/StockSAP (as referências existem para ignorar ruído de OCR, não
+    decisões humanas). Sem edição humana, mantém-se a ordem histórica
+    plano/SAP → valor da folha."""
+    if field in human:
+        return _first_positive(row_value, *ref_values)
+    return _first_positive(*ref_values, row_value)
+
+
 def _norm_text(v: Any) -> str:
     raw = str(v or "").strip().upper()
     if not raw:
@@ -239,6 +263,10 @@ def _sap_entry_for_row(row: dict, refs: dict | None) -> dict | None:
     # whole cross engine at import time (and safe against future cycles).
     from app.pipeline.scoring_engine import _sap_entry_for_measures
 
+    # R269 — um lote editado pelo operador resolve pelo mesmo caminho: o
+    # match exato/alias nunca é vetado por medidas, e o veto H→M (R259, gate
+    # Luís) mantém-se — se o humano corrigiu também larg/esp, esses valores
+    # ganham à entry de qualquer forma (precedência humana nos inputs).
     _, entry = _sap_entry_for_measures(refs, row)
     return entry
 
@@ -250,26 +278,34 @@ def calculate_row_weights(row: dict, refs: dict | None = None) -> RowWeightMetri
     direct = is_direct_consumption_row(row)
     sap_entry = _sap_entry_for_row(row, refs)
 
-    comp = _first_positive(
-        plan_entry.get("comp") if plan_entry else None,
+    # R269 — campos com última edição humana/wizard ganham ao plano/SAP
+    # (folha 5226: corrigir comp/larg/esp à mão não mudava o desperdício).
+    human = _human_fields(row)
+    comp = _resolved_input(
+        "comp_mm", human,
         row.get("comp_mm"),
+        plan_entry.get("comp") if plan_entry else None,
     )
-    lbase = _first_positive(
-        plan_entry.get("lbase") if plan_entry else None,
+    lbase = _resolved_input(
+        "lbase", human,
         row.get("lbase"),
+        plan_entry.get("lbase") if plan_entry else None,
     )
-    ltopo = _first_positive(
-        plan_entry.get("ltopo") if plan_entry else None,
+    ltopo = _resolved_input(
+        "ltopo", human,
         row.get("ltopo"),
+        plan_entry.get("ltopo") if plan_entry else None,
     )
-    esp = _first_positive(
+    esp = _resolved_input(
+        "esp", human,
+        row.get("esp"),
         sap_entry.get("esp") if sap_entry else None,
         plan_entry.get("esp") if plan_entry else None,
-        row.get("esp"),
     )
-    larg = _first_positive(
-        sap_entry.get("larg") if sap_entry else None,
+    larg = _resolved_input(
+        "larg_mm", human,
         row.get("larg_mm"),
+        sap_entry.get("larg") if sap_entry else None,
     )
 
     if qtd is None or qtd <= 0:
