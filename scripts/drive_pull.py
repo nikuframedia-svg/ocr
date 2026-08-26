@@ -106,12 +106,33 @@ def refs_import_dir() -> Path:
     return Path(r"F:\ocr\files")
 
 
-def download_folder(folder_id: str, dest: Path) -> list[Path]:
-    import gdown
+def download_folder(folder_id: str, dest: Path, rclone_base: str = "",
+                    rclone: str = "rclone") -> list[Path]:
+    """Descarrega a pasta do Drive para o staging.
+
+    Caminho preferido: rclone (API oficial, mesma autorização da subida) —
+    o gdown raspa a página pública e o Google começou a recusá-lo com «may
+    have had many accesses» (avaria real de 24-26/08: matava o poller ANTES
+    de subir os backups). A SAIDA/ exclui-se: é a nossa própria produção,
+    não faz sentido voltar a descarregá-la. gdown fica como fallback para
+    instalações sem rclone configurado.
+    """
+    import subprocess
 
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
+    if rclone_base:
+        result = subprocess.run(
+            [rclone, "copy", rclone_base, str(dest),
+             "--exclude", "SAIDA/**", "--transfers", "4"],
+            capture_output=True, text=True, timeout=1800)
+        if result.returncode == 0:
+            return sorted(p for p in dest.rglob("*") if p.is_file())
+        log(f"AVISO: rclone copy falhou ({result.stderr.strip()[:200]}); "
+            "a tentar gdown")
+    import gdown
+
     gdown.download_folder(id=folder_id, output=str(dest), quiet=True,
                           use_cookies=False)
     return sorted(p for p in dest.rglob("*") if p.is_file())
@@ -312,10 +333,37 @@ def main() -> int:
                     if s.strip()]
 
     log(f"drive_pull início (dry_run={args.dry_run})")
+
+    # PERNA DE SUBIDA PRIMEIRO. Avaria real de 24-26/08: o download (gdown)
+    # falhava com a quota do Google e o poller desistia ANTES de subir os
+    # backups — 3 dias sem cópias no Drive. Os exports e os backups locais
+    # não dependem de nada do download; sobem SEMPRE.
+    subidos = 0
+    if args.push_remote:
+        saida_local = _REPO / "data" / "_saida_staging"
+        fetched = fetch_exports(export_specs, saida_local, args.dry_run)
+        subidos = push_outputs(args.push_remote.strip(),
+                               fetched + push_files, args.rclone, args.dry_run)
+        # Retenção no Drive: sem isto os backups acumulavam-se para sempre
+        # na SAIDA/ (a retenção local de 14 já existia; a remota não).
+        if not args.dry_run:
+            import subprocess
+            subprocess.run([args.rclone, "delete",
+                            f"{args.push_remote.strip()}/backups",
+                            "--min-age", "14d"],
+                           capture_output=True, text=True, timeout=300)
+
+    # O remote base do rclone («gdrive:») deriva do push_remote; sem push
+    # configurado pode vir de DRIVE_PULL_REMOTE, senão cai no gdown.
+    rclone_base = (args.push_remote.split(":", 1)[0] + ":"
+                   if args.push_remote
+                   else os.environ.get("DRIVE_PULL_REMOTE", ""))
     try:
-        files = download_folder(args.folder_id, _STAGING)
+        files = download_folder(args.folder_id, _STAGING,
+                                rclone_base=rclone_base, rclone=args.rclone)
     except Exception as exc:  # noqa: BLE001 — rede/quota: a próxima corrida apanha
         log(f"ERRO: download da pasta do Drive falhou: {exc}")
+        log(f"drive_pull fim (parcial): {subidos} subido(s) à SAIDA")
         return 1
     log(f"{len(files)} ficheiro(s) na pasta do Drive")
 
@@ -328,15 +376,6 @@ def main() -> int:
         espelhados = mirror_tree(_STAGING, Path(args.mirror_to), args.dry_run)
         notify(notify_urls, args.dry_run)
 
-    # Perna de subida: exports das apps + ficheiros locais → SAIDA/ do Drive.
-    # É por aqui que o Kanbans_Producao_NOVO.xlsx (e os BaseDados dos kanban)
-    # chegam ao ciclo diário do servidor e entram no Postgres.
-    subidos = 0
-    if args.push_remote:
-        saida_local = _REPO / "data" / "_saida_staging"
-        fetched = fetch_exports(export_specs, saida_local, args.dry_run)
-        subidos = push_outputs(args.push_remote.strip(),
-                               fetched + push_files, args.rclone, args.dry_run)
     log(f"drive_pull fim: {refs} ref(s), {novos} PDF(s) novo(s), "
         f"{repetidos} já submetido(s), {espelhados} espelhado(s), "
         f"{subidos} subido(s) à SAIDA")
