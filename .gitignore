@@ -136,3 +136,6 @@ data/plan_provenance.json
 kanban_refs/03_Cross_Check/
 lexicons/operador_aliases.json
 lexicons/cliente_aliases.json
+data/_drive_staging/
+data/_saida_staging/
+data/drive_pull_state.json
