@@ -3,9 +3,13 @@
 Fecha o ciclo scanner→Drive→OCR sem uploads manuais:
 1. descarrega a pasta partilhada do Drive (a mesma que alimenta o resto do
    ecossistema MTG) para ``data/_drive_staging``;
-2. ficheiros de REFERÊNCIA (StockSAP, plan_colunas_cpis, ListaColaboradores,
+2. ficheiros de REFERÊNCIA vindos do planeamento (ListaColaboradores,
    maquinas) são pousados em ``KANBAN_REFS_IMPORT_DIR`` — o ref_importer
-   nativo da app faz a classificação por conteúdo e o dedupe por sha256;
+   nativo da app faz a classificação por conteúdo e o dedupe por sha256.
+   StockSAP e plan_colunas_cpis NÃO entram: nascem no próprio PC (rotina de
+   IT «atualiza_files_multi» exporta-os do SAP) e a cópia do Drive é um
+   retrato parado — descarregá-la esmagava os ficheiros frescos duas vezes
+   por dia (incidente real de agosto/2026);
 3. PDFs de KANBAN (nome começa pela data: «18-08-2026.PDF») são submetidos a
    ``POST /upload?return=json``. Como o servidor NÃO deduplica folhas (o
    mesmo PDF submetido duas vezes gera folhas duplicadas e re-OCR na GPU), a
@@ -58,8 +62,13 @@ _DEFAULT_SCAN_SUBDIRS = "Kanban's MTG2"
 # Referências que a app consome via ref_importer (classificação por conteúdo;
 # os nomes aqui são só um filtro para não arrastar Excels gigantes de planos
 # que não são refs — o Met3_Plan_Cantoneiras tem ~50 MB).
+# SÓ ficheiros cuja FONTE é o Drive (planeamento). Um ficheiro que nasce no
+# próprio PC nunca pode entrar nesta lista: a cópia do Drive está sempre
+# atrasada e substituí-lo destrói dados — foi o que aconteceu ao StockSAP e
+# ao plan_colunas_cpis (cópias de 07/08 a esmagar os exports diários do SAP
+# da rotina de IT em F:\ocr\files).
 _REF_NAMES = re.compile(
-    r"^(stocksap.*|plan_colunas_cpis|lista ?colaboradores|maquinas)\.xls[xm]$",
+    r"^(lista ?colaboradores|maquinas)\.xls[xm]$",
     re.IGNORECASE,
 )
 
@@ -146,6 +155,13 @@ def place_refs(files: list[Path], import_dir: Path, dry_run: bool) -> int:
         target = import_dir / src.name
         if target.exists() and sha256_file(target) == sha256_file(src):
             continue                      # igual ao que lá está: nada a fazer
+        # Guarda de frescura: o rclone e o copy2 preservam a data de
+        # modificação original, por isso dá para comparar as duas cópias.
+        # Uma ref local mais recente NUNCA é substituída — se um nome local
+        # entrar por engano na lista acima, o pior que acontece é nada.
+        if target.exists() and target.stat().st_mtime >= src.stat().st_mtime:
+            log(f"ref {src.name} ignorada: a cópia local é mais recente")
+            continue
         if dry_run:
             log(f"[dry-run] ref {src.name} -> {target}")
         else:
