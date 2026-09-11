@@ -9,6 +9,14 @@ $ErrorActionPreference = "Stop"
 $root = (Resolve-Path "$PSScriptRoot\..\..").Path
 Write-Host "REPO_ROOT=$root"
 
+# Fail before backups or other actions when a copied installation lost its .git.
+git -C $root rev-parse --show-toplevel 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "ERRO: a instalacao nao tem metadados Git validos."
+  Write-Host "Se .git estiver vazia/ausente, usar scripts/ops/recover_git.py conforme scripts/ops/README.md."
+  exit 1
+}
+
 # --- Proteger os ficheiros que a aplicacao reescreve enquanto corre -------
 # A base de dados e os ficheiros derivados sao DESTE PC. O 'git pull' nunca
 # os deve sobrepor (nem rebentar por causa deles). 'assume-unchanged' diz ao
@@ -45,22 +53,34 @@ foreach ($f in $protect) {
 }
 
 # --- Snapshot pre-deploy da app.db (R267; best-effort, nunca aborta) ------
-# Pede ao servidor AINDA ANTIGO um backup da app.db para a pasta configurada antes
-# de trocar de codigo - se o deploy correr mal, ha uma copia de ha segundos.
-# Servidor parado ou backup desligado (sem KANBAN_DB_BACKUP_DIR) -> segue.
+# Copia local com a API SQLite, incluindo WAL. Nao chamar o servidor antigo:
+# ele ainda pode ter KANBAN_DB_BACKUP_DIR apontado para o Drive.
 try {
-  $tok = ""
-  if (Test-Path "$root\.env") {
-    $m = Select-String -Path "$root\.env" -Pattern '^\s*ADMIN_TOKEN\s*=\s*(.+)$' | Select-Object -First 1
-    if ($m) { $tok = $m.Matches[0].Groups[1].Value.Trim().Trim('"').Trim("'") }
-  }
-  $hdr = @{}
-  if ($tok) { $hdr["X-Admin-Token"] = $tok }
-  Invoke-WebRequest -Uri "http://127.0.0.1:8080/admin/db-backup" -Method POST `
-    -Headers $hdr -TimeoutSec 30 -UseBasicParsing -ErrorAction Stop | Out-Null
-  Write-Host "  snapshot da app.db para o Drive: OK"
+  $backupCode = @'
+import os, sqlite3, sys, tempfile
+from contextlib import closing
+from pathlib import Path
+root = Path(sys.argv[1]).resolve()
+dest = root / "data" / "backups"
+dest.mkdir(parents=True, exist_ok=True)
+fd, temp = tempfile.mkstemp(prefix="pre-update-", suffix=".db", dir=dest)
+os.close(fd)
+try:
+    with closing(sqlite3.connect((root / "data" / "app.db").as_uri() + "?mode=ro", uri=True)) as src:
+        with closing(sqlite3.connect(temp)) as dst:
+            src.backup(dst)
+            if dst.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                raise RuntimeError("Backup SQLite invalido")
+    os.replace(temp, dest / "app-pre-update.db")
+finally:
+    if os.path.exists(temp):
+        os.unlink(temp)
+'@
+  $backupCode | & "$root\.venv\Scripts\python.exe" - $root
+  if ($LASTEXITCODE -ne 0) { throw "snapshot local falhou" }
+  Write-Host "  snapshot LOCAL da app.db: OK"
 } catch {
-  Write-Host "  (snapshot pre-deploy nao feito - servidor parado ou backup desligado; segue)"
+  Write-Host "  (snapshot local pre-deploy nao feito: $_; segue)"
 }
 
 # --- Buscar o codigo novo -------------------------------------------------

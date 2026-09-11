@@ -16,7 +16,7 @@ No PowerShell do PC da fábrica:
 powershell -NoProfile -ExecutionPolicy Bypass -File F:\Apps\OCR-original\scripts\ops\update.ps1
 ```
 
-Não é necessário descarregar ou aplicar o ZIP anteriormente preparado. A atualização usa Git, seguindo o procedimento normal do projeto. O script pede um backup da base à aplicação (best effort), executa `git pull --ff-only origin main` e chama `start.ps1`. Se o Git recusar a atualização, conservar a mensagem de erro; não forçar nem apagar alterações locais. A atualização das referências não exige revalidar folhas.
+Não é necessário descarregar ou aplicar o ZIP anteriormente preparado. A atualização usa Git, seguindo o procedimento normal do projeto. O script faz um backup local por SQLite (best effort), executa `git pull --ff-only origin main` e chama `start.ps1`. Se o Git recusar a atualização, conservar a mensagem de erro; não forçar nem apagar alterações locais. Para a `.git` vazia confirmada no PC em 11/09, seguir a recuperação pontual em `scripts/ops/README.md`. A atualização das referências não exige revalidar folhas.
 
 Depois de reiniciar, o importador automático lê a pasta de origem. Em Administração → Referências, confirmar que o plano ativo tem o mesmo hash que o candidato da última execução e que não há bloqueios. À hora do diagnóstico, o candidato era `4477ece5…`, com 23 598 linhas; uma exportação posterior pode legitimamente mudar esses valores. O estado pode ser consultado em `/admin/refs-status`.
 
@@ -57,5 +57,6 @@ Verificação final: **1 495 testes passaram**, 2 testes vLLM excluídos,
 cobertura **70,85%**. Os 100 testes específicos incluíram uma cópia local real
 com rclone, confirmando que os artefactos do OCR ficam excluídos e os quatro
 padrões de saída dos MES são preservados. Não foi feito acesso ao Drive por
-este teste. As alterações estão preparadas localmente; a publicação GitHub
-e a aplicação no PC continuam pendentes por falta de acesso autenticado.
+este teste. As alterações foram publicadas no GitHub em `main` (`80596f4`).
+A primeira tentativa de aplicação no PC falhou porque a pasta `.git` estava
+vazia; a instalação na fábrica continua dependente da recuperação e reinício.

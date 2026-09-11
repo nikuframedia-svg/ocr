@@ -5,7 +5,8 @@ Runbook ops (R65, R105). Movidos de `data/_logs/` no R107.
 | Ficheiro | Função |
 |---|---|
 | `start.ps1` | Mata processos antigos, carrega `.env`, arranca uvicorn :8080 + cloudflared tunnel (redundante desde o portal R268 — não remover ainda, não investir) |
-| `update.ps1` | Snapshot pré-deploy da app.db + `git pull --ff-only` + reinicia o servidor; protege `data/app.db` e refs via `assume-unchanged` |
+| `update.ps1` | Snapshot local pré-deploy da app.db + `git pull --ff-only` + reinicia o servidor; protege `data/app.db` e refs via `assume-unchanged` |
+| `recover_git.py` | Recuperação pontual de `.git` vazia/ausente, preservando dados e guardando o código substituído |
 | `register_drive_pull.ps1` | (branch feature/drive-pull) Regista a tarefa Windows do poller drive_pull — correr UMA vez |
 
 Uso típico no PC da Metalogalva:
@@ -16,6 +17,51 @@ powershell -ExecutionPolicy Bypass -File scripts\ops\update.ps1
 ```
 
 Ver `docs/MIGRATION.md` Parte D.
+
+## Recuperar uma instalacao com `.git` vazia ou ausente
+
+O erro `fatal: not a git repository`, mesmo existindo a pasta `.git`, pode
+resultar de uma copia incompleta da instalacao. Em 11/09/2026 foi confirmada
+uma `.git` vazia no PC: sem `HEAD`, objetos, indice ou remotos. Criar apenas
+`HEAD` nao resolve; e necessario reconstruir os metadados e instalar o codigo.
+
+`recover_git.py` e uma recuperacao pontual, nao um novo atualizador. Usa Python
+standard e Git, descarrega `main` para uma pasta separada e copia apenas codigo
+versionado das pastas backend/scripts/prompts/infra/docs/tests e ficheiros de
+codigo/configuracao-modelo da raiz. Preserva integralmente `.env`, `.venv`,
+`data`, `kanban_refs`, `lexicons`, `inputs`, `ground_truth*`, `reports` e outros
+ficheiros locais. A pasta de entrada `F:\ocr\files` nao e acedida.
+
+Antes da substituicao, guarda os ficheiros de codigo anteriores e um snapshot
+SQLite consistente (incluindo WAL) em `F:\Apps\OCR-original-git-recovery-*`.
+Guarda tambem um manifesto dos ficheiros alterados. Em falha durante a aplicacao,
+repoe o codigo e a `.git` anteriores. Recusa `.git` nao vazia e caminhos de
+codigo que sejam links/junctions. Nao reinicia servicos nem acede ao Drive.
+Ficheiros de dados ainda tracked ficam com `skip-worktree`; se futuras versoes
+alterarem esses mesmos ficheiros, rever o conflito sem forcar a substituicao.
+
+Na consola PowerShell, descarregar primeiro o helper (o Git local ainda nao
+funciona). O repositorio e publico e nao requer token para leitura:
+
+```powershell
+$repair = Join-Path $env:TEMP 'ocr-recover-git.py'
+Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/nikuframedia-svg/ocr/main/scripts/ops/recover_git.py' -OutFile $repair
+& 'F:\Apps\OCR-original\.venv\Scripts\python.exe' $repair --root 'F:\Apps\OCR-original'
+if ($LASTEXITCODE -eq 0) {
+    & 'F:\Apps\OCR-original\scripts\ops\update.ps1'
+}
+```
+
+O sucesso da recuperacao imprime `RECOVERY_OK` com o commit instalado; so entao
+se executa o atualizador habitual. A atualizacao pede agora um snapshot **local**
+direto por SQLite em `data/backups/app-pre-update.db`, sem chamar o endpoint do
+servidor antigo que ainda podia ter um destino Drive. O erro de Git e detetado
+antes de qualquer snapshot. Confirmar `HEALTH_OK` e o plano em Referencias apos
+o reinicio. Os testes automatizados usam repositorios Git reais, SQLite em WAL,
+falhas de copia/rede simuladas, protecao de dados e um segundo `pull --ff-only`.
+Validacao em 11/09/2026: 1 501 testes passaram, 2 vLLM excluidos, cobertura de
+70,85%. A suite correu em Linux; a execucao no PC Windows e a verificacao do
+servico continuam a ser passos operacionais.
 
 Nota R268: a app é servida em https://mtg2.nikufra.ai (portal
 https://ocr.nikufra.ai) por um túnel SSH invertido — a ponte é a tarefa
