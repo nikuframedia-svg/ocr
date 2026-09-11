@@ -1,3 +1,4 @@
+# Drive apenas para os dois Kanbans MES; OCR original usa ficheiros locais.
 # Regista a tarefa agendada do Windows que corre o drive_pull 2x/dia
 # (06:45 e 12:45 locais - meia hora antes do sync do servidor, para os scans
 # entrarem na fila da GPU antes do pico). Correr UMA vez, como o utilizador

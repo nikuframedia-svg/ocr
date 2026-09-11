@@ -1,11 +1,12 @@
-"""Hourly copy of ``data/app.db`` into a Drive-synced folder.
+"""Hourly local copy of ``data/app.db`` into ``data/backups``.
 
-R267 — the factory PC runs Google Drive for Desktop; ``KANBAN_DB_BACKUP_DIR``
-points at the local mount of the shared folder ("MTG | Kanban Digital"). The
+The original OCR does not participate in Drive synchronization. The
 snapshot itself is :func:`app.web.db.backup_to` (sqlite3 backup API — safe
 under WAL); this module only owns scheduling, change detection and status.
 
-Feature is OFF unless ``KANBAN_DB_BACKUP_DIR`` is set (dev/CI stay inert).
+``KANBAN_DB_BACKUP_ENABLED`` controls scheduling. An existing nonempty
+``KANBAN_DB_BACKUP_DIR`` enables local backups for migration compatibility,
+but its old shared/Drive destination is no longer used. Dev/CI stay inert.
 Follows the ``ref_importer`` idiom: daemon thread + sleep loop + module
 ``_state`` under a lock, surfaced via :func:`status` in /admin/refs-status.
 """
@@ -26,6 +27,7 @@ from app.web import db
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 BACKUP_DIR_ENV = "KANBAN_DB_BACKUP_DIR"
+BACKUP_ENABLED_ENV = "KANBAN_DB_BACKUP_ENABLED"
 BACKUP_INTERVAL_ENV = "KANBAN_DB_BACKUP_INTERVAL_SEC"
 DEFAULT_BACKUP_INTERVAL_SECONDS = 3600
 BACKUP_FILENAME = "app.db"
@@ -65,19 +67,14 @@ def _is_absolute_backup_path(raw: str | Path) -> bool:
     return Path(raw).is_absolute() or PureWindowsPath(str(raw)).is_absolute()
 
 
-def _resolve_dir(raw: str | Path) -> Path:
-    path = Path(raw)
-    if _is_absolute_backup_path(raw):
-        return path
-    return _REPO_ROOT / path
-
-
 def configured_backup_dir() -> Path | None:
-    """Destination folder, or ``None`` when the feature is off (env unset)."""
-    val = _config_value(BACKUP_DIR_ENV)
-    if not val or not val.strip():
+    """Keep enabled backups local, even with a legacy shared destination."""
+    enabled = _config_value(BACKUP_ENABLED_ENV)
+    if enabled is None:
+        enabled = "1" if (_config_value(BACKUP_DIR_ENV) or "").strip() else "0"
+    if enabled.strip().lower() not in ("1", "true", "yes", "on"):
         return None
-    return _resolve_dir(val.strip())
+    return _REPO_ROOT / "data" / "backups"
 
 
 def configured_interval_seconds() -> int:
@@ -147,7 +144,7 @@ def run_backup_once(
     dest = dest_dir if dest_dir is not None else configured_backup_dir()
     now_iso = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
     if dest is None:
-        result = {"ok": False, "error": f"{BACKUP_DIR_ENV} não definido"}
+        result = {"ok": False, "error": f"backups locais desligados ({BACKUP_ENABLED_ENV})"}
         with _state_lock:
             _state.update({
                 "last_run_at": now_iso,

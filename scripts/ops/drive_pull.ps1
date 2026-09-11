@@ -1,3 +1,4 @@
+# Drive apenas para os dois Kanbans MES; OCR original usa ficheiros locais.
 # Poller do Google Drive (scans + refs) - corre via tarefa agendada do
 # Windows (ver register_drive_pull.ps1). Carrega o .env (mesmo padrao do
 # start.ps1) e corre scripts/drive_pull.py no venv do repo.

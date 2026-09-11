@@ -45,7 +45,7 @@ foreach ($f in $protect) {
 }
 
 # --- Snapshot pre-deploy da app.db (R267; best-effort, nunca aborta) ------
-# Pede ao servidor AINDA ANTIGO um backup da app.db para a pasta Drive antes
+# Pede ao servidor AINDA ANTIGO um backup da app.db para a pasta configurada antes
 # de trocar de codigo - se o deploy correr mal, ha uma copia de ha segundos.
 # Servidor parado ou backup desligado (sem KANBAN_DB_BACKUP_DIR) -> segue.
 try {

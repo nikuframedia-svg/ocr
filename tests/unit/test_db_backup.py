@@ -1,4 +1,4 @@
-"""R267 — hourly app.db copy into the Drive-synced folder."""
+"""Hourly SQLite backup, kept local even with legacy Drive configuration."""
 from __future__ import annotations
 
 import os
@@ -99,7 +99,7 @@ def test_run_backup_once_without_config_reports_error(monkeypatch):
     result = db_backup.run_backup_once()
 
     assert result["ok"] is False
-    assert "KANBAN_DB_BACKUP_DIR" in result["error"]
+    assert "KANBAN_DB_BACKUP_ENABLED" in result["error"]
 
 
 def test_start_background_backup_disabled_without_env(monkeypatch):
@@ -109,18 +109,27 @@ def test_start_background_backup_disabled_without_env(monkeypatch):
     assert db_backup.status()["enabled"] is False
 
 
-def test_backup_dir_preserves_windows_paths(monkeypatch):
+def test_legacy_shared_backup_destination_is_migrated_to_local(tmp_path, monkeypatch):
+    monkeypatch.setattr(db_backup, "_REPO_ROOT", tmp_path)
+    monkeypatch.setattr(db_backup, "_dotenv_value", lambda _root, _name: None)
+    monkeypatch.delenv(db_backup.BACKUP_ENABLED_ENV, raising=False)
     monkeypatch.setenv(
         db_backup.BACKUP_DIR_ENV, r"G:\O meu Disco\MTG _ Kanban Digital"
     )
-    assert (
-        str(db_backup.configured_backup_dir())
-        == r"G:\O meu Disco\MTG _ Kanban Digital"
-    )
+    assert db_backup.configured_backup_dir() == tmp_path / "data" / "backups"
 
     monkeypatch.setenv(db_backup.BACKUP_DIR_ENV, "")
     monkeypatch.setattr(db_backup, "_dotenv_value", lambda _root, _name: None)
     assert db_backup.configured_backup_dir() is None
+
+
+def test_explicit_local_backup_toggle_overrides_old_drive_config(tmp_path, monkeypatch):
+    monkeypatch.setattr(db_backup, "_REPO_ROOT", tmp_path)
+    monkeypatch.setenv(db_backup.BACKUP_DIR_ENV, r"C:\OCR-Suite\saida")
+    monkeypatch.setenv(db_backup.BACKUP_ENABLED_ENV, "0")
+    assert db_backup.configured_backup_dir() is None
+    monkeypatch.setenv(db_backup.BACKUP_ENABLED_ENV, "1")
+    assert db_backup.configured_backup_dir() == tmp_path / "data" / "backups"
 
 
 def test_backup_interval_clamped(monkeypatch):
@@ -134,7 +143,8 @@ def test_backup_interval_clamped(monkeypatch):
 
 def test_admin_db_backup_endpoint(tmp_db, tmp_path, monkeypatch):
     db.init_db()  # request middleware needs the full schema
-    dest_dir = tmp_path / "drive"
+    monkeypatch.setattr(db_backup, "_REPO_ROOT", tmp_path)
+    dest_dir = tmp_path / "data" / "backups"
     monkeypatch.setattr(
         db_backup, "_config_value",
         lambda name: str(dest_dir) if name == db_backup.BACKUP_DIR_ENV else None,

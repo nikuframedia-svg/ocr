@@ -1,79 +1,56 @@
-"""Poller do Google Drive: scans e referências entram sozinhos.
+"""Drive transport for the two Kanban MES applications only.
 
-Fecha o ciclo scanner→Drive→OCR sem uploads manuais:
-1. descarrega a pasta partilhada do Drive (a mesma que alimenta o resto do
-   ecossistema MTG) para ``data/_drive_staging``;
-2. ficheiros de REFERÊNCIA vindos do planeamento (ListaColaboradores,
-   maquinas) são pousados em ``KANBAN_REFS_IMPORT_DIR`` — o ref_importer
-   nativo da app faz a classificação por conteúdo e o dedupe por sha256.
-   StockSAP e plan_colunas_cpis NÃO entram: nascem no próprio PC (rotina de
-   IT «atualiza_files_multi» exporta-os do SAP) e a cópia do Drive é um
-   retrato parado — descarregá-la esmagava os ficheiros frescos duas vezes
-   por dia (incidente real de agosto/2026);
-3. PDFs de KANBAN (nome começa pela data: «18-08-2026.PDF») são submetidos a
-   ``POST /upload?return=json``. Como o servidor NÃO deduplica folhas (o
-   mesmo PDF submetido duas vezes gera folhas duplicadas e re-OCR na GPU), a
-   idempotência vive AQUI: ``data/drive_pull_state.json`` regista o sha256 de
-   cada PDF já submetido e nunca o reenvia.
-
-Desenhado para correr como tarefa agendada do Windows (2x/dia, ver
-``scripts/ops/register_drive_pull.ps1``); cada corrida apanha o atraso da
-anterior, por isso falhas de rede não perdem nada.
-
-    python scripts/drive_pull.py --dry-run    # mostra o que faria
-    python scripts/drive_pull.py
-
-Requer o extra ``drive`` (``pip install -e .[drive]`` → gdown).
+The original OCR reads references from F:\\ocr\\files and receives no
+references or scans from Drive. Its production export and SQLite backup are
+excluded from uploads, including old files left in the shared output folder.
+The historical Windows task name is retained so the MES workflows keep running.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import os
-import re
 import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 
 _REPO = Path(__file__).resolve().parents[1]
 _STAGING = _REPO / "data" / "_drive_staging"
-_STATE_PATH = _REPO / "data" / "drive_pull_state.json"
 _LOG_PATH = _REPO / "data" / "_logs" / "drive_pull.log"
 
 # A pasta pública «MTG | Kanban Digital» — a mesma de onde o planeamento e o
 # scanner já são consumidos pelo resto do ecossistema.
 DEFAULT_FOLDER_ID = "1ZYUt85vo7ETRX8Q8orhtFfG6f1Z3Nj-6"
 
-# PDFs de kanban começam pela data («06-08-2026 - Rapid20T 1.pdf»,
-# «18-08-2026.PDF»); tudo o resto na pasta são planos/relatórios.
-_KANBAN_PDF = re.compile(r"^\d{2}-\d{2}-\d{4}.*\.pdf$", re.IGNORECASE)
-
-# A pasta do Drive tem subpastas por setor («Kanban's MTG2», «Kanban's MTG3»)
-# e os NOMES de PDF repetem-se entre elas (dois «18-08-2026.PDF» diferentes).
-# Este sistema só ingere os do seu setor; ajustável por env sem mexer no
-# código (lista separada por ponto-e-vírgula).
-_DEFAULT_SCAN_SUBDIRS = "Kanban's MTG2"
-
-# Referências que a app consome via ref_importer (classificação por conteúdo;
-# os nomes aqui são só um filtro para não arrastar Excels gigantes de planos
-# que não são refs — o Met3_Plan_Cantoneiras tem ~50 MB).
-# SÓ ficheiros cuja FONTE é o Drive (planeamento). Um ficheiro que nasce no
-# próprio PC nunca pode entrar nesta lista: a cópia do Drive está sempre
-# atrasada e substituí-lo destrói dados — foi o que aconteceu ao StockSAP e
-# ao plan_colunas_cpis (cópias de 07/08 a esmagar os exports diários do SAP
-# da rotina de IT em F:\ocr\files).
-_REF_NAMES = re.compile(
-    r"^(lista ?colaboradores|maquinas)\.xls[xm]$",
-    re.IGNORECASE,
+# Only these applications may participate in this shared Drive transport.
+_MES_EXPORT_PORTS = {
+    "BaseDados_Cantoneiras_MTG3": 8100,
+    "BaseDados_Perfis_MTG2": 8101,
+}
+_MES_BACKUP_APPS = ("kanban-mes", "kanban-mes-mtg2")
+_MES_OUTPUT_PATTERNS = (
+    *(f"/{name}.xlsx" for name in _MES_EXPORT_PORTS),
+    *(f"/backups/{app}/app-*.db" for app in _MES_BACKUP_APPS),
 )
 
-# Espaço para o /upload rasterizar um PDF de dezenas de páginas.
-_UPLOAD_TIMEOUT_S = 300.0
+
+def _mes_url(url: str, *, port: int | None = None, path: str) -> bool:
+    try:
+        parsed = urlsplit(url.strip())
+        return (
+            parsed.scheme == "http"
+            and parsed.hostname in ("127.0.0.1", "localhost")
+            and parsed.port in ((port,) if port else (8100, 8101))
+            and parsed.path.rstrip("/") == path
+            and not parsed.username and not parsed.password
+        )
+    except ValueError:
+        return False
 
 
 def log(msg: str) -> None:
@@ -90,20 +67,6 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def load_state() -> dict:
-    try:
-        return json.loads(_STATE_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"submitted": {}}
-
-
-def save_state(state: dict) -> None:
-    _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = _STATE_PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, _STATE_PATH)
 
 
 def refs_import_dir() -> Path:
@@ -147,78 +110,6 @@ def download_folder(folder_id: str, dest: Path, rclone_base: str = "",
     return sorted(p for p in dest.rglob("*") if p.is_file())
 
 
-def place_refs(files: list[Path], import_dir: Path, dry_run: bool) -> int:
-    placed = 0
-    for src in files:
-        if not _REF_NAMES.match(src.name):
-            continue
-        target = import_dir / src.name
-        if target.exists() and sha256_file(target) == sha256_file(src):
-            continue                      # igual ao que lá está: nada a fazer
-        # Guarda de frescura: o rclone e o copy2 preservam a data de
-        # modificação original, por isso dá para comparar as duas cópias.
-        # Uma ref local mais recente NUNCA é substituída — se um nome local
-        # entrar por engano na lista acima, o pior que acontece é nada.
-        if target.exists() and target.stat().st_mtime >= src.stat().st_mtime:
-            log(f"ref {src.name} ignorada: a cópia local é mais recente")
-            continue
-        if dry_run:
-            log(f"[dry-run] ref {src.name} -> {target}")
-        else:
-            import_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, target)
-            log(f"ref pousada para o importador: {src.name}")
-        placed += 1
-    return placed
-
-
-def scan_subdirs() -> tuple[str, ...]:
-    raw = os.environ.get("DRIVE_PULL_SUBDIRS", _DEFAULT_SCAN_SUBDIRS)
-    return tuple(s.strip().lower() for s in raw.split(";") if s.strip())
-
-
-def submit_scans(files: list[Path], app_url: str, state: dict,
-                 dry_run: bool) -> tuple[int, int]:
-    novos = repetidos = 0
-    subdirs = scan_subdirs()
-    submitted: dict = state.setdefault("submitted", {})
-    for pdf in files:
-        if not _KANBAN_PDF.match(pdf.name):
-            continue
-        if pdf.parent.name.strip().lower() not in subdirs:
-            continue                      # PDF de outro setor: não é nosso
-        sha = sha256_file(pdf)
-        if sha in submitted:
-            repetidos += 1
-            continue
-        if dry_run:
-            log(f"[dry-run] submeteria {pdf.name} ({pdf.stat().st_size} bytes)")
-            novos += 1
-            continue
-        with pdf.open("rb") as fh:
-            resp = httpx.post(
-                f"{app_url}/upload",
-                params={"return": "json"},
-                files={"image": (pdf.name, fh, "application/pdf")},
-                timeout=_UPLOAD_TIMEOUT_S,
-            )
-        if resp.status_code != 200:
-            # fica de fora do estado: a próxima corrida tenta outra vez
-            log(f"ERRO: upload de {pdf.name} devolveu {resp.status_code}: "
-                f"{resp.text[:200]}")
-            continue
-        payload = resp.json()
-        submitted[sha] = {
-            "name": pdf.name,
-            "sheets": payload.get("count"),
-            "submitted_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        }
-        save_state(state)                 # gravar já: um crash não re-submete
-        log(f"submetido {pdf.name}: {payload.get('count')} folha(s) na fila")
-        novos += 1
-    return novos, repetidos
-
-
 def fetch_exports(specs: list[str], saida: Path, dry_run: bool) -> list[Path]:
     """GET aos exports das apps kanban (specs «nome=url») → SAIDA local.
     As apps geram o BaseDados na hora; se uma estiver em baixo, log e segue."""
@@ -227,7 +118,13 @@ def fetch_exports(specs: list[str], saida: Path, dry_run: bool) -> list[Path]:
         if "=" not in spec:
             continue
         name, url = spec.split("=", 1)
-        dest = saida / f"{name.strip()}.xlsx"
+        name, url = name.strip(), url.strip()
+        if name not in _MES_EXPORT_PORTS or not _mes_url(
+            url, port=_MES_EXPORT_PORTS.get(name), path="/export/basedados",
+        ):
+            log(f"export ignorado: {name} nao pertence aos dois Kanbans MES")
+            continue
+        dest = saida / f"{name}.xlsx"
         if dry_run:
             log(f"[dry-run] GET {url.strip()} -> {dest.name}")
             continue
@@ -258,7 +155,14 @@ def push_outputs(remote: str, paths: list[Path], rclone: str,
             continue
         if path.is_dir():
             cmd = [rclone, "copy", str(path), remote, "--transfers", "2"]
+            # A shared SAIDA may still contain the original OCR's app.db.
+            # An allowlist also excludes renamed/unrecognised OCR artifacts.
+            for pattern in _MES_OUTPUT_PATTERNS:
+                cmd.extend(["--include", pattern])
         else:
+            if path.name not in {f"{name}.xlsx" for name in _MES_EXPORT_PORTS}:
+                log(f"saida ignorada: {path.name} nao pertence aos Kanbans MES")
+                continue
             cmd = [rclone, "copyto", str(path), f"{remote}/{path.name}",
                    "--transfers", "2"]
         if dry_run:
@@ -284,6 +188,10 @@ def mirror_tree(staging: Path, mirror: Path, dry_run: bool) -> int:
     """Espelha a pasta do Drive (com subpastas) para um diretório estável —
     é daí que as apps kanban do PC ingerem (MES_DRIVE_DIR nas subpastas do
     setor). Só copia o que mudou (sha256); nunca apaga do espelho."""
+    destination = mirror.resolve()
+    for protected in (_REPO.resolve(), refs_import_dir().resolve()):
+        if destination.is_relative_to(protected) or protected.is_relative_to(destination):
+            raise ValueError("O espelho Drive nao pode sobrepor pastas do OCR original")
     copiados = 0
     for src in sorted(p for p in staging.rglob("*") if p.is_file()):
         rel = src.relative_to(staging)
@@ -304,6 +212,9 @@ def notify(urls: list[str], dry_run: bool) -> None:
     """Avisa as apps kanban para ingerirem do espelho. Elas deduplicam por
     sha (PDF e página), por isso avisar a mais nunca duplica folhas."""
     for url in urls:
+        if not _mes_url(url, path="/ingest/drive"):
+            log("notificacao ignorada: destino fora dos dois Kanbans MES")
+            continue
         if dry_run:
             log(f"[dry-run] POST {url}")
             continue
@@ -320,9 +231,9 @@ def main() -> int:
                     help="mostra o que faria, sem copiar nem submeter")
     ap.add_argument("--folder-id",
                     default=os.environ.get("DRIVE_FOLDER_ID", DEFAULT_FOLDER_ID))
-    ap.add_argument("--app-url",
-                    default=os.environ.get("DRIVE_PULL_APP_URL",
-                                           "http://127.0.0.1:8080"))
+    # Accepted for compatibility with existing scheduled command lines;
+    # this value no longer authorizes any calls to the original OCR.
+    ap.add_argument("--app-url", help=argparse.SUPPRESS)
     ap.add_argument("--mirror-to",
                     default=os.environ.get("DRIVE_PULL_MIRROR_TO", ""),
                     help="espelhar a pasta do Drive para este diretório "
@@ -348,7 +259,7 @@ def main() -> int:
                     os.environ.get("DRIVE_PULL_EXPORT_FETCH", "").split(";")
                     if s.strip()]
 
-    log(f"drive_pull início (dry_run={args.dry_run})")
+    log(f"drive_pull início: apenas Kanbans MES; OCR original local (dry_run={args.dry_run})")
 
     # PERNA DE SUBIDA PRIMEIRO. Avaria real de 24-26/08: o download (gdown)
     # falhava com a quota do Google e o poller desistia ANTES de subir os
@@ -364,10 +275,11 @@ def main() -> int:
         # na SAIDA/ (a retenção local de 14 já existia; a remota não).
         if not args.dry_run:
             import subprocess
-            subprocess.run([args.rclone, "delete",
-                            f"{args.push_remote.strip()}/backups",
-                            "--min-age", "14d"],
-                           capture_output=True, text=True, timeout=300)
+            for app in _MES_BACKUP_APPS:
+                subprocess.run([args.rclone, "delete",
+                                f"{args.push_remote.strip()}/backups/{app}",
+                                "--min-age", "14d"],
+                               capture_output=True, text=True, timeout=300)
 
     # O remote base do rclone («gdrive:») deriva do push_remote; sem push
     # configurado pode vir de DRIVE_PULL_REMOTE, senão cai no gdown.
@@ -383,18 +295,13 @@ def main() -> int:
         return 1
     log(f"{len(files)} ficheiro(s) na pasta do Drive")
 
-    state = load_state()
-    refs = place_refs(files, refs_import_dir(), args.dry_run)
-    novos, repetidos = submit_scans(files, args.app_url.rstrip("/"), state,
-                                    args.dry_run)
     espelhados = 0
     if args.mirror_to:
         espelhados = mirror_tree(_STAGING, Path(args.mirror_to), args.dry_run)
         notify(notify_urls, args.dry_run)
 
-    log(f"drive_pull fim: {refs} ref(s), {novos} PDF(s) novo(s), "
-        f"{repetidos} já submetido(s), {espelhados} espelhado(s), "
-        f"{subidos} subido(s) à SAIDA")
+    log(f"drive_pull fim (Kanbans MES): {espelhados} espelhado(s), "
+        f"{subidos} subido(s) à SAIDA; OCR original sem operacoes Drive")
     return 0
 
 

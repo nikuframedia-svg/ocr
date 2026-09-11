@@ -11,7 +11,7 @@ Runbook ops (R65, R105). Movidos de `data/_logs/` no R107.
 Uso típico no PC da Metalogalva:
 
 ```
-cd C:\ocr
+cd F:\Apps\OCR-original
 powershell -ExecutionPolicy Bypass -File scripts\ops\update.ps1
 ```
 
@@ -22,44 +22,46 @@ https://ocr.nikufra.ai) por um túnel SSH invertido — a ponte é a tarefa
 Windows «OCR PC Bridge» em `C:\OCR-Suite\kit`, FORA deste repo. A app tem
 de continuar em 127.0.0.1:8080 (é a porta que a ponte expõe).
 
-## Google Drive — refs + PDFs + backup da app.db (R267/R268)
+## Referências do OCR original: pasta local
 
-A via normal de entrada de dados passou a ser o poller `drive_pull`
-(scripts/drive_pull.py, 2x/dia): descarrega a pasta partilhada do Drive
-para o espelho local, pousa os refs no `KANBAN_REFS_IMPORT_DIR` (quem os
-instala é o `ref_importer` nativo) e submete os PDFs da subpasta
-«Kanban's MTG2» ao `POST /upload` (idempotência por sha256 no próprio
-poller — `data/drive_pull_state.json`). O upload manual em `/refs`
-continua a funcionar.
+As referências entram exclusivamente por `F:\ocr\files` (ou pela pasta local
+configurada em `KANBAN_REFS_IMPORT_DIR`). O importador vigia essa pasta a cada
+15 minutos e instala os ficheiros em `kanban_refs\04_Documentacao`.
+`Importar pasta agora` antecipa essa leitura local. A correção de antiguidade
+usa a data do ficheiro e apresenta bloqueios explicitamente.
 
-Setup no PC da fábrica (uma vez):
+O OCR original não recebe referências/PDFs do Drive nem envia produção/backups
+para o Drive. Captura e upload manual continuam disponíveis. Os ficheiros
+`Kanbans_Producao_NOVO.xlsx` e CSV da produção continuam a ser gerados localmente.
 
-1. Merge da branch `feature/drive-pull` + `pip install -e .[drive]`.
-2. No `.env` acrescentar:
-   ```
-   DRIVE_PULL_MIRROR_TO=C:\OCR-Suite\drive
-   DRIVE_PULL_NOTIFY=http://127.0.0.1:8100/ingest/drive;http://127.0.0.1:8101/ingest/drive
-   KANBAN_DB_BACKUP_DIR=C:\OCR-Suite\saida
-   ```
-   (`KANBAN_REFS_IMPORT_DIR` conforme a convenção do drive_pull; a pasta
-   de backup é de SAÍDA dedicada — não usar o espelho de entrada
-   `C:\OCR-Suite\drive`. A subida ao Drive da pasta de saída é do
-   drive_pull, PUSH_FILES. O notify alimenta os dois kanban MES nas portas
-   8100/8101 — repo separado, não tocar.)
-3. `powershell -File scripts\ops\register_drive_pull.ps1` (uma vez).
-4. `powershell -File scripts\ops\update.ps1` e verificar em
-   `http://127.0.0.1:8080/admin/refs-status`:
-   - `refs_importer.source_dir` aponta ao destino dos refs do drive_pull;
-   - `db_backup.dest_dir = C:\OCR-Suite\saida`, `db_backup.last_ok = true`
-     e o ficheiro `app.db` aparece lá (atualiza a cada hora e a cada
-     update.ps1).
-5. Restauro da base de dados: parar o servidor, copiar o `app.db` da pasta
-   de saída (ou da versão no Drive) para `data\app.db`, arrancar.
-6. Notas:
-   - Para REVERTER de propósito para um plano antigo: upload manual em
-     `/refs` e REMOVER o xlsx mais novo da pasta do Drive (senão o poller
-     volta a trazê-lo). O importador recusa planos com max OF inferior ao
-     ativo — aparece em `skipped` no `/admin/refs-status` com
-     `guard: plan_recency`.
-   - Os PDFs repetem nomes entre setores do Drive — o poller só trata a
-     subpasta «Kanban's MTG2»; nunca assumir nome de PDF único.
+## Backups locais do OCR
+
+`KANBAN_DB_BACKUP_ENABLED=1` ativa backups em `<repo>\data\backups\app.db`.
+Uma configuração antiga `KANBAN_DB_BACKUP_DIR` não vazia mantém os backups
+ligados por compatibilidade, mas o destino antigo é ignorado. O valor explícito
+`KANBAN_DB_BACKUP_ENABLED=0` desliga a função. Verificar `db_backup.dest_dir`
+em `/admin/refs-status` depois de atualizar/reiniciar.
+
+Para restaurar, parar o OCR e repor a cópia local de `app.db`. As cópias antigas
+no Drive não são apagadas por esta alteração.
+
+## Drive dos outros dois Kanbans MES
+
+Não desativar a tarefa partilhada `OCR Drive Pull`: serve os outros dois
+Kanbans, conforme o âmbito confirmado pelo Luís em 11/09/2026. O nome da tarefa
+e os scripts existentes são mantidos. O poller passa a executar apenas:
+
+- espelho da pasta Drive para `DRIVE_PULL_MIRROR_TO`, preservando subpastas;
+- notificações para `http://127.0.0.1:8100/ingest/drive` e `:8101/ingest/drive`;
+- exports `BaseDados_Cantoneiras_MTG3.xlsx` e `BaseDados_Perfis_MTG2.xlsx`;
+- backups em `SAIDA/backups/kanban-mes/app-*.db` e
+  `SAIDA/backups/kanban-mes-mtg2/app-*.db`, com a retenção existente de 14 dias.
+
+A subida da pasta partilhada aceita apenas esses quatro padrões; o `app.db`
+antigo do OCR e `Kanbans_Producao_NOVO.xlsx` ficam excluídos mesmo que ainda
+constem da configuração antiga. O espelho recusa destinos que se sobreponham
+à instalação do OCR ou à pasta local de referências. O parâmetro legado
+`--app-url` deixa de produzir chamadas ao OCR original.
+
+A rotina externa de IT que grava o plano/StockSAP em `F:\ocr\files` continua
+necessária. Não é substituída pela tarefa Drive.

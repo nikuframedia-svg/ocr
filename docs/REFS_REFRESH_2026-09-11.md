@@ -31,4 +31,31 @@ Testes específicos cobrem a regressão da OF 2502343, diminuição do número d
 .venv/bin/python -m pytest -q -m 'not vllm'
 ```
 
-Resultado da versão publicada em 11/09/2026, preparada sobre `origin/main` (`a953cd3`): **1 485 testes passaram**, 2 testes vLLM excluídos e cobertura de **70,85%**. A cópia isolada de testes foi inicializada com uma base SQLite vazia; antes dessa preparação, 10 testes falhavam por ausência da tabela `sheets`, comportamento também reproduzido na versão original sem a correção. A página foi renderizada em Chromium com o resultado do incidente: 1 igual e 1 bloqueado, com motivo visível.
+Resultado da versão preparada em 11/09/2026, preparada sobre `origin/main` (`a953cd3`): **1 485 testes passaram**, 2 testes vLLM excluídos e cobertura de **70,85%**. A cópia isolada de testes foi inicializada com uma base SQLite vazia; antes dessa preparação, 10 testes falhavam por ausência da tabela `sheets`, comportamento também reproduzido na versão original sem a correção. A página foi renderizada em Chromium com o resultado do incidente: 1 igual e 1 bloqueado, com motivo visível.
+
+## OCR original sem Drive — âmbito confirmado em 11/09/2026
+
+O Luís confirmou que a desativação do Drive se aplica apenas ao OCR original.
+A entrada de referências mantém-se em `F:\ocr\files`; o importador local e a
+correção de antiguidade continuam ativos. O poller partilhado deixa de copiar
+referências ou submeter PDFs ao OCR original. Também deixa de pedir ou enviar
+exports do OCR. As configurações antigas de export/push do OCR são ignoradas.
+
+A tarefa Windows existente continua a servir os dois Kanbans MES. As chamadas
+são limitadas aos exports e à ingestão em 8100/8101. A subida aceita apenas os
+dois BaseDados e os backups de `kanban-mes` e `kanban-mes-mtg2`. Assim, o
+`app.db` antigo eventualmente presente na pasta partilhada não volta a subir.
+O espelho não pode ter como destino a instalação do OCR ou a pasta local de
+referências. As cópias antigas no Drive não foram apagadas.
+
+Os backups do OCR, quando ligados, passam a `<repo>/data/backups/app.db`.
+`KANBAN_DB_BACKUP_ENABLED` permite ligá-los/desligá-los; uma configuração
+antiga `KANBAN_DB_BACKUP_DIR` mantém a função ligada, mas o destino antigo
+é ignorado. Não se desativa a tarefa partilhada dos outros sistemas.
+
+Verificação final: **1 495 testes passaram**, 2 testes vLLM excluídos,
+cobertura **70,85%**. Os 100 testes específicos incluíram uma cópia local real
+com rclone, confirmando que os artefactos do OCR ficam excluídos e os quatro
+padrões de saída dos MES são preservados. Não foi feito acesso ao Drive por
+este teste. As alterações estão preparadas localmente; a publicação GitHub
+e a aplicação no PC continuam pendentes por falta de acesso autenticado.

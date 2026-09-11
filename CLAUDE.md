@@ -54,28 +54,21 @@ Audit trail do agente Qwen em `backend/app/pipeline/qwen_agent.py` +
   `C:\OCR-Suite\kit`). **A app TEM de ficar em 127.0.0.1:8080** — é essa a
   porta que a ponte expõe. O cloudflared/QR do start.ps1 ficou redundante:
   não remover ainda, mas não investir mais nele.
-- **Ingestão Drive** (`feature/drive-pull`): `scripts/drive_pull.py` +
-  wrappers em `scripts/ops/`. Poller 2×/dia descarrega a pasta partilhada
-  do Google Drive e (a) pousa os refs (StockSAP, plan_colunas_cpis,
-  ListaColaboradores, maquinas) no `KANBAN_REFS_IMPORT_DIR` — instala-os o
-  `ref_importer` nativo, logo o guard `plan_recency` (R267) aplica-se;
-  (b) submete os PDFs da subpasta **«Kanban's MTG2»** ao `POST /upload`.
-  **INVARIANTE: o /upload NÃO deduplica folhas — a idempotência vive no
-  poller (`data/drive_pull_state.json`, sha256 por PDF). Ao mexer no upload
-  OU no poller, preservar isto.**
-- **Layout da pasta Drive**: scans em subpastas por setor («Kanban's MTG2»
-  é a nossa); os nomes de PDF REPETEM-SE entre setores — nunca assumir nome
-  único. O upload manual de refs em /refs continua a funcionar, mas a via
-  normal é o Drive.
-- **Instalação na fábrica** (uma vez): merge da branch, `pip install -e
-  .[drive]`, no .env `DRIVE_PULL_MIRROR_TO=C:\OCR-Suite\drive` (espelho de
-  ENTRADA) e `DRIVE_PULL_NOTIFY=http://127.0.0.1:8100/ingest/drive;http://127.0.0.1:8101/ingest/drive`,
-  e correr `scripts\ops\register_drive_pull.ps1`. O espelho/notify alimenta
-  os dois kanban MES.
-- **Backup app.db (R267)**: `KANBAN_DB_BACKUP_DIR=C:\OCR-Suite\saida` —
-  pasta de SAÍDA dedicada (não misturar com `C:\OCR-Suite\drive`, que é a
-  ENTRADA do drive_pull). A subida ao Drive da pasta de saída é do
-  drive_pull (PUSH_FILES).
+- **OCR original exclusivamente local (Luís, 11/09/2026):** as referências
+  entram por `F:\ocr\files` e o `ref_importer` instala-as na pasta ativa.
+  Não importar referências/PDFs nem enviar produção/backups do OCR pelo Drive.
+  A captura/upload manual continua disponível. Não reativar a participação
+  do OCR no Drive ao alterar scripts partilhados.
+- **Tarefa Drive partilhada:** mantém o nome histórico `OCR Drive Pull`, mas
+  serve apenas os dois Kanbans MES: espelho com subpastas, notificações em
+  8100/8101, dois BaseDados e backups `backups/kanban-mes*/app-*.db`. Os nomes
+  dos PDFs repetem-se entre setores; preservar sempre as subpastas.
+  Envios são limitados aos artefactos conhecidos dos MES, mesmo quando
+  `DRIVE_PULL_PUSH_FILES` ainda contém a produção antiga do OCR.
+- **Backup local do OCR:** `KANBAN_DB_BACKUP_ENABLED=1` guarda em
+  `<repo>/data/backups/app.db`. Um `KANBAN_DB_BACKUP_DIR` antigo não vazio
+  mantém a função ligada mas deixa de determinar o destino; o backup passa
+  a local. `KANBAN_DB_BACKUP_ENABLED=0` desliga explicitamente.
 - **Transporte Ollama duplicado**: as lições do `ocr6.py` (sem json mode,
   múltiplos de 28, `/no_think` reforçado, salvage de JSON truncado) foram
   replicadas nos kanban MES — um bug encontrado nessa zona vive em DOIS
