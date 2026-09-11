@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -382,17 +383,20 @@ def test_ref_importer_plan_recency_guard_blocks_stale_plan(tmp_path, log_path):
     _write_plan(source_dir / "plan_antigo.xlsx", [
         ["B", "2512130", "260108", "CFH2F07RI", 9, 0, 0, 0, 0, 0, 0, 0, 4, 659, 242, 11050],
     ])
+    os.utime(active_plan, (2000, 2000))
+    os.utime(source_dir / "plan_antigo.xlsx", (1000, 1000))
     watcher = ref_watcher.RefWatcher(doc_dir=doc_dir, repo_root=tmp_path)
     before_sha = ref_watcher.file_sha256(active_plan)
 
     result = ref_importer.import_refs_from_dir(source_dir, watcher=watcher)
 
-    assert result["ok"] is True
+    assert result["ok"] is False
     assert result["imported"] == []
     guard_skips = [s for s in result["skipped"] if s.get("guard") == "plan_recency"]
     assert len(guard_skips) == 1
-    assert "260108" in guard_skips[0]["reason"]
-    assert "263348" in guard_skips[0]["reason"]
+    assert "data de origem não posterior" in guard_skips[0]["reason"]
+    assert result["blocked"] == guard_skips
+    assert ref_importer.status()["last_error"] == guard_skips[0]["reason"]
     assert ref_watcher.file_sha256(active_plan) == before_sha
 
 
@@ -420,6 +424,68 @@ def test_ref_importer_plan_recency_guard_allows_equal_and_newer(tmp_path, log_pa
     ])
     result = ref_importer.import_refs_from_dir(source_dir, watcher=watcher)
     assert [i["kind"] for i in result["imported"]] == ["plan"]
+
+
+@pytest.mark.parametrize("source_mtime,expected_ok", [(3000, True), (2000, False), (1000, False)])
+def test_plan_refresh_uses_export_date_not_highest_of(
+    tmp_path, log_path, source_mtime, expected_ok,
+):
+    """Incident: a closed seven-digit OF must not pin a September 8 plan."""
+    docs, source = tmp_path / "docs", tmp_path / "source"
+    docs.mkdir()
+    source.mkdir()
+    active = docs / "plan_colunas_cpis.xlsx"
+    incoming = source / "plan_colunas_cpis.xlsx"
+    _write_plan(active, [
+        ["FEDERATION", "2502343", "2502343", "CLOSED", 1, 1, 1, 1, 1, 1, 1, 1, 2.6, 378, 180, 4500],
+        ["A", "2600000", "265100", "OLD", 1, 0, 0, 0, 0, 0, 0, 0, 4, 600, 200, 9000],
+    ])
+    _write_plan(incoming, [
+        ["B", "2600001", "999999", "NEW", 1, 0, 0, 0, 0, 0, 0, 0, 4, 600, 200, 9000],
+    ])
+    os.utime(active, (2000, 2000))
+    os.utime(incoming, (source_mtime, source_mtime))
+    before = ref_watcher.file_sha256(active)
+    watcher = ref_watcher.RefWatcher(doc_dir=docs, repo_root=tmp_path)
+    preview = ref_importer.import_refs_from_dir(source, watcher=watcher, dry_run=True)
+    assert preview["ok"] is expected_ok
+    assert ref_watcher.file_sha256(active) == before
+
+    result = ref_importer.import_refs_from_dir(source, watcher=watcher)
+    assert result["ok"] is expected_ok
+    if expected_ok:
+        assert result["blocked"] == []
+        assert ref_watcher.file_sha256(active) == ref_watcher.file_sha256(incoming)
+        assert active.stat().st_mtime == source_mtime
+        assert "999999" in watcher.get_refs()["ofs_plan_str"]
+        assert "2502343" not in watcher.get_refs()["ofs_plan_str"]
+        again = ref_importer.import_refs_from_dir(source, watcher=watcher)
+        assert again["ok"] is True
+        assert again["imported"] == []
+        assert len(again["skipped"]) == 1
+    else:
+        assert len(result["blocked"]) == 1
+        assert ref_watcher.file_sha256(active) == before
+
+
+def test_import_folder_shows_blocked_reason_instead_of_unchanged(monkeypatch):
+    from urllib.parse import unquote_plus
+
+    result = {
+        "ok": False, "imported": [], "errors": [],
+        "blocked": [{"reason": "data de origem não posterior ao ativo"}],
+    }
+    monkeypatch.setattr(ref_importer, "import_refs_from_config", lambda: result)
+    response = TestClient(main.app).post(
+        "/refs/import-folder", data={"back": "/admin/referencias"}, follow_redirects=False,
+    )
+    location = unquote_plus(response.headers["location"])
+    assert "1 bloqueado(s)" in location
+    assert "data de origem não posterior" in location
+    assert "já iguais" not in location
+    api = TestClient(main.app).post("/admin/import-refs")
+    assert api.status_code == 400
+    assert api.json()["blocked"] == result["blocked"]
 
 
 def test_plan_inspection_rejects_missing_required_columns(tmp_path):

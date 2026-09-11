@@ -208,7 +208,7 @@ def inspect_refs_xlsx(path: Path, kind: str) -> tuple[str | None, dict[str, Any]
             info["n_ofs"] = len(ofs)
             info["n_ovs"] = len(ovs)
             info["n_plan_rows"] = info["n_rows"]
-            # R267 — feeds the stale-plan guard in import_refs_from_dir.
+            # Diagnostic only: OF numbers do not establish export chronology.
             info["max_of"] = max(
                 (int(o) for o in ofs if o.isdigit()), default=0
             )
@@ -385,31 +385,27 @@ def _target_for_kind(watcher: RefWatcher, kind: str) -> Path:
 
 
 def _plan_regression_reason(cand: RefCandidate, watcher: RefWatcher) -> str | None:
-    """R267 — guard contra plano STALE na pasta partilhada (Drive).
+    """R267: compare source timestamps, never OF magnitudes or row counts.
 
-    Um export SAP mais novo pode ter MENOS linhas (ordens concluídas saem do
-    plano), mas nunca um max OF inferior ao ativo — as OFs são 6 dígitos
-    crescentes. Contagens dariam falsos positivos; o max OF só dispara em
-    ficheiros genuinamente antigos. Só bloqueia o caminho automático; o
-    upload manual em /refs continua livre (rollback deliberado).
-
-    Fail-open: sem refs ativos, sem OFs no ativo ou sem max_of no candidato
-    ⇒ passa (o guard nunca pode brickar o importador).
+    The external SAP exporter supplies the source mtime; copy2 preserves it
+    in the active workbook. Closed orders can disappear and anomalous OFs
+    can exceed every current OF (incident: 2502343 blocked 999999). Neither
+    is evidence of an older export. Identical hashes are handled beforehand.
+    A differing file with an older/equal timestamp needs manual review.
     """
-    cand_max = cand.info.get("max_of")
-    if not isinstance(cand_max, int) or cand_max <= 0:
+    target = _target_for_kind(watcher, "plan")
+    if not target.exists():
         return None
-    try:
-        active_ofs = watcher.get_refs().get("ofs_plan_str") or frozenset()
-    except Exception:
+    active_mtime = target.stat().st_mtime
+    if cand.mtime > active_mtime:
         return None
-    active_max = max((int(o) for o in active_ofs if str(o).isdigit()), default=0)
-    if active_max <= 0 or cand_max >= active_max:
-        return None
+    source_date = datetime.fromtimestamp(cand.mtime, timezone.utc).isoformat()
+    active_date = datetime.fromtimestamp(active_mtime, timezone.utc).isoformat()
     return (
-        f"plano mais antigo que o ativo (max OF {cand_max} < {active_max}) — "
-        "para reverter de propósito usa o upload manual em /refs e remove "
-        "este ficheiro da pasta partilhada"
+        f"plano com conteúdo diferente e data de origem não posterior ao ativo "
+        f"(origem {source_date}; ativo {active_date}) — "
+        "confirma o ficheiro exportado; para uma substituição deliberada "
+        "usa Carregar plano"
     )
 
 
@@ -543,6 +539,9 @@ def _remember_result(result: dict[str, Any]) -> dict[str, Any]:
                 if e.get("error")
             )
             or None
+        ) or (
+            "; ".join(str(item["reason"]) for item in result.get("blocked", []))
+            or None
         )
         _state["last_result"] = _state_result(result)
     return result
@@ -626,9 +625,10 @@ def import_refs_from_dir(
             to_import.append((cand, target))
 
         imported: list[_ImportedRef] = []
+        blocked = [item for item in skipped if item.get("guard")]
         if dry_run:
             result = {
-                "ok": True,
+                "ok": not blocked,
                 "dry_run": True,
                 "source_dir": str(source),
                 "scanned": scan["scanned"],
@@ -636,6 +636,7 @@ def import_refs_from_dir(
                 "rejected": scan["rejected"],
                 "selected": [c.as_dict() for c, _target in to_import],
                 "skipped": skipped,
+                "blocked": blocked,
                 "imported": [],
                 "errors": [],
             }
@@ -682,12 +683,13 @@ def import_refs_from_dir(
                 _record_imports(imported, refs)
 
         result = {
-            "ok": not errors,
+            "ok": not errors and not blocked,
             "source_dir": str(source),
             "scanned": scan["scanned"],
             "candidates": scan["candidates"],
             "rejected": scan["rejected"],
             "skipped": skipped,
+            "blocked": blocked,
             "imported": [item.as_dict() for item in imported],
             "errors": errors,
             "refs_loaded_at": refs.get("loaded_at") if refs else None,

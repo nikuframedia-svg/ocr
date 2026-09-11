@@ -57,17 +57,25 @@
         {% endif %}
       </div>
       {% set last_import = refs_importer.last_result or {} %}
+      {% set unchanged = (last_import.skipped or [])|selectattr('reason', 'equalto', 'igual ao ficheiro ativo')|list %}
+      {% set blocked = last_import.blocked or (last_import.skipped or [])|selectattr('guard', 'defined')|list %}
       {% if last_import %}
       <div class="muted tiny" style="margin-top:8px;">
         último import:
-        {% if last_import.ok %}ok{% else %}erro{% endif %}
+        {% if blocked %}com bloqueios{% elif last_import.ok %}ok{% else %}erro{% endif %}
         · {{ (last_import.imported or [])|length }} importado(s)
-        · {{ (last_import.skipped or [])|length }} igual(is)
+        · {{ unchanged|length }} igual(is)
+        · {{ blocked|length }} bloqueado(s)
         · {{ (last_import.candidates or [])|length }} candidato(s)
         {% if last_import.refs_loaded_at %}
           · refs carregadas: {{ last_import.refs_loaded_at }}
         {% endif %}
       </div>
+      {% for item in blocked %}
+      <div class="muted tiny" role="alert" style="margin-top:6px;">
+        {{ item.filename }}: {{ item.reason }}
+      </div>
+      {% endfor %}
       {% if last_import.imported %}
       <div class="muted tiny" style="margin-top:6px;">
         {% for item in last_import.imported %}

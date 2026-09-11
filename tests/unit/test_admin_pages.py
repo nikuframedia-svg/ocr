@@ -103,6 +103,33 @@ class TestAdminSkeleton:
         assert 'name="back" value="/refs"' in r.text
 
 
+@pytest.mark.parametrize("path", ["/refs", "/admin/referencias"])
+def test_blocked_plan_is_not_labelled_unchanged(
+    tmp_db, fake_refs, client, monkeypatch, path,
+):
+    # Also renders a legacy last_result, before the new blocked field exists.
+    monkeypatch.setattr(main.ref_importer, "status", lambda: {
+        "enabled": True, "thread_alive": True, "source_dir": r"F:\ocr\files",
+        "interval_seconds": 900, "last_error": None,
+        "last_result": {
+            "ok": True, "imported": [], "candidates": [{}, {}],
+            "skipped": [
+                {"kind": "stocksap", "reason": "igual ao ficheiro ativo"},
+                {"kind": "plan", "filename": "plan_colunas_cpis.xlsx",
+                 "guard": "plan_recency", "reason": "Plano bloqueado para revisão"},
+            ],
+        },
+    })
+    response = client.get(path, headers=_DESKTOP)
+    assert response.status_code == 200
+    assert "1 igual(is)" in response.text
+    assert "1 bloqueado(s)" in response.text
+    assert "2 igual(is)" not in response.text
+    assert "com bloqueios" in response.text
+    assert "Plano bloqueado para revisão" in response.text
+    assert 'role="alert"' in response.text
+
+
 class TestRefsBackWhitelist:
     def test_default(self):
         resp = main._refs_redirect("ok", "x")

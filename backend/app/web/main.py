@@ -3346,6 +3346,15 @@ def refs_import_folder(back: str = Form("/refs")) -> Response:
     errors = result.get("error") or "; ".join(
         str(e.get("error")) for e in result.get("errors", []) if e.get("error")
     )
+    blocked = result.get("blocked") or []
+    if blocked:
+        reasons = "; ".join(str(item.get("reason") or "") for item in blocked)
+        return _refs_redirect(
+            "err",
+            f"importação da pasta: {len(result.get('imported') or [])} atualizado(s), "
+            f"{len(blocked)} bloqueado(s): {reasons}",
+            back=back,
+        )
     return _refs_redirect(
         "err",
         f"importação da pasta falhou: {errors or 'erro desconhecido'}",
