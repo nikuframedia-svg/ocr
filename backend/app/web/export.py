@@ -444,8 +444,9 @@ CPIS_COLUMNS: tuple[tuple[str, str], ...] = (
     # R261 — Sucata (rev00) no fim para não deslocar as colunas do template
     # original do importador CPIS.
     ("sucata", "Sucata"),
-    # Lote fica no fim para preservar todas as posições CPIS existentes.
+    # Novas colunas são acrescentadas no fim para preservar as posições CPIS.
     ("lote", "Lote"),
+    ("fecho", "Fechar bobine"),
 )
 
 
@@ -733,6 +734,7 @@ def _build_cpis_row(row: dict, refs: dict | None = None) -> dict:
         "sucata": _to_int(row.get("sucata")),
         # Identificador textual; preservar exatamente o valor validado.
         "lote": row.get("lote") or "",
+        "fecho": "X" if str(row.get("fecho") or "").strip().upper() == "X" else "",
     }
 
 
@@ -807,7 +809,7 @@ def build_cpis_workbook(
     widths = [
         12, 16, 24, 24, 12, 10, 10, 20, 24, 8, 12, 10,
         14, 10, 10, 16, 14, 12, 10, 10, 16, 16, 14, 12,
-        10, 14,
+        10, 14, 18,
     ]
     for ci, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(ci)].width = w

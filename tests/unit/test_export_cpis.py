@@ -47,6 +47,7 @@ EXPECTED_HEADER_LABELS = [
     "Sucata",
     # Lote acrescentado no fim para preservar as posições anteriores.
     "Lote",
+    "Fechar bobine",
 ]
 
 
@@ -465,8 +466,8 @@ def test_workbook_header_row_matches_template() -> None:
     assert data_by_header["Nº Chapas"] is not None
     assert data_by_header["Peso Consumido (t)"] > 0
     assert data_by_header["Desperdício (t)"] >= 0
-    assert header_row[-1] == "Lote"
-    assert data_row[-1] == "M26B0330"
+    assert header_row[-2:] == ["Lote", "Fechar bobine"]
+    assert data_row[-2:] == ["M26B0330", None]
 
 
 def test_workbook_bobine_uses_geometric_produced_weight(monkeypatch) -> None:

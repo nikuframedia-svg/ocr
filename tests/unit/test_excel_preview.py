@@ -1,10 +1,13 @@
 """Regression tests for the read-only /excel CPIS preview."""
 from __future__ import annotations
 
+import io
 import re
 
+import openpyxl
 import pytest
-from app.web import db, main
+from app import cross_check
+from app.web import db, export, main
 from fastapi.testclient import TestClient
 
 _DESKTOP = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
@@ -202,3 +205,58 @@ def test_excel_preview_shows_expedicao_produced_weight_by_ov_model(tmp_db, monke
     html = response.text
     assert "EXPEDIÇÃO" in html
     assert "0.089" in html
+
+
+def test_fecho_stays_on_original_row_in_preview_and_export(tmp_db, monkeypatch):
+    class _Watcher:
+        def get_refs(self):
+            return {}
+
+    monkeypatch.setattr(main, "get_watcher", _Watcher)
+    monkeypatch.setattr(cross_check, "get_watcher", _Watcher)
+    sid = db.insert_sheet("fecho.jpg")
+    repeated_ref = {"of": "999999", "modelo": "CGC2E10D", "lote": "L1"}
+    sheet_data = {
+        "template_name": "bobine_formato",
+        "header": {
+            "operador": "JÚLIO LIMA",
+            "data": "15-09-2026",
+            "setor_maquina": "BOBINE-FORMATO",
+        },
+        "rows": [
+            {**repeated_ref, "qtd": "1", "fecho": ""},
+            {**repeated_ref, "qtd": "2", "fecho": "X"},
+            {**repeated_ref, "qtd": "3"},
+        ],
+        "footer": {},
+    }
+    db.update_extraction(
+        sid,
+        raw_extraction=sheet_data,
+        dq_audit={"cells": {}},
+        sheet_data=sheet_data,
+    )
+
+    response = TestClient(main.app).get("/excel?of=999999", headers=_DESKTOP)
+    assert response.status_code == 200
+    headers = re.findall(r"<th>(.*?)</th>", response.text)
+    assert headers[-2:] == ["Lote", "Fechar bobine"]
+    body = re.search(r"<tbody>(.*?)</tbody>", response.text, re.S).group(1)
+    preview_rows = [
+        [re.sub(r"<[^>]+>", "", cell).strip() for cell in re.findall(
+            r"<td>(.*?)</td>", row, re.S
+        )]
+        for row in re.findall(r"<tr>(.*?)</tr>", body, re.S)
+    ]
+    assert [row[-1] for row in preview_rows] == ["", "X", ""]
+    assert [row[headers.index("QTD")] for row in preview_rows] == ["1", "2", "3"]
+
+    xlsx = export.build_cpis_workbook("2026-09-15", "2026-09-15")
+    wb = openpyxl.load_workbook(io.BytesIO(xlsx))
+    ws = wb["Folha1"]
+    assert [cell.value for cell in ws[1]] == headers
+    exported_rows = list(ws.iter_rows(min_row=2, values_only=True))
+    assert [row[-1] for row in exported_rows] == [None, "X", None]
+    assert [row[headers.index("QTD")] for row in exported_rows] == [1, 2, 3]
+    assert [row[headers.index("OF")] for row in exported_rows] == ["999999"] * 3
+    wb.close()

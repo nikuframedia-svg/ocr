@@ -62,7 +62,9 @@
               {% for key, _ in columns %}
                 {% set v = r[key] %}
                 <td>
-                  {% if v is none or v == "" %}
+                  {% if key == "fecho" %}
+                    {{ v or "" }}
+                  {% elif v is none or v == "" %}
                     <span class="muted">—</span>
                   {% elif key == "data" %}
                     {{ v.strftime("%d-%m-%Y") }}
