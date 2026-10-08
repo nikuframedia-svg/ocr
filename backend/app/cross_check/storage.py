@@ -22,7 +22,9 @@ from __future__ import annotations
 import json
 import threading
 from collections import defaultdict
+from copy import deepcopy
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 
 # R118 — fallback inteligente igual ao de ref_watcher. Sem este fix, em
@@ -138,14 +140,15 @@ def store_cross_check(
     }
 
     with _lock:
-        previous = _read_index().get(str(sheet_id))
+        sheets = _read_index()
+        previous = sheets.get(str(sheet_id))
         previous_rel = (
             str(previous.get("file") or "") if isinstance(previous, dict) else ""
         )
         _atomic_write(file_path, json.dumps(payload, indent=2, ensure_ascii=False, default=str))
         _update_index(
             sheet_id, operador, date_iso, sheet_status, summary, rel_key,
-            engine_version=engine_version,
+            engine_version=engine_version, sheets=sheets,
         )
         # A corrected date/operator changes the canonical path. Once the
         # index points at the new atomically-written payload, remove the old
@@ -164,8 +167,7 @@ def store_cross_check(
                         stale.parent.rmdir()
                 except OSError:
                     pass
-        _update_summary()
-        _update_to_analisar()
+        _update_aggregates(sheets)
 
     return {"file": str(file_path), "rel_key": rel_key}
 
@@ -183,8 +185,7 @@ def remove_sheet_cross_check(sheet_id: int) -> None:
                 pass
             idx.pop(str(sheet_id), None)
             _write_index(idx)
-            _update_summary()
-            _update_to_analisar()
+            _update_aggregates(idx)
 
 
 # --- Index helpers (keyed by sheet_id) ---
@@ -294,9 +295,10 @@ def _update_index(
     rel_key: str,
     *,
     engine_version: str | None = None,
+    sheets: dict[str, dict] | None = None,
 ) -> None:
-    raw = _read_index()
-    sheets = raw.get("sheets", raw) if isinstance(raw, dict) and "sheets" in raw else raw
+    if sheets is None:
+        sheets = _read_index()
     sheets[str(sheet_id)] = {
         "sheet_id": sheet_id,
         "operador": operador,
@@ -360,19 +362,75 @@ def _load_sheet_payload(entry: dict, *, include_stale: bool = False) -> dict | N
     return payload
 
 
-def _build_summary_from_index(sheets: dict[str, dict]) -> dict:
+@lru_cache(maxsize=32768)
+def _aggregate_payload(
+    path: Path, signature: tuple[int, int, int, int],
+) -> dict | None:
+    """Keep only aggregate inputs, never the large per-cell scoring history.
+
+    The signature is checked on every use, so edits, replacements, deletion
+    and restored files invalidate the cached contribution. Read/parse errors
+    are not cached: a transient filesystem failure must be retried next time.
+    """
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        return None
+    return {
+        key: payload.get(key)
+        for key in (
+            "sheet_id", "engine_version", "operador", "date", "summary", "to_analisar",
+        )
+    }
+
+
+def _aggregate_payloads(sheets: dict[str, dict]) -> dict[str, dict]:
+    """Validate file metadata; read JSON only for new or changed sheets.
+
+    Resolve the root once. Calling _base_dir for each historical payload
+    used to issue thousands of redundant mkdir calls on Windows as well as
+    opening and parsing every full scoring result twice per new sheet.
+    """
+    base = _base_dir()
+    current = _current_engine_version()
+    payloads: dict[str, dict] = {}
+    for sid, entry in sheets.items():
+        if current and entry.get("engine_version") != current:
+            continue
+        rel_file = entry.get("file")
+        if not rel_file:
+            continue
+        path = base / rel_file
+        try:
+            stat = path.stat()
+            payload = _aggregate_payload(
+                path, (stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns),
+            )
+        except (OSError, json.JSONDecodeError, UnicodeError):
+            continue
+        if payload is None or (current and payload.get("engine_version") != current):
+            continue
+        expected = entry.get("sheet_id")
+        actual = payload.get("sheet_id")
+        if expected is not None and actual is not None and str(actual) != str(expected):
+            continue
+        payloads[sid] = payload
+    return payloads
+
+
+def _build_summary_from_index(
+    sheets: dict[str, dict], *, payloads: dict[str, dict] | None = None,
+) -> dict:
     # Round 33: simplified statuses (MATCH/NO_MATCH/NA)
     totals = {"match": 0, "no_match": 0, "na": 0, "total": 0}
     by_day: dict[str, dict] = defaultdict(lambda: dict(totals))
     by_op: dict[str, dict] = defaultdict(lambda: dict(totals))
-    active, stale = _current_engine_entries(sheets)
+    if payloads is None:
+        payloads = _aggregate_payloads(sheets)
+    stale = len(sheets) - len(payloads)
     n_valid = 0
 
-    for entry in active.values():
-        payload = _load_sheet_payload(entry)
-        if payload is None:
-            stale += 1
-            continue
+    for sid, payload in payloads.items():
+        entry = sheets[sid]
         s = payload.get("summary") or entry.get("summary", {})
         n_valid += 1
         for k in totals:
@@ -396,12 +454,13 @@ def _build_summary_from_index(sheets: dict[str, dict]) -> dict:
     return summary
 
 
-def _update_summary() -> None:
-    """Recompute totals + per-day + per-operador from current-engine index entries."""
-    raw = _read_index()
-    sheets = raw.get("sheets", raw) if isinstance(raw, dict) and "sheets" in raw else raw
-    summary = _build_summary_from_index(sheets)
+def _update_aggregates(sheets: dict[str, dict]) -> None:
+    """Publish both compatible JSON exports from one validated snapshot."""
+    payloads = _aggregate_payloads(sheets)
+    summary = _build_summary_from_index(sheets, payloads=payloads)
+    inbox = _build_to_analisar_from_index(sheets, payloads=payloads)
     _atomic_write(_summary_path(), json.dumps(summary, indent=2, ensure_ascii=False))
+    _atomic_write(_to_analisar_path(), json.dumps(inbox, indent=2, ensure_ascii=False))
 
 
 # --- _to_analisar.json (flat inbox) ---
@@ -410,23 +469,16 @@ def _to_analisar_path() -> Path:
     return _base_dir() / "_to_analisar.json"
 
 
-def _update_to_analisar() -> None:
-    """Aggregate all NO_MATCH cells across all sheets into a flat list."""
-    raw = _read_index()
-    sheets = raw.get("sheets", raw) if isinstance(raw, dict) and "sheets" in raw else raw
-    out = _build_to_analisar_from_index(sheets)
-    _atomic_write(_to_analisar_path(), json.dumps(out, indent=2, ensure_ascii=False))
-
-
-def _build_to_analisar_from_index(sheets: dict[str, dict]) -> dict:
-    active, stale = _current_engine_entries(sheets)
+def _build_to_analisar_from_index(
+    sheets: dict[str, dict], *, payloads: dict[str, dict] | None = None,
+) -> dict:
+    if payloads is None:
+        payloads = _aggregate_payloads(sheets)
+    stale = len(sheets) - len(payloads)
     all_items: list[dict] = []
-    for entry in active.values():
-        data = _load_sheet_payload(entry)
-        if data is None:
-            stale += 1
-            continue
-        for item in data.get("to_analisar", []):
+    for sid, data in payloads.items():
+        entry = sheets[sid]
+        for item in data.get("to_analisar") or []:
             norm_item = _normalise_to_analisar_item(item)
             all_items.append({
                 "sheet_id": entry.get("sheet_id") or data.get("sheet_id"),
@@ -452,7 +504,8 @@ def _build_to_analisar_from_index(sheets: dict[str, dict]) -> dict:
         "engine_version": _current_engine_version(),
         "total": len(all_items),
         "stale_sheets": stale,
-        "items": all_items,
+        # Nested OCR/ref values returned to callers must not alias the cache.
+        "items": deepcopy(all_items),
     }
     return out
 
