@@ -941,7 +941,9 @@ _STATUS_LABELS = {
 # (GOOD 110/110, MODEL_SIB >=74%, reliability/abstenção OOD do harness).
 # R259 — lote H↔M: fim da confirmação silenciosa via variante M (ver bloco
 # R186 acima); bump força regeneração on-demand dos JSON de cross-check.
-ENGINE_VERSION = "v30_R259"
+# R270 — identidade requer a lista oficial; casing aprendido continua
+# disponível, mas não confirma uma identidade sem referência.
+ENGINE_VERSION = "v31_R270"
 
 # R250 — VARIANTE de scoring (rollout da refundação matemática R250-R252).
 # ContextVar e não global de módulo: a sombra (_spawn_shadow_scoring) corre em
@@ -5150,16 +5152,7 @@ def _score_header_footer(
             None,
         )
         if target is None:
-            target = {
-                "name": alias_name,
-                "name_norm": alias_name_norm,
-                "aliases_norm": {alias_name_norm} if alias_name_norm else set(),
-                "codes": alias_codes,
-                "pernr": alias_pernr,
-                "display_code": _operator_display_code(info.get("cod"), info),
-            }
-            colaborador_entries.append(target)
-            colaborador_codes.update(alias_codes)
+            continue
         target.setdefault("aliases_norm", set()).add(alias_norm)
 
     snames = {
@@ -5170,12 +5163,12 @@ def _score_header_footer(
     }
     header_name_norm = _norm_name(header.get("operador"))
     header_code_variants = _operator_code_variants(header.get("n_operador"))
-    entry_by_header_code = next(
-        (
-            e for e in colaborador_entries
-            if e["codes"] and header_code_variants & e["codes"]
-        ),
-        None,
+    entries_by_header_code = [
+        e for e in colaborador_entries
+        if e["codes"] and header_code_variants & e["codes"]
+    ]
+    entry_by_header_code = (
+        entries_by_header_code[0] if len(entries_by_header_code) == 1 else None
     )
     header_pernr = str(header.get("pernr") or "").strip()
     entry_by_header_pernr = next(
@@ -5219,6 +5212,32 @@ def _score_header_footer(
             if field in _NO_REF_FIELDS:
                 return _empty_rule_cell(field)
             return _make_cell("", "NA", "ocr_raw")
+        if field in {"operador", "n_operador", "pernr"}:
+            if not colaboradores:
+                if field == "n_operador" and not (
+                    _looks_like_operator_short_code(v)
+                    or (v.isdigit() and len(v) == 8 and v.startswith("1000"))
+                ):
+                    return _make_cell(v, "very_different", "syntax")
+                learned = None
+                if field == "operador":
+                    try:
+                        from app.dq.snap import canonical_case
+                        learned = canonical_case(template_name, field, v)
+                    except Exception:
+                        pass
+                return _make_cell(
+                    learned or v, "very_different", "lexicon" if learned else "ocr_raw",
+                    ref_source="colaboradores",
+                    decision_reason="learned_canonical_case" if learned else "operator_catalog_unavailable",
+                    warning="ListaColaboradores indisponível; carregar a lista oficial para confirmar a identidade.",
+                )
+            if len(entries_by_header_code) > 1:
+                return _make_cell(
+                    v, "very_different", "ocr_raw", ref_source="colaboradores",
+                    decision_reason="operator_identity_ambiguous",
+                    warning="Número associado a mais de um colaborador; confirmar a lista oficial.",
+                )
         if field == "operador" and snames:
             expected_entry = entry_by_header_code or entry_by_header_pernr
             if (
@@ -5230,6 +5249,8 @@ def _score_header_footer(
                     v, "very_different", "ocr_raw",
                     proposed=expected_entry["name"],
                     ref_source="colaboradores",
+                    decision_reason="operator_identity_conflict",
+                    warning=f"O número indicado pertence a {expected_entry['name']}; confirmar nome e número.",
                 )
             if expected_entry is None:
                 expected_entry = entry_by_header_name
@@ -5260,7 +5281,24 @@ def _score_header_footer(
                     cell = _make_cell(learned, "snapped", "lexicon")
                     cell["decision_reason"] = "learned_canonical_case"
                     return cell
+            if len(entries_by_header_name) > 1:
+                return _make_cell(
+                    v, "very_different", "ocr_raw", ref_source="colaboradores",
+                    decision_reason="operator_identity_ambiguous",
+                    warning="Nome associado a mais de um colaborador; confirmar o número na lista oficial.",
+                )
             st = "confirmed" if _norm_name(v) in snames else "very_different"
+            if st == "very_different":
+                code = str(header.get("n_operador") or "").strip()
+                reason = (
+                    f"Colaborador nº {code} não consta da ListaColaboradores; atualizar a lista oficial."
+                    if code and not entry_by_header_code else
+                    "Nome não encontrado na ListaColaboradores; confirmar nome e número."
+                )
+                return _make_cell(
+                    v, st, "ocr_raw", ref_source="colaboradores",
+                    decision_reason="operator_reference_missing", warning=reason,
+                )
             return _make_cell(v, st, "ocr_raw", ref_source="colaboradores")
         elif field == "operador":
             try:
@@ -5286,8 +5324,17 @@ def _score_header_footer(
                     v, "very_different", "ocr_raw",
                     proposed=expected_entry.get("display_code") or "",
                     ref_source="colaboradores",
+                    decision_reason="operator_identity_conflict",
+                    warning=f"Nome e número pertencem a colaboradores diferentes; número esperado: {expected_entry.get('display_code') or 'indisponível'}.",
+                    no_auto_write=entry_by_header_code is not None,
                 )
             st = "confirmed" if variants & colaborador_codes else "very_different"
+            if st == "very_different":
+                return _make_cell(
+                    v, st, "ocr_raw", ref_source="colaboradores",
+                    decision_reason="operator_reference_missing",
+                    warning=f"Colaborador nº {v} não consta da ListaColaboradores; atualizar a lista oficial.",
+                )
             return _make_cell(v, st, "ocr_raw", ref_source="colaboradores")
         elif field == "n_operador":
             if _looks_like_operator_short_code(v):
@@ -5708,6 +5755,8 @@ def cross_check_sheet(
                 "OCR H↔M: existe lote M no SAP mas as medidas divergem — "
                 "confirmar lote e medidas"
             )
+        elif ref_source == "colaboradores" and legacy_cell.get("warning"):
+            reason = legacy_cell["warning"]
         elif has_ref:
             reason = "Motor propõe valor muito diferente do OCR"
         elif ref_source == "syntax":

@@ -378,8 +378,58 @@ def test_mobile_qtd_batch_rejects_invalid_fecho(tmp_db, isolate, client):
         headers=_MOBILE,
     )
     assert response.status_code == 400
-    assert "blank or X" in str(response.json()["errors"])
+    error = response.json()["errors"][0]
+    assert "FECHO aceita apenas vazio ou X" in error["error"]
+    assert error["sheet_id"] == sid and error["row_index"] == 0
     assert db.get_sheet(sid)["sheet_data"]["rows"][0]["fecho"] == ""
+
+
+@pytest.mark.parametrize("marks", [("", "", ""), ("", "X", ""), ("X", "", "X")])
+def test_mobile_fecho_batch_preserves_repeated_rows_through_csv_and_excel(
+    marks, tmp_db, isolate, client, monkeypatch,
+):
+    import csv
+    import io
+
+    import openpyxl
+
+    from app.web import export
+
+    sid = _seed_bobine_v3(rows=[
+        {"of": "262892", "modelo": "CGC2E10D", "qtd": "4", "fecho": value}
+        for value in ("None", "X", "-")
+    ])
+    original = db.get_sheet(sid)["raw_extraction"]
+    edits = []
+    for index, mark in enumerate(marks):
+        edits.extend([
+            {"sheet_id": sid, "field_path": f"rows[{index}].fecho", "value": mark},
+            {"sheet_id": sid, "field_path": f"rows[{index}].qtd", "value": str(index + 1)},
+        ])
+    response = client.post("/mobile/qtds-batch", json={"edits": edits}, headers=_MOBILE)
+    assert response.status_code == 200
+    sheet = db.get_sheet(sid)
+    assert sheet["status"] == "extracted"
+    assert sheet["raw_extraction"] == original
+    data = sheet["sheet_data"]
+    assert [r["fecho"] for r in data["rows"]] == list(marks)
+    csv_rows = list(csv.reader(io.StringIO(main._to_3block_csv("test.jpg", data)), delimiter=";"))
+    header_index = next(i for i, row in enumerate(csv_rows) if "FECHO" in row)
+    column = csv_rows[header_index].index("FECHO")
+    assert [r[column] for r in csv_rows[header_index + 1:header_index + 4]] == list(marks)
+
+    class Watcher:
+        def get_refs(self):
+            return {}
+
+    monkeypatch.setattr("app.cross_check.get_watcher", Watcher)
+    workbook = openpyxl.load_workbook(io.BytesIO(export.build_cpis_workbook(None, None)))
+    exported = list(workbook["Folha1"].iter_rows(min_row=2, values_only=True))
+    assert [r[-1] or "" for r in exported] == list(marks)
+    columns = [cell.value for cell in workbook["Folha1"][1]]
+    assert [r[columns.index("OF")] for r in exported] == ["262892"] * 3
+    assert [r[columns.index("QTD")] for r in exported] == [1, 2, 3]
+    workbook.close()
 
 
 def _seed_paragens_sheet(template_name: str, setor: str) -> int:

@@ -1,6 +1,6 @@
 """R113 — Calcula quanto falta produzir por entry do plan.
 
-`remaining(entry) = quanttrp - max(fases) - qtd_consumida_pelas_kanbans`
+`remaining(entry) = quanttrp - produção da fase - kanbans da mesma fase`
 
 A ideia: quando o operador (ou o motor v5) precisa de escolher entre N
 entries do mesmo OF (várias peças do mesmo modelo, só muda o número),
@@ -13,17 +13,20 @@ validação de uma folha.
 """
 from __future__ import annotations
 
+import math
 import threading
 import time
 from typing import Any
 
+from app.dq.machines import machine_phase_from_setor
+from app.pipeline.plan_status import closed_status
 from app.web import db
-
 
 _CACHE_TTL_S = 30.0
 _cache: dict[tuple[str, str], float] | None = None
 _cache_at: float = 0.0
 _cache_cutoff: str | None = None
+_phase_cache: dict[str, tuple[tuple, float, dict[tuple[str, str], float]]] = {}
 _lock = threading.Lock()
 
 
@@ -57,7 +60,8 @@ def _to_num(v: Any) -> float | None:
     if v is None or v == "":
         return None
     try:
-        return float(str(v).replace(",", ".").strip())
+        number = float(str(v).replace(",", ".").strip())
+        return number if math.isfinite(number) else None
     except (ValueError, TypeError):
         return None
 
@@ -117,7 +121,12 @@ def _produced(fases: dict | None, phase: str | None) -> float:
     return 0.0
 
 
-def _kanban_consumption(cutoff_iso: str | None = None) -> dict[tuple[str, str], float]:
+def _kanban_consumption(
+    cutoff_iso: str | None = None,
+    *,
+    phase: str | None = None,
+    refs: dict | None = None,
+) -> dict[tuple[str, str], float]:
     """SQL: qtd consumida por (of, modelo upper) nas folhas validated.
 
     Só conta folhas validadas — folhas em extracted (à espera de
@@ -132,7 +141,10 @@ def _kanban_consumption(cutoff_iso: str | None = None) -> dict[tuple[str, str], 
     contagem de produção que o ERP já conhece.
     """
     out: dict[tuple[str, str], float] = {}
-    sql = """SELECT pr.of, UPPER(pr.modelo) AS m, SUM(pr.qtd) AS q
+    sector_column = (
+        ", json_extract(s.sheet_data, '$.header.setor_maquina') AS setor" if phase else ""
+    )
+    sql = f"""SELECT pr.of, UPPER(pr.modelo) AS m, SUM(pr.qtd) AS q{sector_column}
              FROM production_rows pr
              JOIN sheets s ON s.id = pr.sheet_id
              WHERE s.status = 'validated'
@@ -143,21 +155,46 @@ def _kanban_consumption(cutoff_iso: str | None = None) -> dict[tuple[str, str], 
         sql += " AND pr.sheet_iso_date >= ?"
         args = (cutoff_iso,)
     sql += " GROUP BY pr.of, UPPER(pr.modelo)"
+    if phase:
+        sql += ", json_extract(s.sheet_data, '$.header.setor_maquina')"
     try:
         with db.conn() as c:
             rows = c.execute(sql, args).fetchall()
         for r in rows:
-            out[(str(r["of"]), str(r["m"]))] = float(r["q"] or 0)
+            if phase and machine_phase_from_setor(r["setor"], refs) != phase:
+                continue
+            key = (str(r["of"]), str(r["m"]))
+            out[key] = out.get(key, 0.0) + float(r["q"] or 0)
     except Exception:
-        pass
+        if phase:
+            raise
     return out
 
 
-def get_consumption() -> dict[tuple[str, str], float]:
+def get_consumption(
+    phase: str | None = None, *, refs: dict | None = None,
+) -> dict[tuple[str, str], float]:
     """Devolve o consumption dict, cacheado 30s (refresh imediato quando
     o snapshot do plano muda — o cutoff faz parte da chave do cache)."""
     global _cache, _cache_at, _cache_cutoff
     cutoff = _plan_cutoff_iso()
+    if phase:
+        if refs is None:
+            from app.cross_check.ref_watcher import get_watcher
+            refs = get_watcher().get_refs() or {}
+        mapping = tuple(sorted(
+            (str(label), str(rec.get("codmaq")), str(rec.get("colunaexcel")))
+            for label, rec in (refs.get("maquinas_by_kanban") or {}).items()
+            if isinstance(rec, dict)
+        ))
+        context = (cutoff, refs.get("plan_sha256"), mapping)
+        with _lock:
+            now = time.time()
+            cached = _phase_cache.get(phase)
+            if cached is None or cached[0] != context or now - cached[1] > _CACHE_TTL_S:
+                result = _kanban_consumption(cutoff, phase=phase, refs=refs)
+                _phase_cache[phase] = (context, now, result)
+            return _phase_cache[phase][2]
     with _lock:
         now = time.time()
         if (
@@ -178,6 +215,7 @@ def invalidate_cache() -> None:
     with _lock:
         _cache = None
         _cache_at = 0.0
+        _phase_cache.clear()
 
 
 # R242/D1 — prior de PRODUÇÃO: OFs com atividade validada recente são a
@@ -240,13 +278,13 @@ def remaining(
     (expedição). Substitui o antigo `_max_phase`, que sobre-contava as
     fases iniciais e marcava ~92% das linhas como fechadas.
     """
-    if str(entry.get("fechado") or "0") in ("1", "True", "true"):
+    if closed_status(entry.get("fechado")) is True:
         return 0.0
     quanttrp = _to_num(entry.get("quanttrp"))
     if quanttrp is None or quanttrp <= 0:
         return float("inf")
     produced = _produced(entry.get("fases"), phase)
-    consumption = consumption if consumption is not None else get_consumption()
+    consumption = consumption if consumption is not None else get_consumption(phase)
     key = (
         str(entry.get("_of") or entry.get("of") or "").strip(),
         str(entry.get("designacao") or "").strip().upper(),
@@ -266,6 +304,8 @@ def annotate_remaining(
     entries: list[dict],
     consumption: dict | None = None,
     phase: str | None = None,
+    *,
+    require_phase: bool = False,
 ) -> list[float]:
     """Remaining por entry com repartição WATERFALL do consumo entre
     entries IRMÃS (mesma chave (of, designação)).
@@ -278,7 +318,7 @@ def annotate_remaining(
     conserva o total). Grupo de 1 ≡ `remaining()`.
     """
     if consumption is None:
-        consumption = get_consumption()
+        consumption = get_consumption(phase)
     # pool restante por chave (só das chaves presentes)
     pools: dict[tuple[str, str], float] = {}
     counts: dict[tuple[str, str], int] = {}
@@ -290,7 +330,12 @@ def annotate_remaining(
     seen: dict[tuple[str, str], int] = {}
     out: list[float] = []
     for e in entries:
-        if str(e.get("fechado") or "0") in ("1", "True", "true"):
+        if require_phase and (
+            not phase or _to_num((e.get("fases") or {}).get(phase)) is None
+        ):
+            out.append(float("inf"))
+            continue
+        if closed_status(e.get("fechado")) is True:
             out.append(0.0)
             continue
         quanttrp = _to_num(e.get("quanttrp"))
@@ -313,6 +358,9 @@ def sort_entries_by_remaining(
     entries: list[dict],
     include_done: bool = False,
     phase: str | None = None,
+    *,
+    refs: dict | None = None,
+    require_phase: bool = False,
 ) -> list[dict]:
     """Devolve cópias das entries enriquecidas com `_remaining`,
     `_quanttrp`, `_done` + ordenadas ascendente por remaining.
@@ -324,18 +372,27 @@ def sort_entries_by_remaining(
     uma linha só está concluída quando a fase desse setor atingiu quanttrp.
     Consumo repartido por waterfall entre irmãs (ver annotate_remaining).
     """
-    consumption = get_consumption()
-    rems = annotate_remaining(entries, consumption, phase)
+    consumption = get_consumption(phase=phase, refs=refs) if phase else get_consumption()
+    rems = annotate_remaining(entries, consumption, phase, require_phase=require_phase)
     enriched: list[dict] = []
     for e, rem in zip(entries, rems):
         e2 = dict(e)
         e2["_remaining"] = None if rem == float("inf") else rem
         e2["_quanttrp"] = _to_num(e.get("quanttrp"))
         e2["_done"] = rem <= 0
+        e2["_pending_valid"] = rem != float("inf")
         # decomposição para o tooltip da wizard (confiança do operador)
-        e2["_produced_erp"] = _produced(e.get("fases"), phase)
-        e2["_kanban_qty"] = consumption.get(_entry_key(e), 0.0)
-        if not include_done and rem <= 0:
+        e2["_produced_erp"] = (
+            _produced(e.get("fases"), phase) if e2["_pending_valid"] else None
+        )
+        # Show the quantity allocated to this original plan row, not the
+        # entire group again on every repeated reference.
+        e2["_kanban_qty"] = (
+            max(e2["_quanttrp"] - e2["_produced_erp"] - rem, 0.0)
+            if e2["_pending_valid"] and closed_status(e.get("fechado")) is not True
+            else 0.0
+        )
+        if not include_done and (rem <= 0 or closed_status(e.get("fechado")) is True):
             continue
         enriched.append(e2)
     enriched.sort(key=lambda x: (

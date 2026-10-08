@@ -57,14 +57,14 @@ class TestRemainingPhaseAware:
 
 class TestSortPhaseAware:
     def test_active_line_kept_for_its_sector(self, monkeypatch):
-        monkeypatch.setattr(ofc, "get_consumption", lambda: {})
+        monkeypatch.setattr(ofc, "get_consumption", lambda *a, **k: {})
         out = ofc.sort_entries_by_remaining([dict(_ENTRY)], include_done=False, phase="a")
         assert len(out) == 1
         assert out[0]["_done"] is False
         assert out[0]["_remaining"] == 10.0
 
     def test_done_for_corte_filtered_by_default(self, monkeypatch):
-        monkeypatch.setattr(ofc, "get_consumption", lambda: {})
+        monkeypatch.setattr(ofc, "get_consumption", lambda *a, **k: {})
         out = ofc.sort_entries_by_remaining([dict(_ENTRY)], include_done=False, phase="c")
         assert out == []  # remaining 0 → escondida por defeito
         out_all = ofc.sort_entries_by_remaining([dict(_ENTRY)], include_done=True, phase="c")
@@ -94,7 +94,7 @@ class TestOfLookupEndpoint:
         refs = {
             "of_to_entries": {"262892": [dict(_ENTRY)]},
             "plan_by_ov": {}, "plan_by_modelo_ft": {},
-            "maquinas_by_kanban": {"ACABAMENTO MTG4": {"colunaexcel": "a"}},
+            "maquinas_by_kanban": {"ACABAMENTO MTG4": {"codmaq": "M061", "colunaexcel": "a"}},
         }
 
         class _W:
@@ -102,7 +102,7 @@ class TestOfLookupEndpoint:
                 return refs
 
         monkeypatch.setattr(main, "get_watcher", lambda: _W())
-        monkeypatch.setattr(ofc, "get_consumption", lambda: {})
+        monkeypatch.setattr(ofc, "get_consumption", lambda *a, **k: {})
 
         client = TestClient(main.app)
         r = client.get(f"/sheet/{sid}/of-lookup?q=262892&include_done=1", headers=_DESKTOP)

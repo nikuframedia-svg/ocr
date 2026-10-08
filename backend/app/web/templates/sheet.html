@@ -34,6 +34,12 @@
               {% include "_cell.html" %}
             {% endwith %}
           </tr></tbody></table>
+          {% if f in ('operador', 'n_operador') and cc_status_by_path.get(path) == 'NO_MATCH'
+                and cc_ref_title_by_path.get(path) %}
+            <div class="tiny muted" style="max-width:340px; margin-top:4px;">
+              {{ cc_ref_title_by_path[path] }}
+            </div>
+          {% endif %}
         </div>
       {% endfor %}
       {% set distinct_ofs = [] %}
@@ -370,41 +376,50 @@
 <div x-data="ofWizard({{ sheet.id }})"
      @open-of-wizard.window="open($event.detail)">
   <template x-if="active">
-    <div class="sheet-bg" @click.self="cancel()">
+    <div class="sheet-bg of-wizard-overlay" @click.self="cancel()">
       <div class="sheet-modal of-wizard-modal">
         <div class="lbl">Linha L<span x-text="row_index + 1"></span></div>
         <div style="font-size:18px; font-weight:600; margin-bottom:4px;">
           Corrigir linha via OF
         </div>
         <div class="muted tiny" style="margin-bottom:12px;">
-          Escreve OF, OV ou modelo. O sistema detecta automaticamente.
-          Escolhe a linha e os outros campos preenchem-se do plano.
+          Pesquisa por OF, OV ou referência e filtra por modelo e comprimento.
+          Podes usar cada filtro sozinho.
         </div>
 
         <!-- Step 1 — input multi-modo (R128: OF / OV / modelo auto-detect) -->
         <div style="margin-bottom:12px;">
           <label class="lbl">Pesquisar:</label>
-          <div style="display:flex; gap:8px; margin-top:4px;">
+          <div class="of-search" style="margin-top:4px;">
             <input type="text" x-model="ofInput"
-                   placeholder="ex: 262107 (OF) · 2503182 (OV) · CGC2E10 (modelo)"
+                   aria-label="OF, OV ou referência" placeholder="OF, OV ou referência"
+                   @input="clearResults()"
                    @keydown.enter.prevent="lookup()"
                    x-ref="ofInputRef"
                    x-init="$nextTick(() => $refs.ofInputRef.focus())"
                    inputmode="text"
-                   style="flex:1; padding:8px; font-size:16px; font-family:var(--font-mono);">
+                   style="padding:8px; font-size:16px; font-family:var(--font-mono);">
+            <input type="search" x-model="modelInput" placeholder="Modelo" aria-label="Modelo"
+                   @input="clearResults()" @keydown.enter.prevent="lookup()">
+            <input type="text" x-model="lengthInput" placeholder="Comprimento (mm)"
+                   aria-label="Comprimento (mm)" inputmode="decimal"
+                   @input="clearResults()" @keydown.enter.prevent="lookup()">
             <button class="btn primary" type="button" @click="lookup()"
-                    :disabled="loading || !ofInput.trim()">
+                    :disabled="loading || !hasQuery">
               <span x-show="!loading">Procurar</span>
               <span x-show="loading">…</span>
             </button>
           </div>
+          <label style="display:inline-flex; gap:6px; align-items:center; margin-top:10px;">
+            <input type="checkbox" x-model="includeDone" @change="lookup()">
+            <span class="tiny muted">Incluir peças já fechadas</span>
+          </label>
         </div>
 
         <!-- Step 2 — lookup result -->
         <template x-if="lookupResult && !lookupResult.found">
           <div class="alert warn" style="padding:10px; margin-bottom:12px;">
-            "<b x-text="lookupResult.q"></b>" não bate OF, OV nem prefixo
-            de modelo no plano da fábrica. Verifica que escreveste bem.
+            Sem resultados. Confirma a pesquisa e os filtros.
           </div>
         </template>
 
@@ -417,21 +432,14 @@
                 <span class="of-mode-pill" :class="'mode-'+lookupResult.mode"
                       x-text="lookupResult.mode === 'of' ? 'OF '+lookupResult.of
                               : lookupResult.mode === 'ov' ? 'OV '+lookupResult.q
+                              : lookupResult.mode === 'filters' ? 'Filtros'
                               : 'modelo '+lookupResult.q"></span>
-                <b x-text="lookupResult.entries.length"></b>
-                <span x-show="lookupResult.n_total &&
-                              lookupResult.n_total > lookupResult.entries.length"
-                      x-text="' de ' + lookupResult.n_total"></span>
-                linha(s).
-                <span x-show="lookupResult.truncated" class="pill warn"
-                      style="font-size:9px;">truncado a 50 — refina a pesquisa</span>
+                <span x-text="lookupResult.entries.length
+                    ? `${lookupResult.offset + 1}–${lookupResult.offset + lookupResult.entries.length} de ${lookupResult.total}`
+                    : 'Nenhuma peça pendente; inclui peças já fechadas ou ajusta os filtros.'"></span>
                 <span class="tiny muted" x-show="lookupResult.plan_date"
                       x-text="'· plano de ' + lookupResult.plan_date"></span>
               </span>
-              <label style="display:inline-flex; gap:4px; align-items:center;">
-                <input type="checkbox" x-model="includeDone" @change="lookup()">
-                <span class="tiny muted">incluir peças já fechadas</span>
-              </label>
             </div>
             <div class="of-entries-list">
               <template x-for="(e, i) in lookupResult.entries" :key="i">
@@ -444,19 +452,13 @@
                     <div class="of-modelo-row">
                       <b class="of-modelo" :title="e.modelo"
                          x-text="e.modelo || '(sem modelo)'"></b>
-                      <template x-if="e.remaining != null && e.quanttrp != null">
                         <span class="of-remaining-badge"
-                              :class="e.done ? 'done' : (e.remaining < 5 ? 'urgent' : '')"
-                              :title="'ERP (fase do setor): ' + (e.produced_erp ?? '—')
+                              :class="e.done ? 'done' : (e.pending_valid && e.remaining < 5 ? 'urgent' : '')"
+                              :title="'ERP (fase do setor): ' + (e.produced_erp ?? 'Indisponível')
                                 + ' · kanbans pós-plano'
                                 + (lookupResult.plan_date ? ' (desde ' + lookupResult.plan_date + ')' : '')
                                 + ': ' + (e.kanban_qty ?? 0)"
-                              x-text="e.done
-                                ? 'fechada ('+e.quanttrp+'/'+e.quanttrp+')'
-                                : 'faltam '+e.remaining+' de '+e.quanttrp"></span>
-                      </template>
-                      <span x-show="e.fechado && !e.done" class="pill warn"
-                            style="font-size:9px;">fechado</span>
+                              x-text="pendingLabel(e)"></span>
                     </div>
                     <div class="tiny muted" style="margin-top:2px;">
                       <span x-text="e.cliente"></span>
@@ -471,6 +473,12 @@
                 </label>
               </template>
             </div>
+            <nav aria-label="Resultados da pesquisa" style="display:flex; justify-content:space-between; margin-top:10px;">
+              <button type="button" class="btn ghost" :disabled="loading || lookupResult.offset === 0"
+                      @click="lookup(Math.max(0, lookupResult.offset - lookupResult.limit))">← Anteriores</button>
+              <button type="button" class="btn ghost" :disabled="loading || !lookupResult.has_more"
+                      @click="lookup(lookupResult.offset + lookupResult.limit)">Mais resultados →</button>
+            </nav>
           </div>
         </template>
 
@@ -501,6 +509,7 @@ function ofWizard(sheetId) {
   return {
     sheetId: sheetId,
     active: false, row_index: 0, ofInput: '', current_of: '',
+    modelInput: '', lengthInput: '', searchVersion: 0,
     loading: false, lookupResult: null, selectedEntry: -1,
     applying: false, applyError: '',
     includeDone: false,  // R113 — toggle "mostrar peças já fechadas"
@@ -509,6 +518,10 @@ function ofWizard(sheetId) {
       this.row_index = detail.row_index;
       this.current_of = detail.current_of || '';
       this.ofInput = detail.current_of || '';
+      this.modelInput = '';
+      this.lengthInput = '';
+      this.searchVersion++;
+      this.loading = false;
       this.lookupResult = null;
       this.selectedEntry = -1;
       this.includeDone = false;
@@ -518,32 +531,53 @@ function ofWizard(sheetId) {
         this.$nextTick(() => this.lookup());
       }
     },
-    cancel() { this.active = false; },
-    get canApply() {
-      return this.lookupResult && this.lookupResult.found
-             && this.selectedEntry >= 0;
+    cancel() { this.searchVersion++; this.loading = false; this.active = false; },
+    clearResults() {
+      this.searchVersion++;
+      this.loading = false;
+      this.lookupResult = null;
+      this.selectedEntry = -1;
     },
-    async lookup() {
+    get hasQuery() {
+      return Boolean(this.ofInput.trim() || this.modelInput.trim() || this.lengthInput.trim());
+    },
+    pendingLabel(entry) {
+      const quantity = entry.pending_valid
+        ? Math.max(0, entry.remaining).toLocaleString('pt-PT') : 'Indisponível';
+      const status = entry.status_known
+        ? (entry.fechado ? 'Fechada' : 'Aberta') : 'Estado indisponível';
+      return `Por fazer em ${this.lookupResult.setor || 'setor indisponível'}: ${quantity} · ${status}`;
+    },
+    get canApply() {
+      return !this.loading && this.lookupResult && this.lookupResult.found
+             && this.selectedEntry >= 0 && Boolean(this.lookupResult.entries[this.selectedEntry]);
+    },
+    async lookup(offset = 0) {
       const q = (this.ofInput || '').trim();
-      if (!q) return;
+      if (!this.hasQuery) { this.clearResults(); return; }
+      const version = ++this.searchVersion;
       this.loading = true;
       this.applyError = '';
       this.lookupResult = null;
       this.selectedEntry = -1;
       try {
         // R128 — query genérica (?q=) com auto-detect OF/OV/modelo
-        const url = '/sheet/' + this.sheetId
-                    + '/of-lookup?q=' + encodeURIComponent(q)
-                    + (this.includeDone ? '&include_done=1' : '');
+        const params = new URLSearchParams({q, modelo: this.modelInput.trim(),
+          comp_mm: this.lengthInput.trim(), offset: String(offset),
+          include_done: this.includeDone ? '1' : '0'});
+        const url = '/sheet/' + this.sheetId + '/of-lookup?' + params;
         const r = await fetch(url);
-        this.lookupResult = await r.json();
+        const result = await r.json();
+        if (version !== this.searchVersion) return;
+        if (!r.ok) throw new Error(result.detail || 'Pesquisa indisponível.');
+        this.lookupResult = result;
         if (this.lookupResult.found && this.lookupResult.entries.length === 1) {
           this.selectedEntry = 0;
         }
       } catch (e) {
-        this.lookupResult = { found: false, mode: 'none', q: q, error: 'rede' };
+        if (version === this.searchVersion) this.applyError = e.message || 'Erro de rede na pesquisa.';
       } finally {
-        this.loading = false;
+        if (version === this.searchVersion) this.loading = false;
       }
     },
     async apply() {
@@ -562,6 +596,8 @@ function ofWizard(sheetId) {
             row_index: this.row_index,
             of: entry.of || this.lookupResult.of,
             entry_idx: entry.orig_idx,
+            plan_sha256: this.lookupResult.plan_sha256,
+            expected_revision: this.lookupResult.revision,
           }),
         });
         const responseText = await r.text();
@@ -634,7 +670,15 @@ function ofWizard(sheetId) {
 
 .of-wizard-modal {
   max-width: 880px !important;
+  max-height: 90vh;
+  overflow-y: auto;
 }
+.of-wizard-overlay { align-items:center; justify-content:center; padding:12px; }
+.of-search {
+  display:grid; grid-template-columns:1fr 1fr 1fr auto; gap:8px;
+}
+.of-search input { min-width:0; width:100%; font-size:14px; padding:8px; }
+@media (max-width:700px) { .of-search { grid-template-columns:1fr; } }
 
 .of-entries-list {
   max-height: min(60vh, 480px);
@@ -711,7 +755,6 @@ function ofWizard(sheetId) {
 }
 .of-remaining-badge.done {
   background: #f0e6e5; color: #756F61;
-  text-decoration: line-through;
 }
 </style>
 

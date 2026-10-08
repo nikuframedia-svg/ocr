@@ -215,7 +215,7 @@ class TestShadowScore:
         assert scoring["template_name"] == "bobine_formato"
         assert "checked_at" in scoring
         assert scoring["summary"]["total"] == total
-        assert total == snapped + confirmed + na
+        assert total == snapped + confirmed + na + scoring["summary"]["very_different"]
         assert dur_ms >= 0
         assert len(scoring["rows"]) == 1
         # R123 (B9) — header/footer agora validados (já não forçados a NA).
@@ -785,8 +785,8 @@ class TestShadowScore:
         assert row0["lote"]["status"] == "very_different"
         # Campos sem OCR (ov, modelo, comp_mm, ...) ficam NA.
         assert row0["ov"]["status"] == "NA"
-        # Sem ListaColaboradores, operador preenchido valida por regra local.
-        assert scoring["header"]["operador"]["status"] == "confirmed"
+        # Sem ListaColaboradores, identidade preenchida precisa de referência oficial.
+        assert scoring["header"]["operador"]["status"] == "very_different"
 
     def test_zero_score_dimension_yields_no_winner(self):
         # R223 — uma dimensão isolada (comp 9999) que não bate com nenhuma entry
@@ -979,8 +979,8 @@ class TestShadowScore:
 
         scoring, *_ = shadow_score(sheet_data, None, refs)
 
-        assert scoring["header"]["operador"]["status"] == "confirmed"
-        assert scoring["header"]["n_operador"]["status"] == "confirmed"
+        assert scoring["header"]["operador"]["status"] == "very_different"
+        assert scoring["header"]["n_operador"]["status"] == "very_different"
         assert scoring["header"]["setor_maquina"]["status"] == "confirmed"
         assert scoring["header"]["cod_maquina"]["status"] == "confirmed"
         assert scoring["header"]["data"]["status"] == "confirmed"
@@ -1016,7 +1016,7 @@ class TestShadowScore:
                 "reason": "Valor inválido para o formato esperado",
             } in _sans_r243(result["to_analisar"])
 
-    def test_header_n_operador_valid_syntax_without_colaboradores_confirms(self):
+    def test_header_n_operador_without_colaboradores_needs_official_reference(self):
         refs = {"available": True, "of_to_entries": {}, "lotes_sap_full": {}, "colaboradores": {}}
         for value in ("537", "0537", "00000"):
             scoring, *_ = shadow_score(
@@ -1029,7 +1029,7 @@ class TestShadowScore:
                 None,
                 refs,
             )
-            assert scoring["header"]["n_operador"]["status"] == "confirmed"
+            assert scoring["header"]["n_operador"]["status"] == "very_different"
 
     def test_header_cod_maquina_invalid_syntax_without_maquinas_enters_review(self):
         refs = {"available": True, "of_to_entries": {}, "lotes_sap_full": {}}
@@ -1252,7 +1252,7 @@ class TestShadowScore:
             "value": "JULIO LIMA",
             "ref": "AUGUSTO MONTEIRO",
             "ref_source": "colaboradores",
-            "reason": "Motor propõe valor muito diferente do OCR",
+            "reason": bad["header"]["operador"]["warning"],
         } in _sans_r243(bad["to_analisar"])
         assert {
             "section": "header",
@@ -1262,7 +1262,7 @@ class TestShadowScore:
             "value": "95",
             "ref": "537",
             "ref_source": "colaboradores",
-            "reason": "Motor propõe valor muito diferente do OCR",
+            "reason": bad["header"]["n_operador"]["warning"],
         } in _sans_r243(bad["to_analisar"])
 
     def test_header_operador_alias_matches_colaborador_identity(self):
@@ -4280,7 +4280,7 @@ class TestToAnalisarCoverage:
             "value": "OPERADOR DESCONHECIDO",
             "ref": "",
             "ref_source": "colaboradores",
-            "reason": "Valor não encontrado na ListaColaboradores",
+            "reason": "Nome não encontrado na ListaColaboradores; confirmar nome e número.",
         }]
 
 

@@ -1031,7 +1031,7 @@ def _apply_operador_snap(
 
     # Persist pernr whenever we have a confident match (HIGH levels A/B/C),
     # even if no-op on name/cod (Condition A still has pernr to record).
-    if sr.pernr and sr.pernr != cur_pernr:
+    if sr.pernr and sr.pernr != cur_pernr and "header.pernr" not in protected:
         try:
             kwargs = (
                 {"expected_revision": next_revision}
@@ -1745,6 +1745,8 @@ def _build_cc_maps(sheet_id: int, *, allow_regen: bool = True) -> tuple[
         return info.get("plan_value")
 
     def _cell_ref_title(info: dict, ref: object) -> str:
+        if info.get("ref_source") == "colaboradores" and info.get("warning"):
+            return str(info["warning"])
         # R259 — proposta em revisão (no_auto_write): o warning traz o
         # contexto completo (ex.: divergências larg/esp OCR ↔ SAP).
         if info.get("no_auto_write") and info.get("warning"):
@@ -1789,11 +1791,11 @@ def _build_cc_maps(sheet_id: int, *, allow_regen: bool = True) -> tuple[
             path = f"{section}.{f}"
             status_map[path] = info.get("status", "NA")
             ref = _cell_ref(info)
+            title = _cell_ref_title(info, ref or "")
+            if title:
+                ref_title_map[path] = title
             if ref is not None:
                 ref_map[path] = str(ref)
-                title = _cell_ref_title(info, ref)
-                if title:
-                    ref_title_map[path] = title
     return status_map, ref_map, ref_title_map, suspended_map, snapped_map, obra_concluida_map
 
 
@@ -2590,7 +2592,10 @@ async def mobile_qtds_batch(request: Request) -> JSONResponse:
             if row_field == "fecho":
                 value = value.strip().upper()
                 if value not in ("", "X"):
-                    errors.append({"edit": e, "error": "fecho must be blank or X"})
+                    errors.append({
+                        "edit": e, "sheet_id": sid, "row_index": row_index,
+                        "error": f"Folha #{sid}, linha {row_index + 1}: FECHO aceita apenas vazio ou X",
+                    })
                     continue
         elif field_path not in allowed_footer:
             errors.append({"edit": e, "error": f"field {field_path} not allowed on mobile"})
@@ -4133,152 +4138,102 @@ def _refs_lookup(
     *,
     include_done: bool = False,
     phase: str | None = None,
+    setor: str = "",
+    modelo: str = "",
+    comp_mm: float | None = None,
+    offset: int = 0,
+    require_phase: bool = False,
 ) -> dict:
-    """R112/R128 — núcleo do lookup OF/OV/modelo contra o plano, sem
-    depender de folha. Task C E4: extraído de sheet_of_lookup (o endpoint
-    delega aqui, comportamento intacto) para o wizard de registo de
-    kanbans reutilizar na etapa de validação (/admin/refs-lookup)."""
+    """Search the original plan rows; filtering/paging never changes their IDs."""
     from app.pipeline.scoring_engine import normalize_of
-    from app.pipeline.of_consumption import sort_entries_by_remaining, _plan_cutoff_iso
+    from app.pipeline.of_consumption import sort_entries_by_remaining, _plan_cutoff_iso, _to_num
+    from app.pipeline.plan_status import closed_status
 
     refs = get_watcher().get_refs() or {}
     of_to_entries = refs.get("of_to_entries") or {}
-    plan_by_ov = refs.get("plan_by_ov") or {}
-    plan_by_modelo_ft = refs.get("plan_by_modelo_ft") or {}
-
-    LIMIT = 50
+    query_raw = query_raw.strip()
+    q_upper = query_raw.upper()
+    numeric_query = re.sub(r"^(OF|OV)\s*", "", q_upper)
     mode = "none"
     matched_of = ""
     pooled: list[dict] = []
-    n_total_pre_filter = 0
-    truncated = False
+    limit = 50
 
-    q_upper = query_raw.upper()
-    is_numeric = query_raw.isdigit()
+    def add(of_key: str, index: int, entry: dict) -> None:
+        pooled.append({**entry, "_of": of_key, "_orig_idx": index})
 
-    # Tier 1 — OF (numérico)
-    if is_numeric:
-        of_norm = normalize_of(query_raw)
+    if numeric_query.isdigit():
+        of_norm = normalize_of(numeric_query)
         entries = of_to_entries.get(of_norm) or []
-        if entries:
-            mode = "of"
-            matched_of = of_norm
-            n_total_pre_filter = len(entries)
-            pooled = [
-                {**e, "_of": of_norm, "_orig_idx": i}
-                for i, e in enumerate(entries)
-            ]
-
-    # Tier 2 — OV (numérico, exact match)
-    if mode == "none" and is_numeric:
-        ov_entries = plan_by_ov.get(query_raw) or []
-        if ov_entries:
-            mode = "ov"
-            n_total_pre_filter = len(ov_entries)
-            # plan_by_ov entries já têm "_of" anotado (ver
-            # ref_watcher._derive_plan_indexes). _orig_idx é por OF para
-            # apply-of-entry; rebuild aqui contra of_to_entries.
-            for e in ov_entries:
-                of_of_entry = str(e.get("_of") or "")
-                source = of_to_entries.get(of_of_entry) or []
-                orig_idx = next(
-                    (i for i, se in enumerate(source) if se is e
-                     or (se.get("ov") == e.get("ov")
-                         and se.get("designacao") == e.get("designacao"))),
-                    -1,
-                )
-                pooled.append({**e, "_orig_idx": orig_idx})
-
-    # Tier 3 — modelo: prefix no first-token (fast path) + substring na
-    # designação completa. R128 fez o campo modelo no cross-check guardar
-    # a designação completa; o operador escreve naturalmente parte longa
-    # ("Tronco-Cónica" ou "CGC2E10D - Coluna") e antes não batia nada.
-    if mode == "none":
-        seen: set[tuple] = set()
-
-        def _add_to_pool(e: dict) -> None:
-            of_of_entry = str(e.get("_of") or "")
-            key = (of_of_entry, str(e.get("ov") or ""),
-                   str(e.get("designacao") or ""))
-            if key in seen:
-                return
-            seen.add(key)
-            source = of_to_entries.get(of_of_entry) or []
-            orig_idx = next(
-                (i for i, se in enumerate(source) if se is e
-                 or (se.get("ov") == e.get("ov")
-                     and se.get("designacao") == e.get("designacao"))),
-                -1,
-            )
-            pooled.append({**e, "_orig_idx": orig_idx})
-
-        # Pass A — prefix no first-token (caso típico, queries curtas)
-        for k in plan_by_modelo_ft.keys():
-            if not k.startswith(q_upper):
-                continue
-            for e in plan_by_modelo_ft.get(k) or []:
-                _add_to_pool(e)
-        # Pass B — substring na designação completa (queries longas)
-        if len(q_upper) >= 3:
+        if entries and not q_upper.startswith("OV"):
+            mode, matched_of = "of", of_norm
+            for index, entry in enumerate(entries):
+                add(of_norm, index, entry)
+        else:
             for of_key, entries in of_to_entries.items():
-                for e in entries:
-                    des = (e.get("designacao") or "").upper()
-                    if q_upper not in des:
-                        continue
-                    _add_to_pool({**e, "_of": of_key})
+                for index, entry in enumerate(entries):
+                    if str(entry.get("ov") or "").strip() == numeric_query:
+                        add(of_key, index, entry)
+            if pooled:
+                mode = "ov"
+
+    if mode == "none" and (query_raw or modelo or comp_mm is not None):
+        for of_key, entries in of_to_entries.items():
+            for index, entry in enumerate(entries):
+                designation = str(entry.get("designacao") or "").upper()
+                first_token = designation.split(" - ", 1)[0]
+                if not query_raw or first_token.startswith(q_upper) or (
+                    len(q_upper) >= 3 and q_upper in designation
+                ):
+                    add(of_key, index, entry)
         if pooled:
-            mode = "modelo"
-            n_total_pre_filter = len(pooled)
+            mode = "modelo" if query_raw else "filters"
 
-    if mode == "none":
-        return {
-            "found": False, "mode": "none", "q": query_raw, "of": "",
-            "entries": [], "n_entries": 0, "n_total": 0,
-        }
-
-    sorted_entries = sort_entries_by_remaining(
-        pooled, include_done=include_done, phase=phase,
-    )
-
-    if len(sorted_entries) > LIMIT:
-        sorted_entries = sorted_entries[:LIMIT]
-        truncated = True
-
-    out_entries = []
-    for i, e in enumerate(sorted_entries):
-        out_entries.append({
-            "idx": i,
-            "orig_idx": e.get("_orig_idx"),  # R116 — usar este no apply
-            "of": str(e.get("_of") or ""),    # R128 — OF por entry (modo modelo/OV)
-            "cliente": e.get("cliente", ""),
-            "ov": str(e.get("ov", "")),
-            "modelo": e.get("designacao", ""),
-            "comp_mm": e.get("comp"),
-            "lbase": e.get("lbase"),
-            "ltopo": e.get("ltopo"),
-            "esp": e.get("esp"),
-            "material": e.get("material", ""),
-            "fechado": bool(e.get("fechado")),
-            "remaining": e.get("_remaining"),
-            "quanttrp": e.get("_quanttrp"),
-            "done": e.get("_done", False),
-            # Decomposição do remaining (fix do double counting): o
-            # operador vê de onde vêm os números e ganha confiança.
-            "produced_erp": e.get("_produced_erp"),
-            "kanban_qty": e.get("_kanban_qty"),
-        })
-
-    return {
-        "found": True,
-        "mode": mode,
-        "q": query_raw,
-        "of": matched_of,    # back-compat: vazio nos modos ov/modelo
-        "entries": out_entries,
-        "n_entries": len(out_entries),
-        "n_total": n_total_pre_filter,
-        "truncated": truncated,
-        "plan_date": _plan_cutoff_iso(),  # corte dos kanbans pós-plano
+    result = {
+        "found": bool(pooled), "mode": mode, "q": query_raw, "of": matched_of,
+        "entries": [], "n_entries": 0, "n_total": len(pooled), "total": 0,
+        "offset": offset, "limit": limit, "has_more": False, "truncated": False,
+        "plan_date": _plan_cutoff_iso(), "plan_sha256": refs.get("plan_sha256"),
+        "setor": setor, "phase": phase,
     }
+    if not pooled:
+        return result
+
+    # Allocate consumption over the complete sibling group before applying
+    # length/model filters or a page, so a filter cannot consume it twice.
+    sorted_entries = sort_entries_by_remaining(
+        pooled, include_done=include_done, phase=phase, refs=refs,
+        require_phase=require_phase,
+    )
+    if modelo:
+        needle = modelo.strip().upper()
+        sorted_entries = [e for e in sorted_entries
+                          if needle in str(e.get("designacao") or "").upper()]
+    if comp_mm is not None:
+        sorted_entries = [e for e in sorted_entries if _to_num(e.get("comp")) == comp_mm]
+
+    total = len(sorted_entries)
+    page = sorted_entries[offset:offset + limit]
+    out_entries = []
+    for index, entry in enumerate(page):
+        status = closed_status(entry.get("fechado"))
+        if entry.get("fechado_known") is False:
+            status = None
+        out_entries.append({
+            "idx": offset + index, "orig_idx": entry["_orig_idx"], "of": entry["_of"],
+            "cliente": entry.get("cliente", ""), "ov": str(entry.get("ov", "")),
+            "modelo": entry.get("designacao", ""), "comp_mm": entry.get("comp"),
+            "lbase": entry.get("lbase"), "ltopo": entry.get("ltopo"),
+            "esp": entry.get("esp"), "material": entry.get("material", ""),
+            "fechado": status is True, "status_known": status is not None,
+            "remaining": entry.get("_remaining"), "quanttrp": entry.get("_quanttrp"),
+            "done": entry.get("_done", False),
+            "pending_valid": entry.get("_pending_valid", False),
+            "produced_erp": entry.get("_produced_erp"), "kanban_qty": entry.get("_kanban_qty"),
+        })
+    result.update(entries=out_entries, n_entries=len(page), total=total,
+                  has_more=offset + limit < total, truncated=total > limit)
+    return result
 
 
 @app.get("/sheet/{sheet_id}/of-lookup")
@@ -4287,6 +4242,9 @@ def sheet_of_lookup(
     of: str = "",
     q: str = "",
     include_done: int = 0,
+    modelo: str = "",
+    comp_mm: str = "",
+    offset: int = 0,
 ) -> JSONResponse:
     """R112 — devolve entries do plan_colunas para um OF/OV/modelo.
 
@@ -4303,10 +4261,12 @@ def sheet_of_lookup(
     if sheet is None:
         raise HTTPException(404, f"sheet {sheet_id} not found")
     query_raw = (q or of or "").strip()
-    if not query_raw:
-        return JSONResponse({
-            "found": False, "mode": "none", "q": "", "of": "", "entries": [],
-        })
+    from app.pipeline.of_consumption import _to_num
+    length = _to_num(comp_mm) if comp_mm.strip() else None
+    if comp_mm.strip() and (length is None or length < 0):
+        raise HTTPException(422, "Comprimento inválido; indica um número em milímetros")
+    if offset < 0 or offset > 100000:
+        raise HTTPException(422, "Página inválida")
 
     from app.pipeline.scoring_engine import _current_phase
 
@@ -4316,9 +4276,16 @@ def sheet_of_lookup(
     # quanttrp. Sem este phase, o remaining usava max(fases) e a fase inicial
     # sobre-produzida marcava ~92% das linhas como fechadas.
     phase = _current_phase(sheet.get("sheet_data") or {}, refs)
-    return JSONResponse(_refs_lookup(
-        query_raw, include_done=bool(include_done), phase=phase,
-    ))
+    setor = str(((sheet.get("sheet_data") or {}).get("header") or {}).get("setor_maquina") or "")
+    try:
+        result = _refs_lookup(
+            query_raw, include_done=bool(include_done), phase=phase, setor=setor,
+            modelo=modelo, comp_mm=length, offset=offset, require_phase=True,
+        )
+    except Exception as exc:
+        raise HTTPException(503, "Pesquisa indisponível; tenta novamente") from exc
+    result["revision"] = int(sheet.get("revision") or 0)
+    return JSONResponse(result)
 
 
 @app.post("/sheet/{sheet_id}/apply-of-entry")
@@ -4355,6 +4322,15 @@ async def sheet_apply_of_entry(sheet_id: int, request: Request) -> JSONResponse:
     from app.pipeline.scoring_engine import normalize_of
     of_norm = normalize_of(of_raw)
     refs = get_watcher().get_refs() or {}
+    if body.get("plan_sha256") and body["plan_sha256"] != refs.get("plan_sha256"):
+        raise HTTPException(409, "O plano mudou; pesquisa novamente para confirmar a referência")
+    if body.get("expected_revision") is not None:
+        try:
+            expected_revision = int(body["expected_revision"])
+        except (ValueError, TypeError):
+            raise HTTPException(400, "Revisão da folha inválida")
+        if expected_revision != int(sheet.get("revision") or 0):
+            raise HTTPException(409, "A folha mudou; pesquisa novamente para confirmar a referência")
     entries = (refs.get("of_to_entries") or {}).get(of_norm) or []
     if not entries or entry_idx >= len(entries):
         raise HTTPException(404, "OF ou entry não encontrados no plan")

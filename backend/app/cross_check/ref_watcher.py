@@ -41,6 +41,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.pipeline.plan_status import closed_status
 from app.pipeline.scoring_engine import normalize_of
 
 logger = logging.getLogger(__name__)
@@ -474,7 +475,8 @@ def _mine_from_excel(
 
             # Round 43 Sol 2: track `fechado` flag (0=active, 1=closed)
             fechado_raw = r[hdrs.get("fechado", -1)] if "fechado" in hdrs else None
-            fechado_flag = "1" if str(fechado_raw or "").strip() in ("1", "1.0", "True") else "0"
+            fechado = closed_status(fechado_raw)
+            fechado_flag = "1" if fechado is True else "0"
 
             # R106 — quanttrp (final qty) + phase columns. A row is "concluded"
             # when every phase == quanttrp; rows that aren't get cross-check
@@ -504,6 +506,7 @@ def _mine_from_excel(
                 "material": str(r[hdrs["material"]] or "").strip() if "material" in hdrs else None,
                 # Round 43: closed-OF flag, used for snap disambiguation
                 "fechado": fechado_flag,
+                "fechado_known": fechado is not None,
                 # R106: phase tracking
                 "quanttrp": quanttrp,
                 "fases": fases,

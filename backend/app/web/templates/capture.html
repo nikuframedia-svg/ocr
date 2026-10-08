@@ -362,8 +362,7 @@
                     <template x-if="hasFecho(sheet)">
                       <td style="padding:6px 8px; text-align:center;">
                         <input type="checkbox"
-                               :checked="String(row.fecho || '').toUpperCase() === 'X'"
-                               @change="row.fecho = $event.target.checked ? 'X' : ''">
+                               x-model="row.fecho_checked">
                       </td>
                     </template>
                   </tr>
@@ -891,7 +890,13 @@ function captureApp() {
         if (!res.ok) { this.qtdSheets = []; return; }
         const body = await res.json();
         console.log(`[loadQtds] received ${(body.sheets || []).length} sheets`);
-        this.qtdSheets = body.sheets || [];
+        this.qtdSheets = (body.sheets || []).map(s => ({
+          ...s,
+          rows: (s.rows || []).map(r => ({
+            ...r,
+            fecho_checked: String(r.fecho ?? '').trim().toUpperCase() === 'X',
+          })),
+        }));
       } catch (e) {
         console.error(`[loadQtds] error:`, e);
         this.qtdSheets = [];
@@ -950,7 +955,7 @@ function captureApp() {
             edits.push({
               sheet_id: s.sheet_id,
               field_path: `rows[${r.row_index}].fecho`,
-              value: String(r.fecho ?? ''),
+              value: r.fecho_checked ? 'X' : '',
             });
           }
         }

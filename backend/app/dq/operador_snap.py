@@ -337,6 +337,21 @@ def snap_operador(
     name_raw = str(raw_name or "")
     cod_raw_str = str(raw_cod or "")
     cod_int = _parse_cod(raw_cod)
+    # A full SAP employee number must resolve through the official entry,
+    # rather than through a digit-distance guess on an eight-digit number.
+    pernr_matches = [
+        cod for cod, entry in colaboradores.items()
+        if cod_raw_str.strip()
+        and str(entry.get("pernr") or "").strip() == cod_raw_str.strip()
+    ]
+    if len(pernr_matches) > 1:
+        return SnapResult(
+            raw_name=name_raw, raw_cod=cod_raw_str,
+            snapped_name=name_raw, snapped_cod=cod_raw_str, pernr="",
+            rule="operador.pernr_ambiguous", applied=False, suspended=True,
+        )
+    if len(pernr_matches) == 1:
+        cod_int = pernr_matches[0]
     name_norm_pre = _normalize_name(name_raw)
 
     # Condition F — cod empty/non-numeric. Try alias + confusion before
@@ -350,12 +365,18 @@ def snap_operador(
             except (ValueError, TypeError):
                 al_cod = 0
             if al_cod > 0:
+                entry = colaboradores.get(al_cod)
+                if entry is None:
+                    # An alias cannot create an employee missing from the
+                    # active official list. Continue with catalog matching.
+                    al_cod = 0
+            if al_cod > 0:
                 return SnapResult(
                     raw_name=name_raw,
                     raw_cod=cod_raw_str,
-                    snapped_name=str(al.get("sname") or "").upper(),
+                    snapped_name=entry["sname"],
                     snapped_cod=str(al_cod),
-                    pernr=str(al.get("pernr") or _derive_pernr_from_cod(al_cod)),
+                    pernr=entry["pernr"],
                     rule="operador.alias_lexicon",
                     applied=True,
                     suspended=False,
@@ -442,14 +463,16 @@ def snap_operador(
         # exactamente igual ao canónico.
         if name_norm == canonical_sname:
             case_diff = name_raw.strip() != canonical_sname
+            code_diff = cod_raw_str.strip() != str(cod_int)
             return SnapResult(
                 raw_name=name_raw,
                 raw_cod=cod_raw_str,
                 snapped_name=canonical_sname,
                 snapped_cod=str(cod_int),
                 pernr=canonical_pernr,
-                rule="operador.case_normalize" if case_diff else "operador.exact_match",
-                applied=case_diff,
+                rule=("operador.case_normalize" if case_diff else
+                      "operador.code_normalize" if code_diff else "operador.exact_match"),
+                applied=case_diff or code_diff,
                 suspended=False,
             )
 
