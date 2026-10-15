@@ -354,13 +354,16 @@
   },
   "historical_screenshot_example": {
     "sheet_id": 7955,
-    "observed_status": "validated",
-    "validated_at": "2026-10-15 09:32:27",
-    "revision": 24,
     "row_index": 4,
-    "stored_of": "265958",
-    "of_mentioned_in_attached_message": "266303",
-    "decision": "No automatic mutation: the attached conversation demonstrates the editing problem and is not a direct instruction to amend a record that has since been validated. Generic validated-record protection remains intact.",
-    "product_limit": "Original currently supports an audited date correction after validation, but no normal OF amendment or reopening flow. Free editing applies to sheets in review."
+    "status": "validated",
+    "revision": 25,
+    "old_of": "265958",
+    "corrected_of": "266303",
+    "audit_id": 171099,
+    "validated_at_preserved": true,
+    "pending_csv_updated_without_duplicate": true,
+    "user_authorized_amendment_applied": true,
+    "evidence": "docs/sheet7955-order-amendment-2026-10-15.json",
+    "product_limit": "Normal validated-sheet editing remains protected; this authorised maintenance amendment preserves validation and audit."
   }
 }

@@ -1,0 +1,248 @@
+{
+  "date": "2026-10-15",
+  "user_authorized_update": true,
+  "application_code_unchanged_since_free_editing_rollout": true,
+  "amendment": {
+    "sheet_id": 7955,
+    "row": 5,
+    "old_order": "265958",
+    "new_order": "266303",
+    "revision_before": 24,
+    "csv_sha256_before": "0b7815624677a91a090a87ec89cf43edea3b0a1dc689281b17985e4c01de0c7e",
+    "csv_sha256_after": "b11c42adc6e0a53e14e12da1f4c2533ba328f09eae212ffc02749f5ffc6ba3a5",
+    "applied": true,
+    "revision_after": 25,
+    "audit_id": 171099
+  },
+  "verification": {
+    "sheet_id": 7955,
+    "revision": 25,
+    "status": "validated",
+    "row_5_of": "266303",
+    "audit_id": 171099,
+    "only_target_order_changed": true,
+    "validation_and_raw_ocr_preserved": true,
+    "production_ids_preserved": true,
+    "csv_download_correct": true,
+    "pending_factory_csv_correct": true,
+    "no_duplicate_csv_created": true,
+    "public_checks": [
+      {
+        "path": "/sheet/7955",
+        "status": 200,
+        "seconds": 0.105
+      },
+      {
+        "path": "/sheet/7955/csv",
+        "status": 200,
+        "seconds": 0.029
+      },
+      {
+        "path": "/kanbans?sheet_id=7955",
+        "status": 200,
+        "seconds": 0.341
+      },
+      {
+        "path": "/admin/queue-status",
+        "status": 200,
+        "seconds": 0.045
+      }
+    ],
+    "queue": {
+      "queue_size": 0,
+      "worker_alive": true,
+      "cross_check": {
+        "pending": 0,
+        "shadow_pending": 0,
+        "active": null
+      }
+    }
+  },
+  "actual_data_rehearsal": {
+    "rehearsal_passed": true,
+    "single_order_and_audit_only": true,
+    "validated_at_preserved": true,
+    "raw_ocr_preserved": true,
+    "all_production_ids_preserved": true,
+    "production_csv_untouched": true,
+    "result": {
+      "sheet_id": 7955,
+      "row": 5,
+      "old_order": "265958",
+      "new_order": "266303",
+      "revision_before": 24,
+      "csv_sha256_before": "0b7815624677a91a090a87ec89cf43edea3b0a1dc689281b17985e4c01de0c7e",
+      "csv_sha256_after": "b11c42adc6e0a53e14e12da1f4c2533ba328f09eae212ffc02749f5ffc6ba3a5",
+      "applied": true,
+      "revision_after": 25,
+      "audit_id": 171099
+    }
+  },
+  "tests": {
+    "focused_passed": 29,
+    "scope": [
+      "one cell, audit and stable production IDs",
+      "validated status/date and raw OCR preserved",
+      "stale revision/CSV/imported/racing writes rejected",
+      "CSV and SQLite rolled back together on commit failure",
+      "CSV multiline, BOM and quoting preserved",
+      "existing validated date corrections"
+    ]
+  },
+  "external_destination_check": {
+    "pending_csv_found": true,
+    "matching_imported_csv_found": false,
+    "existing_excel_target_rows": 0,
+    "local_filesystem": true,
+    "active_legacy_importer_processes": 0,
+    "pending_csv_replaced_in_place": true,
+    "legacy_importer_executed": false,
+    "note": "The legacy importer does not support nesting and appends rows without deduplication. No bulk import or redistribution was performed."
+  },
+  "cross_check": {
+    "revision": 25,
+    "seconds": 7.709,
+    "separate_maintenance_process": true,
+    "validated_values_preserved": true,
+    "note": "A cold background calculation, not a save, validation, or HTTP response duration."
+  },
+  "backup_release": "sheet7955-order-amendment-20261015",
+  "all_three_public_checks": {
+    "observed_at": "2026-10-15T12:14:23.255214+00:00",
+    "synthetic_read_only_probes": [
+      {
+        "app": "original",
+        "path": "/health",
+        "status": 200,
+        "seconds": 0.028,
+        "server_timing": "app;dur=1.3",
+        "bytes": 269,
+        "data": {
+          "status": "ok",
+          "engine_version": "v31_R270",
+          "latency_fix": "2026-10-15.6",
+          "review_flow": "free-editing-2026-10-15.1",
+          "scoring_process": true,
+          "python": "3.12.3"
+        }
+      },
+      {
+        "app": "original",
+        "path": "/sheet/7955",
+        "status": 200,
+        "seconds": 0.138,
+        "server_timing": "app;dur=132.2",
+        "bytes": 87139,
+        "direct_edit_present": true,
+        "interaction_metrics_present": true
+      },
+      {
+        "app": "original",
+        "path": "/kanbans?sheet_id=7955",
+        "status": 200,
+        "seconds": 0.397,
+        "server_timing": "app;dur=356.1",
+        "bytes": 98457
+      },
+      {
+        "app": "original",
+        "path": "/admin/queue-status",
+        "status": 200,
+        "seconds": 0.01,
+        "server_timing": "app;dur=1.8",
+        "bytes": 97,
+        "data": {
+          "queue_size": 0,
+          "worker_alive": true,
+          "cross_check": {
+            "pending": 0,
+            "shadow_pending": 0,
+            "active": null
+          }
+        }
+      },
+      {
+        "app": "original",
+        "path": "/admin/latency-status",
+        "status": 200,
+        "seconds": 0.078,
+        "server_timing": "app;dur=1.9",
+        "bytes": 1792
+      },
+      {
+        "app": "perfis",
+        "path": "/health",
+        "status": 200,
+        "seconds": 0.033,
+        "server_timing": "app;dur=1, pg;dur=0;desc=\"0 q 0 conn\"",
+        "bytes": 204,
+        "data": {
+          "app": "kanban-mes-mtg2",
+          "engine": "legacy",
+          "platform": "linux",
+          "code_fingerprint": "29414a6ebc1886a8741062577959eeda35c88906b76acf6385bd99b6ab5a209b",
+          "commit": null,
+          "review_flow": "free-editing-2026-10-15.1"
+        }
+      },
+      {
+        "app": "perfis",
+        "path": "/sheet/c67dd0c09ed2",
+        "status": 200,
+        "seconds": 0.048,
+        "server_timing": "app;dur=5, pg;dur=0;desc=\"0 q 0 conn\"",
+        "bytes": 79824,
+        "direct_edit_present": true,
+        "interaction_metrics_present": true
+      },
+      {
+        "app": "perfis",
+        "path": "/admin/latency-status",
+        "status": 200,
+        "seconds": 0.034,
+        "server_timing": "app;dur=1, pg;dur=0;desc=\"0 q 0 conn\"",
+        "bytes": 1792
+      },
+      {
+        "app": "cantoneiras",
+        "path": "/health",
+        "status": 200,
+        "seconds": 0.02,
+        "server_timing": "app;dur=1, pg;dur=0;desc=\"0 q 0 conn\"",
+        "bytes": 199,
+        "data": {
+          "app": "kanban-mes",
+          "engine": "legacy",
+          "platform": "linux",
+          "code_fingerprint": "ecacc47a9eb3d6d15326b24fee244b8f6636cf93e7a05fc1bd5b609e958df3f6",
+          "commit": null,
+          "review_flow": "free-editing-2026-10-15.1"
+        }
+      },
+      {
+        "app": "cantoneiras",
+        "path": "/sheet/37ad462fb044",
+        "status": 200,
+        "seconds": 0.045,
+        "server_timing": "app;dur=7, pg;dur=0;desc=\"0 q 0 conn\"",
+        "bytes": 60061,
+        "direct_edit_present": true,
+        "interaction_metrics_present": true
+      },
+      {
+        "app": "cantoneiras",
+        "path": "/admin/latency-status",
+        "status": 200,
+        "seconds": 0.036,
+        "server_timing": "app;dur=1, pg;dur=0;desc=\"0 q 0 conn\"",
+        "bytes": 1792
+      }
+    ],
+    "perfis_295_models_and_quantities_preserved": true,
+    "perfis_295_status": "in_review",
+    "watcher_updated_at": "2026-10-15T12:14:21.006040+00:00",
+    "real_write_measurements": [],
+    "in_flight": [],
+    "note": "No synthetic POST or production validation was performed."
+  }
+}
