@@ -16,11 +16,19 @@ Responsibilities:
 """
 from app.pipeline.scoring_engine import (
     CROSS_CHECK_STATUSES,
-    cross_check_sheet,
+    cross_check_sheet as _inline_cross_check_sheet,
 )
 
 from .ref_watcher import RefWatcher, get_watcher
 from .storage import store_cross_check, load_summary, load_to_analisar
+
+
+def cross_check_sheet(sheet_data, dq_audit, refs, collect_trace=False):
+    from app.pipeline import scoring_process
+    if scoring_process.enabled():
+        return scoring_process.run(
+            "legacy", sheet_data, dq_audit, refs, collect_trace=collect_trace)
+    return _inline_cross_check_sheet(sheet_data, dq_audit, refs, collect_trace=collect_trace)
 
 __all__ = [
     "RefWatcher", "get_watcher",

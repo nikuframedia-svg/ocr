@@ -8,11 +8,13 @@ Run:
 from __future__ import annotations
 
 import asyncio
+import faulthandler
 import datetime as dt
 import json
 import os
 import re
 import secrets
+import signal
 import shutil
 import sqlite3  # Task C — erros de unicidade nas unidades fabris
 import sys
@@ -40,6 +42,7 @@ sys.path.insert(0, str(_REPO / "backend"))
 from app import kernel
 from app.config import get_settings
 from app.web import attractors, calendario, db, db_backup, export, kpi_params, kpis, llm_assistant, ocr_queue, ocr_runner, pdf_ingest, template_store
+from app.web import cross_check_queue
 from app.cross_check import (
     cross_check_sheet,
     get_watcher,
@@ -84,7 +87,8 @@ def _get_operadores() -> tuple[str, ...]:
     ainda não foi carregado ou está vazio — defensivo para boot frio.
     """
     try:
-        refs = get_watcher().get_refs()
+        watcher = get_watcher()
+        refs = getattr(watcher, "peek_refs", watcher.get_refs)()
         colabs = refs.get("colaboradores") or {}
         snames = sorted({
             (c.get("sname") or "").strip()
@@ -356,6 +360,11 @@ def _process_discovery(template_id: int) -> None:
 
 @app.on_event("startup")
 def _startup() -> None:
+    if hasattr(signal, "SIGUSR2"):
+        try:
+            faulthandler.register(signal.SIGUSR2, all_threads=True)
+        except (OSError, RuntimeError):
+            pass
     db.init_db()
     # Task C E4 — instala os templates registados (DB) no registry antes de
     # o worker arrancar; com DB vazia é identidade (18 builtins).
@@ -385,16 +394,26 @@ def _startup() -> None:
                               {"scope": "env", "mode": mode})
     except Exception as e:
         print(f"[declared-vote startup] {e}", file=sys.stderr)
-    # R71 — boot background OCR worker + recover any sheets stuck in
-    # status='pending' from a previous process. The 10s window skips
-    # sheets that are about to be enqueued by /upload in flight right now.
+    # Startup runs before accepting uploads. Recover every durable pending
+    # sheet, including uploads just before a restart.
     ocr_queue.start_worker(_process_sheet_ocr, _process_discovery)
     n_recovered = ocr_queue.recover_pending(
-        older_than_seconds=10,
+        older_than_seconds=0,
         list_pending_fn=db.list_stuck_pending,
     )
     if n_recovered:
         print(f"[R71 startup] re-enqueued {n_recovered} pending sheet(s)", file=sys.stderr)
+    # A restart can interrupt the cross-check after OCR already changed the
+    # status to extracted. Resume that stage without another paid OCR call.
+    _recover_incomplete_cross_checks()
+    from app.pipeline import scoring_process
+    if scoring_process.enabled():
+        def _warm_scoring() -> None:
+            try:
+                scoring_process.warmup()
+            except Exception:
+                traceback.print_exc()
+        threading.Thread(target=_warm_scoring, name="scoring-warmup", daemon=True).start()
     # Task C E4 — re-enfileira descobertas órfãs (processo morreu a meio).
     try:
         for tpl in db.list_kanban_templates(status="a_analisar"):
@@ -480,9 +499,19 @@ async def _attach_watermark(request: Request, call_next):
     embed it server-side on first paint. Also attaches a `mobile` flag
     used by templates to render mobile-only / desktop-only sections.
     """
+    started = time.perf_counter()
     request.state.watermark = kpis.latest_sheet_id()
     request.state.mobile = _is_mobile_request(request)
     response = await call_next(request)
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    response.headers["Server-Timing"] = f"app;dur={elapsed_ms:.1f}"
+    # Measure actual user-facing latency separately from background scoring.
+    # No query strings, request bodies or operator identities in the log.
+    if request.url.path.startswith(("/sheet/", "/kanbans", "/queue")):
+        print(json.dumps({"event": "http_timing", "method": request.method,
+                          "path": request.url.path, "status": response.status_code,
+                          "duration_ms": round(elapsed_ms, 1)}),
+              file=sys.stderr, flush=True)
     # Header is always present; client uses it to detect increments.
     response.headers["X-Sheet-Watermark"] = str(request.state.watermark)
     return response
@@ -536,9 +565,12 @@ def health() -> JSONResponse:
     haver dúvida sobre o que está a correr."""
     from app.pipeline.scoring_engine import ENGINE_VERSION
     from app.pipeline.inference.remote_ocr import configuration_status
+    from app.pipeline.scoring_process import enabled as scoring_process_enabled
     return JSONResponse({
         "status": "ok",
         "engine_version": ENGINE_VERSION,
+        "latency_fix": "2026-10-15.4",
+        "scoring_process": scoring_process_enabled(),
         "git_sha": _git_short_sha(),
         "python": sys.version.split()[0],
         "pid": os.getpid(),
@@ -1206,7 +1238,7 @@ def _run_and_store_cross_check(
     ocr_metrics: dict | None = None,
 ) -> dict | None:
     """Serialize scoring runs for a sheet, then process its latest revision."""
-    with _cross_check_lock(sheet_id):
+    with cross_check_queue.SCORING_SLOT, _cross_check_lock(sheet_id):
         return _run_and_store_cross_check_locked(
             sheet_id,
             rebuild_from_raw=rebuild_from_raw,
@@ -1446,6 +1478,7 @@ def _run_and_store_cross_check_locked(
     if len(date_pt) == 10 and date_pt[2] == "-":
         date_iso = f"{date_pt[6:10]}-{date_pt[3:5]}-{date_pt[0:2]}"
     _t0 = time.perf_counter()
+    result["sheet_revision"] = int(sheet.get("revision") or 0)
     store_cross_check(
         sheet_id=sheet_id,
         image_path=sheet["image_path"],
@@ -1496,6 +1529,7 @@ def _spawn_shadow_scoring(
     def _run() -> None:
         try:
             from app.pipeline.scoring_engine import shadow_score, set_scoring_variant
+            from app.pipeline import scoring_process
             # R250 — A/B real na fábrica: a sombra corre a variante configurada
             # (só nesta thread — ContextVar); produção intocada, output em
             # sheets.shadow_scoring_json.
@@ -1509,9 +1543,12 @@ def _spawn_shadow_scoring(
                 set_scoring_variant(shadow_variant)
             run_id = db.start_shadow_run(sheet_id)
             try:
-                scoring, total, snapped, confirmed, na, dur_ms = shadow_score(
-                    sheet_data, dq_audit, refs
-                )
+                if scoring_process.enabled():
+                    scoring, total, snapped, confirmed, na, dur_ms = scoring_process.run(
+                        "shadow", sheet_data, dq_audit, refs)
+                else:
+                    scoring, total, snapped, confirmed, na, dur_ms = shadow_score(
+                        sheet_data, dq_audit, refs)
                 db.finish_shadow_run(
                     run_id, sheet_id, scoring,
                     total, snapped, confirmed, na, dur_ms,
@@ -1540,9 +1577,16 @@ def _spawn_shadow_scoring(
             # Falha a abrir o run sequer — não devia acontecer, mas guarda
             traceback.print_exc()
 
-    threading.Thread(
-        target=_run, daemon=True, name=f"shadow-score-{sheet_id}"
-    ).start()
+    def _bounded_run() -> None:
+        with cross_check_queue.SCORING_SLOT:
+            _run()
+
+    # The latest pending shadow replaces older snapshots of this sheet.
+    # Production recalculations are served before shadow jobs.
+    cross_check_queue.queue.submit(
+        ("shadow", sheet_id), json.dumps(sheet_data, sort_keys=True),
+        _bounded_run, shadow=True,
+    )
 
 
 @app.get("/sheet/{sheet_id}", response_class=HTMLResponse)
@@ -1577,6 +1621,7 @@ def sheet_page(
         cells_by_path = sheet["dq_audit"].get("cells", {})
 
     view_mode = "raw" if view == "raw" else "final"
+    cc_context = _cross_check_view_context(sheet_id)
     if view_mode == "raw" and sheet.get("raw_extraction"):
         # Show original OCR — disable cross-check colors (they validate
         # the post-snap values, not raw)
@@ -1631,6 +1676,7 @@ def sheet_page(
             "back_url": back_url,
             "has_cropped": sheet_has_cropped,
             "date_iso_for_correction": date_iso_for_correction,
+            **cc_context,
             **tpl_ctx,  # template, template_name, row/footer/header_fields
         },
     )
@@ -1678,6 +1724,20 @@ def _build_snapped_map_from_raw(sheet: dict) -> dict[str, bool]:
     return out
 
 
+def _cross_check_view_context(sheet_id: int) -> dict:
+    from app.cross_check.storage import load_sheet_cross_check
+
+    sheet = db.get_sheet(sheet_id) or {}
+    cc = load_sheet_cross_check(sheet_id)
+    stale = not cc or (cc.get("sheet_revision") is not None
+                      and cc["sheet_revision"] != int(sheet.get("revision") or 0))
+    busy = (cross_check_queue.queue.busy(("cross", sheet_id))
+            or _cross_check_lock(sheet_id).locked())
+    token = str(cc.get("checked_at") or "") if cc else ""
+    return {"cc_state": "pending" if busy else "outdated" if stale else "ready",
+            "cc_seen": token, "cc_changed": False}
+
+
 def _build_cc_maps(sheet_id: int, *, allow_regen: bool = True) -> tuple[
     dict[str, str], dict[str, str], dict[str, str], dict[str, bool],
     dict[str, bool], dict[str, bool],
@@ -1698,24 +1758,26 @@ def _build_cc_maps(sheet_id: int, *, allow_regen: bool = True) -> tuple[
     from app.cross_check.storage import load_sheet_cross_check
     from app.pipeline.scoring_engine import ENGINE_VERSION
     cc = load_sheet_cross_check(sheet_id)
+    sheet = db.get_sheet(sheet_id) or {}
+    if (cc and cc.get("sheet_revision") is not None
+            and cc["sheet_revision"] != int(sheet.get("revision") or 0)):
+        cc = None
     stale_cc = None
     if not cc:
         stale_cc = load_sheet_cross_check(sheet_id, include_stale=True)
-    # R123 (D1) — fallback on-demand. A folha nunca teve cross-check
-    # (processada antes do R118) ou o JSON é de um motor anterior ao R123:
-    # regenera-o agora e relê, para nenhuma folha abrir toda cinza nem com
-    # cores de um motor antigo.
-    if allow_regen and (not cc or cc.get("engine_version") != ENGINE_VERSION):
+    # Never make page rendering wait for CPU work or a previous sheet lock.
+    # Stale colors stay hidden; the viewer shows progress and a refresh link.
+    if (allow_regen and sheet.get("sheet_data") and sheet.get("status") != "pending"
+            and (not cc or cc.get("engine_version") != ENGINE_VERSION)):
         try:
             rebuild_from_raw = bool(
                 (cc and cc.get("engine_version") != ENGINE_VERSION)
                 or (stale_cc and stale_cc.get("engine_version") != ENGINE_VERSION)
             )
-            _run_and_store_cross_check(
-                sheet_id, rebuild_from_raw=rebuild_from_raw,
+            _start_sheet_cross_check(
+                {sheet_id}, rebuild_from_raw=rebuild_from_raw,
                 profile_trigger="view_regen",
             )
-            cc = load_sheet_cross_check(sheet_id)
         except Exception:
             # R223 — NÃO engolir em silêncio. Esta regeneração on-demand é o que
             # aplica um motor novo às folhas antigas ao abri-las; se falhava
@@ -1727,7 +1789,6 @@ def _build_cc_maps(sheet_id: int, *, allow_regen: bool = True) -> tuple[
                 f"{sheet_id}: {traceback.format_exc()}",
                 file=sys.stderr, flush=True,
             )
-    sheet = db.get_sheet(sheet_id) or {}
     snapped_map = _build_snapped_map_from_raw(sheet)
     if not cc:
         return {}, {}, {}, {}, snapped_map, {}
@@ -2491,12 +2552,40 @@ def _run_sheet_cross_checks(
 ) -> None:
     for sid in sheet_ids:
         try:
+            # A queued edit may replace a pending view regeneration. Preserve
+            # the need to rebuild old engine output while keeping human edits.
+            from app.cross_check.storage import load_sheet_cross_check
+            from app.pipeline.scoring_engine import ENGINE_VERSION
+            previous = load_sheet_cross_check(sid, include_stale=True)
             kwargs = {"profile_trigger": profile_trigger}
-            if rebuild_from_raw:
+            if rebuild_from_raw or (previous and previous.get("engine_version") != ENGINE_VERSION):
                 kwargs["rebuild_from_raw"] = True
             _run_and_store_cross_check(sid, **kwargs)
         except Exception:
             traceback.print_exc()
+
+
+def _recover_incomplete_cross_checks() -> None:
+    from functools import partial
+    from app.cross_check.storage import load_sheet_cross_check
+
+    def resume(sid: int) -> None:
+        result = _run_and_store_cross_check(sid, profile_trigger="startup_resume")
+        current = db.get_sheet(sid) or {}
+        if result is not None and not current.get("needs_review"):
+            _deposit_csv_to_factory(sid)
+
+    # Bound startup work to recent uploads; older sheets recover on opening.
+    for sheet in db.list_sheets(limit=100):
+        if sheet.get("status") != "extracted":
+            continue
+        sid = int(sheet["id"])
+        if load_sheet_cross_check(sid, include_stale=True) is None:
+            current = db.get_sheet(sid) or {}
+            if current.get("status") != "extracted":
+                continue
+            cross_check_queue.queue.submit(
+                ("cross", sid), int(current.get("revision") or 0), partial(resume, sid))
 
 
 def _start_sheet_cross_check(
@@ -2505,19 +2594,16 @@ def _start_sheet_cross_check(
     profile_trigger: str,
     rebuild_from_raw: bool = False,
 ) -> None:
-    ordered_ids = tuple(sorted({int(sid) for sid in sheet_ids}))
-    if not ordered_ids:
-        return
-    threading.Thread(
-        target=_run_sheet_cross_checks,
-        args=(ordered_ids,),
-        kwargs={
-            "profile_trigger": profile_trigger,
-            "rebuild_from_raw": rebuild_from_raw,
-        },
-        name=f"{profile_trigger}-cross-check",
-        daemon=True,
-    ).start()
+    from functools import partial
+    for sid in sorted({int(sid) for sid in sheet_ids}):
+        sheet = db.get_sheet(sid)
+        if not sheet or not sheet.get("sheet_data"):
+            continue
+        cross_check_queue.queue.submit(
+            ("cross", sid), int(sheet.get("revision") or 0),
+            partial(_run_sheet_cross_checks, (sid,),
+                    profile_trigger=profile_trigger, rebuild_from_raw=rebuild_from_raw),
+        )
 
 
 @app.post("/mobile/qtds-batch")
@@ -2721,6 +2807,7 @@ def admin_queue_status() -> JSONResponse:
     return JSONResponse({
         "queue_size": ocr_queue.queue_size(),
         "worker_alive": ocr_queue.worker_alive(),
+        "cross_check": cross_check_queue.queue.snapshot(),
     })
 
 
@@ -2881,6 +2968,19 @@ def sheet_status_fragment(sheet_id: int) -> Response:
         '</span></div>'
     )
     return HTMLResponse(html)
+
+
+@app.get("/sheet/{sheet_id}/cross-check-status", response_class=HTMLResponse)
+def sheet_cross_check_status(request: Request, sheet_id: int, seen: str = "") -> Response:
+    if db.get_sheet(sheet_id) is None:
+        raise HTTPException(404)
+    context = _cross_check_view_context(sheet_id)
+    context["cc_changed"] = context["cc_state"] == "ready" and context["cc_seen"] != seen
+    context["cc_seen"] = seen
+    return templates.TemplateResponse(
+        request, "_cross_check_status.html", {"sheet": {"id": sheet_id}, **context},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.post("/admin/reload-refs")
@@ -4980,6 +5080,7 @@ def kanban_viewer(
     footer = (sheet.get("sheet_data") or {}).get("footer", {}) if sheet else {}
 
     # Round 33: cross-check colors per cell
+    cc_context = _cross_check_view_context(sheet["id"]) if sheet else {}
     (cc_status_by_path, cc_ref_by_path, cc_ref_title_by_path,
      cc_suspended_by_path, cc_snapped_by_path,
      cc_obra_concluida_by_path) = ({}, {}, {}, {}, {}, {})
@@ -5026,6 +5127,7 @@ def kanban_viewer(
             "data_iso_for_validate": data_iso_for_validate,
             "date_iso_for_correction": data_iso_for_validate,
             "has_cropped": sheet_has_cropped,
+            **cc_context,
             **_template_ctx_for_sheet(sheet),  # per-current-sheet template
         },
     )

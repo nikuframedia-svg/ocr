@@ -1,0 +1,86 @@
+{
+  "release": "2026-10-15.4",
+  "production_published": true,
+  "runtime_configuration": {
+    "OCR_SCORING_PROCESS": "1",
+    "PYTHONHASHSEED": "0"
+  },
+  "changes": [
+    "nonblocking sheet rendering",
+    "latest pending revision per sheet",
+    "one persistent scoring process",
+    "bounded low-priority shadow work",
+    "native exact Levenshtein",
+    "incremental row cache with production/reference invalidation",
+    "nonblocking reference snapshots for UI"
+  ],
+  "production_observations": {
+    "pending_recovered": 21,
+    "pending_after": 0,
+    "scoring_sample_n": 21,
+    "scoring_median_seconds": 2.724,
+    "scoring_max_seconds": 7.977,
+    "final_parallel_http_seconds": {
+      "sheet_7955": 0.576,
+      "sheet_7904": 0.576,
+      "kanbans": 0.848,
+      "queue": 0.611
+    }
+  },
+  "isolated_replay_7904_seconds": {
+    "initial_before": 27.892,
+    "initial_after": 12.666,
+    "edit_one_row_before": 26.584,
+    "edit_one_row_after": 0.473,
+    "unchanged_before": 26.76,
+    "unchanged_after": 0.019
+  },
+  "validation": {
+    "unit_tests_passed": 1569,
+    "replayed_sheets_with_identical_decisions_and_trace": 6,
+    "process_refreshes_consumption_every_job": true,
+    "custom_templates_and_variant_isolation_tested": true
+  },
+  "files": [
+    {
+      "path": "backend/app/pipeline/scoring_engine.py",
+      "sha256": "30623ea0f80de8085b461ec68edbe919bc449104098942a4ca5513223d6ea49a"
+    },
+    {
+      "path": "backend/app/cross_check/storage.py",
+      "sha256": "3c18f85f72458548d748e9eb3d5133256ec9b20f1d896bd3452f1163cf5fab88"
+    },
+    {
+      "path": "backend/app/web/main.py",
+      "sha256": "0b72cbb50e4876a9fb77999759e1104e8508d22d1776b751f0ecfc9b507ffdca"
+    },
+    {
+      "path": "backend/app/web/cross_check_queue.py",
+      "sha256": "c67aadc0b68b497988de3bc6e7a1b6ba50ffe062d90176c3592d160e6872dc05"
+    },
+    {
+      "path": "backend/app/web/templates/sheet.html",
+      "sha256": "84880f234846c436b1a9644b4d3971f4464f8acf55960e6619206994c511ac1d"
+    },
+    {
+      "path": "backend/app/web/templates/kanban_viewer.html",
+      "sha256": "293b6d262fa4c035acc452ce298bf2f56a04cb5d2415dcacff662be04583e8ce"
+    },
+    {
+      "path": "backend/app/web/templates/_cross_check_status.html",
+      "sha256": "08213cb3c681622b18732e8c91b28d82a649d212473dca1b07e6d20f5e87ec23"
+    },
+    {
+      "path": "backend/app/cross_check/ref_watcher.py",
+      "sha256": "6f1970f21a1c5586f3fadc12f28ecbbb02dc9898acc03a0bb3c228c50e3e7b45"
+    },
+    {
+      "path": "backend/app/cross_check/__init__.py",
+      "sha256": "ddf2d3dccd005530fa60cb2800f84b7ae8f9de8acbbf8fe19776d86b9a6f496b"
+    },
+    {
+      "path": "backend/app/pipeline/scoring_process.py",
+      "sha256": "1bff3969adbaa4cd986ee639d52a5e27d082965333ed1379f6a6515bd57fe275"
+    }
+  ]
+}

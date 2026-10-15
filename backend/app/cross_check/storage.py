@@ -124,6 +124,7 @@ def store_cross_check(
         "operador": operador,
         "date": date_iso,
         "sheet_status": sheet_status,
+        "sheet_revision": cross_check_result.get("sheet_revision"),
         "checked_at": cross_check_result.get("checked_at"),
         "refs_loaded_at": cross_check_result.get("refs_loaded_at"),
         "refs_snapshot": cross_check_result.get("refs_snapshot") or {},

@@ -120,6 +120,10 @@
 
 <div class="page-content">
 
+{% if sheet.status not in ('pending', 'error') and view_mode != 'raw' %}
+  {% include "_cross_check_status.html" %}
+{% endif %}
+
 {% if sheet.status == 'pending' %}
   {# R71 — sheet is in the background OCR queue. HTMX polls the
      status-fragment every 2s. When OCR completes (status flips out
