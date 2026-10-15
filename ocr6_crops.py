@@ -12,6 +12,7 @@ import csv
 import hashlib
 import json
 import logging
+import os
 import re
 import sys
 import time
@@ -25,7 +26,7 @@ from typing import Any
 from PIL import Image
 
 OLLAMA_URL = "http://localhost:11434"
-MODEL = "qwen2.5vl:7b"
+MODEL = os.environ.get("OCR_MODEL", "qwen2.5vl:7b")
 TIMEOUT_SEC = 600
 MAX_RETRIES = 2
 NUM_PREDICT = 8192
@@ -111,6 +112,9 @@ def split_kanban(path: Path) -> tuple[Image.Image, Image.Image, Image.Image]:
 
 
 def ollama_request(prompt: str, image_b64: str) -> tuple[str | None, dict]:
+    from app.pipeline.inference import remote_ocr
+    if remote_ocr.provider() != "ollama":
+        return remote_ocr.request_image(image_b64, prompt, model=MODEL)
     payload = {
         "model": MODEL,
         "prompt": prompt,

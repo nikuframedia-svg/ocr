@@ -36,6 +36,7 @@ from PIL import Image
 # import works both when ocr6 is imported by the web app and run standalone.
 sys.path.insert(0, str(Path(__file__).resolve().parent / "backend"))
 from app.pipeline.scoring_engine import normalize_of
+from app.pipeline.inference import remote_ocr
 
 # ── Configuração ──────────────────────────────────────────────────────────────
 # R64 — OLLAMA_URL is overridable via env var so the laptop runtime can
@@ -324,6 +325,9 @@ def ollama_request(
     R256 — ``prompt_text`` explícito substitui o padrão swap-global de
     ``PROMPT`` (R117); ``None`` mantém o global (CLI / Pass-1).
     """
+    base_prompt = prompt_text if prompt_text is not None else PROMPT
+    if remote_ocr.provider() != "ollama":
+        return remote_ocr.request_image(image_b64, base_prompt, model=MODEL)
     # Disable thinking for hybrid models (Qwen3 family). Without this, some
     # builds emit extra reasoning tokens that degrade JSON output and latency.
     # R224 — o `think:False` do Ollama nem sempre é honrado por builds custom
@@ -460,7 +464,8 @@ def process_image(
     # Try descending image sizes — Ollama's Qwen2.5-VL runner crashes
     # (GGML assertion) on rare dim+prompt combos around 1288×924; a
     # smaller resize sidesteps it without hurting accuracy much.
-    edges_to_try = [_MAX_IMAGE_LONG_EDGE, 1120, 1008]
+    edges_to_try = ([_MAX_IMAGE_LONG_EDGE, 1120, 1008]
+                    if remote_ocr.provider() == "ollama" else [_MAX_IMAGE_LONG_EDGE])
     raw = None
     telemetria = {}
     for edge_idx, edge in enumerate(edges_to_try):
@@ -480,12 +485,16 @@ def process_image(
             if raw is not None:
                 metrics.retries = attempt + edge_idx * (MAX_RETRIES + 1)
                 break
+            if telemetria.get("retryable") is False:
+                break
             if attempt < MAX_RETRIES:
                 log.warning(f"  retry {attempt + 1}/{MAX_RETRIES} (edge={edge})")
                 time.sleep(2)
         if raw is not None:
             if edge_idx > 0:
                 log.info(f"  ↻ recovered with smaller edge={edge}")
+            break
+        if telemetria.get("retryable") is False:
             break
         if edge_idx < len(edges_to_try) - 1:
             log.warning(f"  fallback to smaller edge ({edges_to_try[edge_idx + 1]})")

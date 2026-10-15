@@ -535,12 +535,14 @@ def health() -> JSONResponse:
     mostra o ENGINE_VERSION + git SHA realmente carregados, para nunca mais
     haver dúvida sobre o que está a correr."""
     from app.pipeline.scoring_engine import ENGINE_VERSION
+    from app.pipeline.inference.remote_ocr import configuration_status
     return JSONResponse({
         "status": "ok",
         "engine_version": ENGINE_VERSION,
         "git_sha": _git_short_sha(),
         "python": sys.version.split()[0],
         "pid": os.getpid(),
+        "ocr": configuration_status(),
     })
 
 
@@ -2369,6 +2371,8 @@ async def sheet_validate(
 
     try:
         db.validate_sheet(sheet_id, operador_final)
+    except db.SheetReferenceReviewError as exc:
+        raise HTTPException(409, str(exc)) from exc
     except db.SheetValidatedError as exc:
         raise HTTPException(
             409, "Folha já validada — não é possível re-validar"
@@ -4143,13 +4147,14 @@ def _refs_lookup(
     comp_mm: float | None = None,
     offset: int = 0,
     require_phase: bool = False,
+    refs: dict | None = None,
 ) -> dict:
     """Search the original plan rows; filtering/paging never changes their IDs."""
     from app.pipeline.scoring_engine import normalize_of
     from app.pipeline.of_consumption import sort_entries_by_remaining, _plan_cutoff_iso, _to_num
     from app.pipeline.plan_status import closed_status
 
-    refs = get_watcher().get_refs() or {}
+    refs = refs if refs is not None else (get_watcher().get_refs() or {})
     of_to_entries = refs.get("of_to_entries") or {}
     query_raw = query_raw.strip()
     q_upper = query_raw.upper()
@@ -4201,10 +4206,22 @@ def _refs_lookup(
 
     # Allocate consumption over the complete sibling group before applying
     # length/model filters or a page, so a filter cannot consume it twice.
+    # History must not change the waterfall allocation of current siblings.
+    active_pool = [e for e in pooled if e.get("_entry_source") != "history"]
+    history_pool = [e for e in pooled if e.get("_entry_source") == "history"]
     sorted_entries = sort_entries_by_remaining(
-        pooled, include_done=include_done, phase=phase, refs=refs,
+        active_pool, include_done=include_done, phase=phase, refs=refs,
         require_phase=require_phase,
     )
+    if history_pool:
+        sorted_entries.extend(sort_entries_by_remaining(
+            history_pool, include_done=include_done, phase=phase, refs=refs,
+            require_phase=require_phase,
+        ))
+        sorted_entries.sort(key=lambda e: (
+            float("inf") if e.get("_remaining") is None else e["_remaining"],
+            e.get("_quanttrp") or float("inf"),
+        ))
     if modelo:
         needle = modelo.strip().upper()
         sorted_entries = [e for e in sorted_entries
@@ -4221,6 +4238,8 @@ def _refs_lookup(
             status = None
         out_entries.append({
             "idx": offset + index, "orig_idx": entry["_orig_idx"], "of": entry["_of"],
+            "entry_source": entry.get("_entry_source", "plan"),
+            "entry_id": entry.get("_entry_id"),
             "cliente": entry.get("cliente", ""), "ov": str(entry.get("ov", "")),
             "modelo": entry.get("designacao", ""), "comp_mm": entry.get("comp"),
             "lbase": entry.get("lbase"), "ltopo": entry.get("ltopo"),
@@ -4245,6 +4264,7 @@ def sheet_of_lookup(
     modelo: str = "",
     comp_mm: str = "",
     offset: int = 0,
+    row_index: int = -1,
 ) -> JSONResponse:
     """R112 — devolve entries do plan_colunas para um OF/OV/modelo.
 
@@ -4277,15 +4297,109 @@ def sheet_of_lookup(
     # sobre-produzida marcava ~92% das linhas como fechadas.
     phase = _current_phase(sheet.get("sheet_data") or {}, refs)
     setor = str(((sheet.get("sheet_data") or {}).get("header") or {}).get("setor_maquina") or "")
+    from app.pipeline.manual_plan import ManualPlanUnavailable, load_catalog, normalize_order
+
+    catalog = None
+    history_message = ""
+    try:
+        catalog = load_catalog()
+    except ManualPlanUnavailable as exc:
+        history_message = str(exc)
+    lookup_refs = refs
+    if include_done and catalog:
+        by_of = {of: list(entries) for of, entries in (refs.get("of_to_entries") or {}).items()}
+        for of_key, entries in catalog["by_of"].items():
+            by_of.setdefault(of_key, []).extend(entries)
+        lookup_refs = {**refs, "of_to_entries": by_of}
     try:
         result = _refs_lookup(
             query_raw, include_done=bool(include_done), phase=phase, setor=setor,
             modelo=modelo, comp_mm=length, offset=offset, require_phase=True,
+            refs=lookup_refs,
         )
+        requested_of = normalize_order(query_raw)
+        rows = (sheet.get("sheet_data") or {}).get("rows") or []
+        row_model = str(rows[row_index].get("modelo") or "").split(" - ", 1)[0].strip() \
+            if 0 <= row_index < len(rows) and isinstance(rows[row_index], dict) else ""
+        result["notice"] = ""
+        result["requires_confirmation"] = False
+        if requested_of and not query_raw.upper().startswith("OV"):
+            result["requested_of"] = requested_of
+            result["order_exists"] = requested_of in catalog["orders"] if catalog else None
+            if result["n_total"] == 0:
+                if not include_done and catalog and requested_of in catalog["by_of"]:
+                    result["notice"] = (
+                        "Esta OF tem peças fechadas. Marca «Incluir peças já fechadas» "
+                        "para as consultar."
+                    )
+                else:
+                    result["notice"] = (
+                        f"A OF {requested_of} existe na base, mas não tem peças nesta lista de planeamento."
+                        if result["order_exists"] else
+                        f"Não encontrei peças para a OF {requested_of} nesta lista de planeamento."
+                    )
+                    hint = modelo.strip() or row_model
+                    if hint:
+                        suggestions = _refs_lookup(
+                            "", include_done=bool(include_done), phase=phase, setor=setor,
+                            modelo=hint, comp_mm=length, offset=offset, require_phase=True,
+                            refs=lookup_refs,
+                        )
+                        if suggestions["entries"]:
+                            result.update({k: suggestions[k] for k in (
+                                "entries", "n_entries", "n_total", "total", "offset",
+                                "limit", "has_more", "truncated",
+                            )})
+                            result.update(found=True, mode="suggestions", suggestion_for=requested_of,
+                                          requires_confirmation=True)
+                            result["notice"] += (
+                                f" Estas sugestões correspondem ao modelo {hint}; "
+                                "confirma a OF e a peça na fotografia antes de aplicar."
+                            )
+            elif row_model and result["entries"] and not any(
+                row_model.upper() in e["modelo"].upper() for e in result["entries"]
+            ):
+                result["notice"] = (
+                    "As peças encontradas não coincidem com o modelo da linha. "
+                    "Confirma a OF e a peça na fotografia antes de aplicar."
+                )
+                result["requires_confirmation"] = True
     except Exception as exc:
         raise HTTPException(503, "Pesquisa indisponível; tenta novamente") from exc
+    result["history_available"] = catalog is not None
+    result["history_message"] = history_message
+    result["history_sha256"] = catalog["sha256"] if catalog else None
     result["revision"] = int(sheet.get("revision") or 0)
     return JSONResponse(result)
+
+
+@app.post("/sheet/{sheet_id}/of-review")
+async def sheet_of_review(sheet_id: int, request: Request) -> JSONResponse:
+    """Keep an unresolved row, or explicitly confirm the data as written."""
+    sheet = db.get_sheet(sheet_id)
+    if sheet is None:
+        raise HTTPException(404, "Folha não encontrada")
+    try:
+        body = await request.json()
+        row_index = int(body["row_index"])
+        revision = int(body["expected_revision"])
+        decision = body["decision"]
+    except (ValueError, TypeError, KeyError):
+        raise HTTPException(400, "Linha, revisão e decisão obrigatórias")
+    if decision not in ("pending", "confirmed_manual"):
+        raise HTTPException(400, "Decisão inválida")
+    rows = (sheet.get("sheet_data") or {}).get("rows") or []
+    if row_index < 0 or row_index >= len(rows) or not isinstance(rows[row_index], dict):
+        raise HTTPException(400, "Linha inválida")
+    try:
+        db.apply_edit(sheet_id, f"rows[{row_index}].reference_review", decision,
+                      source="wizard", expected_revision=revision)
+    except db.SheetValidatedError as exc:
+        raise HTTPException(409, "Folha já validada — edits bloqueados") from exc
+    except db.StaleSheetRevisionError as exc:
+        raise HTTPException(409, "A folha mudou; recarrega antes de confirmar") from exc
+    persisted = db.get_sheet(sheet_id)
+    return JSONResponse({"ok": True, "revision": persisted["revision"], "decision": decision})
 
 
 @app.post("/sheet/{sheet_id}/apply-of-entry")
@@ -4331,11 +4445,27 @@ async def sheet_apply_of_entry(sheet_id: int, request: Request) -> JSONResponse:
             raise HTTPException(400, "Revisão da folha inválida")
         if expected_revision != int(sheet.get("revision") or 0):
             raise HTTPException(409, "A folha mudou; pesquisa novamente para confirmar a referência")
-    entries = (refs.get("of_to_entries") or {}).get(of_norm) or []
-    if not entries or entry_idx >= len(entries):
-        raise HTTPException(404, "OF ou entry não encontrados no plan")
-
-    e = entries[entry_idx]
+    source = body.get("entry_source", "plan")
+    if source == "history":
+        from app.pipeline.manual_plan import ManualPlanUnavailable, load_catalog
+        try:
+            catalog = load_catalog()
+        except ManualPlanUnavailable as exc:
+            raise HTTPException(503, str(exc)) from exc
+        if not catalog or body.get("history_sha256") != catalog["sha256"]:
+            raise HTTPException(409, "O histórico mudou; pesquisa novamente para confirmar a referência")
+        e = catalog["by_id"].get(str(body.get("entry_id") or ""))
+        if not e or e["of"] != of_norm:
+            raise HTTPException(404, "Peça não encontrada no histórico desta OF")
+    elif source == "plan":
+        entries = (refs.get("of_to_entries") or {}).get(of_norm) or []
+        if not entries or entry_idx >= len(entries):
+            raise HTTPException(404, "OF ou entry não encontrados no plan")
+        e = entries[entry_idx]
+    else:
+        raise HTTPException(400, "Origem da referência inválida")
+    if body.get("suggestion_for") and body.get("reference_change_confirmed") is not True:
+        raise HTTPException(400, "Confirma a OF e a peça sugeridas antes de aplicar")
     fields_to_set = {
         "of": of_norm,
         "cliente": e.get("cliente", ""),
@@ -4355,6 +4485,8 @@ async def sheet_apply_of_entry(sheet_id: int, request: Request) -> JSONResponse:
         for field, value in fields_to_set.items()
     }
     current_row = rows[row_index]
+    if current_row.get("reference_review"):
+        target_values["reference_review"] = ""
     edits_to_apply = [
         (field, f"rows[{row_index}].{field}", value)
         for field, value in target_values.items()

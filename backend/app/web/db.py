@@ -47,6 +47,10 @@ class StaleSheetRevisionError(SheetMutationError):
     """Raised when a mutation was calculated from an obsolete sheet revision."""
 
 
+class SheetReferenceReviewError(SheetMutationError):
+    """An explicitly deferred reference still needs a human decision."""
+
+
 class SheetNotValidatedError(SheetMutationError):
     """Raised when a validated-only correction targets an editable sheet."""
 
@@ -2121,12 +2125,18 @@ def validate_sheet(sheet_id: int, operador: str) -> int:
         # commits first or validation does; writes can never land afterwards.
         c.execute("BEGIN IMMEDIATE")
         row = c.execute(
-            "SELECT status, revision FROM sheets WHERE id = ?", (sheet_id,)
+            "SELECT status, revision, sheet_data FROM sheets WHERE id = ?", (sheet_id,)
         ).fetchone()
         if row is None:
             raise ValueError(f"Sheet {sheet_id} not found")
         if row["status"] == "validated":
             raise SheetValidatedError(f"Sheet {sheet_id} is already validated")
+        data = json.loads(row["sheet_data"]) if row["sheet_data"] else {}
+        if any(r.get("reference_review") == "pending"
+               for r in (data.get("rows") or []) if isinstance(r, dict)):
+            raise SheetReferenceReviewError(
+                "Há linhas por confirmar; resolve a referência ou confirma os dados da fotografia."
+            )
         new_revision = int(row["revision"] or 0) + 1
         c.execute(
             """UPDATE sheets
