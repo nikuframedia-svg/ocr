@@ -19,7 +19,8 @@ import io
 from collections import defaultdict
 
 import openpyxl
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.cell import WriteOnlyCell
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side, NamedStyle
 from openpyxl.utils import get_column_letter
 
 from app.cell_sanitize import neutralize_xlsx
@@ -775,35 +776,23 @@ def build_cpis_workbook(
         refs = get_watcher().get_refs()
     except Exception:
         refs = None
-    cpis_rows = [_build_cpis_row(r, refs=refs) for r in raw_rows]
-
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Folha1"
-
-    # Header row (matches template exactly)
-    for ci, (_, label) in enumerate(CPIS_COLUMNS, start=1):
-        cell = ws.cell(row=1, column=ci, value=label)
-        _style_cell(cell, bold=True, fill=_FILL_HEADER)
-        cell.font = _FONT_HEADER
-
-    # Data rows
-    for ri, cpis in enumerate(cpis_rows, start=2):
-        for ci, (key, _) in enumerate(CPIS_COLUMNS, start=1):
-            v = cpis.get(key)
-            # R257 — ver neutralize_xlsx (injeção de fórmulas).
-            cell = ws.cell(row=ri, column=ci, value=neutralize_xlsx(v))
-            _style_cell(cell)
-            if key == "data" and isinstance(v, dt.date):
-                cell.number_format = "DD-MM-YYYY"
-            elif key in ("peso_consumido_t", "peso_produzido_t", "desperdicio_t"):
-                cell.number_format = "0.000"   # toneladas com 3 casas
-            elif key == "desperdicio_pct":
-                cell.number_format = "0.00"
-            elif key == "esp_mm":
-                cell.number_format = "0.0"
-            elif key in ("n_chapas", "sucata"):
-                cell.number_format = "0"       # integer
+    # Stream rows instead of retaining millions of styled cells and a second
+    # copy of every CPIS row. Styles are registered once per number format.
+    wb = openpyxl.Workbook(write_only=True)
+    ws = wb.create_sheet("Folha1")
+    styles = {}
+    for name, number_format in {
+        "body": "General", "date": "DD-MM-YYYY", "tonnes": "0.000",
+        "percent": "0.00", "thickness": "0.0", "integer": "0",
+    }.items():
+        style = NamedStyle(name="cpis_" + name, font=_FONT_BASE, border=_BORDER,
+                           alignment=Alignment(horizontal="left", vertical="center"),
+                           number_format=number_format)
+        wb.add_named_style(style)
+        styles[name] = style.as_tuple()
+    header_style = NamedStyle(name="cpis_header", font=_FONT_HEADER, fill=_FILL_HEADER,
+                              border=_BORDER, alignment=Alignment(horizontal="left", vertical="center"))
+    wb.add_named_style(header_style)
 
     # Column widths — one entry per CPIS column.
     widths = [
@@ -816,6 +805,33 @@ def build_cpis_workbook(
 
     # Freeze header row
     ws.freeze_panes = "A2"
+
+    header = []
+    for _, label in CPIS_COLUMNS:
+        cell = WriteOnlyCell(ws, value=label)
+        cell._style = header_style.as_tuple()
+        header.append(cell)
+    ws.append(header)
+    for raw in raw_rows:
+        cpis = _build_cpis_row(raw, refs=refs)
+        cells = []
+        for key, _ in CPIS_COLUMNS:
+            value = cpis.get(key)
+            cell = WriteOnlyCell(ws, value=neutralize_xlsx(value))
+            name = "body"
+            if key == "data" and isinstance(value, dt.date):
+                name = "date"
+            elif key in ("peso_consumido_t", "peso_produzido_t", "desperdicio_t"):
+                name = "tonnes"
+            elif key == "desperdicio_pct":
+                name = "percent"
+            elif key == "esp_mm":
+                name = "thickness"
+            elif key in ("n_chapas", "sucata"):
+                name = "integer"
+            cell._style = styles[name]
+            cells.append(cell)
+        ws.append(cells)
 
     out = io.BytesIO()
     wb.save(out)

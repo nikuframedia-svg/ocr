@@ -13,6 +13,9 @@ _pool: ProcessPoolExecutor | None = None
 _sent_refs = None
 _worker_refs = None
 _worker_overlay_mtime = None
+_export_lock = threading.Lock()
+_export_pool: ProcessPoolExecutor | None = None
+_export_sent_refs = None
 
 
 def enabled() -> bool:
@@ -48,6 +51,10 @@ def _compute(mode, data, audit, incoming_refs, variant, db_path, templates, coll
         _worker_overlay_mtime = overlay_mtime
     token = engine.set_scoring_variant(variant)
     try:
+        if mode in {"export_cpis", "export_excel"}:
+            from app.web import export
+            build = export.build_cpis_workbook if mode == "export_cpis" else export.export_excel
+            return build(**data)
         if mode == "warm":
             engine._get_indices(_worker_refs)
             return {"pid": os.getpid()}
@@ -89,11 +96,45 @@ def run(mode, data, audit, refs, *, collect_trace=False):
 
 
 def shutdown() -> None:
-    global _pool, _sent_refs
+    global _pool, _sent_refs, _export_pool, _export_sent_refs
     with _lock:
         if _pool is not None:
             _pool.shutdown(wait=True, cancel_futures=True)
         _pool, _sent_refs = None, None
+    with _export_lock:
+        if _export_pool is not None:
+            _export_pool.shutdown(wait=True, cancel_futures=True)
+        _export_pool, _export_sent_refs = None, None
+
+
+def run_export(kind, parameters, refs):
+    """Export jobs have their own process, so they cannot queue ahead of edits."""
+    global _export_pool, _export_sent_refs
+    from app.pipeline.scoring_engine import scoring_variant
+    from app.templates_registry import TEMPLATES
+    from app.web.db import db_path
+    if kind not in {"cpis", "excel"}:
+        raise ValueError("unknown export kind")
+    with _export_lock:
+        for attempt in range(2):
+            if _export_pool is None:
+                _export_pool = ProcessPoolExecutor(
+                    max_workers=1, mp_context=multiprocessing.get_context("spawn"))
+                _export_sent_refs = None
+            ref_key = (id(refs), refs.get("loaded_at"))
+            try:
+                result = _export_pool.submit(
+                    _compute, "export_" + kind, parameters, None,
+                    refs if ref_key != _export_sent_refs else None,
+                    scoring_variant(), str(db_path()), tuple(TEMPLATES.values()), False,
+                ).result()
+                _export_sent_refs = ref_key
+                return result
+            except BrokenProcessPool:
+                _export_pool.shutdown(wait=False, cancel_futures=True)
+                _export_pool, _export_sent_refs = None, None
+                if attempt:
+                    raise
 
 
 def warmup() -> None:

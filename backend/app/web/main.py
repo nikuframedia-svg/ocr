@@ -8,13 +8,11 @@ Run:
 from __future__ import annotations
 
 import asyncio
-import faulthandler
 import datetime as dt
 import json
 import os
 import re
 import secrets
-import signal
 import shutil
 import sqlite3  # Task C — erros de unicidade nas unidades fabris
 import sys
@@ -360,11 +358,6 @@ def _process_discovery(template_id: int) -> None:
 
 @app.on_event("startup")
 def _startup() -> None:
-    if hasattr(signal, "SIGUSR2"):
-        try:
-            faulthandler.register(signal.SIGUSR2, all_threads=True)
-        except (OSError, RuntimeError):
-            pass
     db.init_db()
     # Task C E4 — instala os templates registados (DB) no registry antes de
     # o worker arrancar; com DB vazia é identidade (18 builtins).
@@ -500,7 +493,7 @@ async def _attach_watermark(request: Request, call_next):
     used by templates to render mobile-only / desktop-only sections.
     """
     started = time.perf_counter()
-    request.state.watermark = kpis.latest_sheet_id()
+    request.state.watermark = await asyncio.to_thread(kpis.latest_sheet_id)
     request.state.mobile = _is_mobile_request(request)
     response = await call_next(request)
     elapsed_ms = (time.perf_counter() - started) * 1000
@@ -569,7 +562,7 @@ def health() -> JSONResponse:
     return JSONResponse({
         "status": "ok",
         "engine_version": ENGINE_VERSION,
-        "latency_fix": "2026-10-15.4",
+        "latency_fix": "2026-10-15.5",
         "scoring_process": scoring_process_enabled(),
         "git_sha": _git_short_sha(),
         "python": sys.version.split()[0],
@@ -5259,7 +5252,14 @@ def export_excel(
             raise HTTPException(400, "date_to must be >= date_from")
     if sec and sec not in PRODUCTION_SECTORS:
         raise HTTPException(400, f"sector must be one of {list(PRODUCTION_SECTORS)}")
-    xlsx_bytes = export.export_excel(df, dt_, operador, sec, validated_only)
+    from app.pipeline import scoring_process
+    if scoring_process.enabled():
+        xlsx_bytes = scoring_process.run_export("excel", {
+            "date_from": df, "date_to": dt_, "operador": operador,
+            "sector": sec, "validated_only": validated_only,
+        }, get_watcher().get_refs())
+    else:
+        xlsx_bytes = export.export_excel(df, dt_, operador, sec, validated_only)
     filename = export.filename_for(df, dt_, operador, sec, validated_only)
     return Response(
         content=xlsx_bytes,
@@ -5424,14 +5424,16 @@ def export_cpis(
             raise HTTPException(400, "date_to must be >= date_from")
     if sec and sec not in PRODUCTION_SECTORS:
         raise HTTPException(400, f"sector must be one of {list(PRODUCTION_SECTORS)}")
-    xlsx_bytes = export.build_cpis_workbook(
-        df,
-        dt_,
-        operador,
-        sec,
-        validated_only,
-        selected_dates=dates,
-    )
+    from app.pipeline import scoring_process
+    if scoring_process.enabled():
+        xlsx_bytes = scoring_process.run_export("cpis", {
+            "date_from": df, "date_to": dt_, "operador": operador,
+            "sector": sec, "validated_only": validated_only,
+            "selected_dates": dates,
+        }, get_watcher().get_refs())
+    else:
+        xlsx_bytes = export.build_cpis_workbook(
+            df, dt_, operador, sec, validated_only, selected_dates=dates)
     filename = export.cpis_filename_for(
         df,
         dt_,

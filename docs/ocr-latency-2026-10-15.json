@@ -1,5 +1,5 @@
 {
-  "release": "2026-10-15.4",
+  "release": "2026-10-15.5",
   "production_published": true,
   "runtime_configuration": {
     "OCR_SCORING_PROCESS": "1",
@@ -12,7 +12,11 @@
     "bounded low-priority shadow work",
     "native exact Levenshtein",
     "incremental row cache with production/reference invalidation",
-    "nonblocking reference snapshots for UI"
+    "nonblocking reference snapshots for UI",
+    "separate persistent CPU process for Excel exports",
+    "streamed CPIS workbook with reused styles",
+    "reference inspection cache keyed by file metadata and content digest",
+    "nonblocking watermark database lookup"
   ],
   "production_observations": {
     "pending_recovered": 21,
@@ -20,11 +24,132 @@
     "scoring_sample_n": 21,
     "scoring_median_seconds": 2.724,
     "scoring_max_seconds": 7.977,
-    "final_parallel_http_seconds": {
-      "sheet_7955": 0.576,
-      "sheet_7904": 0.576,
-      "kanbans": 0.848,
-      "queue": 0.611
+    "scoring_sample_context": "21 initially pending sheets processed after the engine fix; not HTTP response durations.",
+    "final_public_https_checks": [
+      {
+        "url": "https://mtg2.nikufra.ai/health",
+        "status": 200,
+        "seconds": 0.09,
+        "server_timing": "app;dur=2.5"
+      },
+      {
+        "url": "https://mtg2.nikufra.ai/sheet/7955",
+        "status": 200,
+        "seconds": 0.22,
+        "server_timing": "app;dur=132.8"
+      },
+      {
+        "url": "https://mtg2.nikufra.ai/kanbans?sheet_id=7955",
+        "status": 200,
+        "seconds": 0.569,
+        "server_timing": "app;dur=503.3"
+      },
+      {
+        "url": "https://perfis.nikufra.ai/sheet/c67dd0c09ed2",
+        "status": 200,
+        "seconds": 0.12,
+        "server_timing": "app;dur=5, pg;dur=0;desc=\"0 q 0 conn\"",
+        "restored_models_visible": true
+      },
+      {
+        "url": "https://cantoneiras.nikufra.ai/health",
+        "status": 200,
+        "seconds": 0.114,
+        "server_timing": "app;dur=1, pg;dur=0;desc=\"0 q 0 conn\""
+      }
+    ],
+    "post_restart_export_and_concurrent_pages": {
+      "concurrent_with_export": [
+        {
+          "path": "/export/cpis?date_from=2026-10-14&date_to=2026-10-14&validated_only=true",
+          "status": 200,
+          "seconds": 11.423,
+          "bytes": 33991,
+          "server_timing": "app;dur=11398.7",
+          "rows": 214,
+          "columns": 27,
+          "sheet": "Folha1"
+        },
+        {
+          "path": "/sheet/7955",
+          "status": 200,
+          "seconds": 1.537,
+          "bytes": 83134,
+          "server_timing": "app;dur=1493.4"
+        },
+        {
+          "path": "/kanbans?sheet_id=7955",
+          "status": 200,
+          "seconds": 3.182,
+          "bytes": 97938,
+          "server_timing": "app;dur=3132.9"
+        },
+        {
+          "path": "/queue",
+          "status": 200,
+          "seconds": 1.835,
+          "bytes": 182225,
+          "server_timing": "app;dur=1767.4"
+        },
+        {
+          "path": "/health",
+          "status": 200,
+          "seconds": 0.14,
+          "bytes": 226,
+          "server_timing": "app;dur=37.3",
+          "data": {
+            "status": "ok",
+            "engine_version": "v31_R270",
+            "latency_fix": "2026-10-15.5",
+            "scoring_process": true,
+            "git_sha": "unknown",
+            "python": "3.12.3",
+            "pid": 50011,
+            "ocr": {
+              "provider": "anthropic",
+              "model": "claude-sonnet-5-5",
+              "key_configured": true
+            }
+          }
+        }
+      ],
+      "warm_pages": [
+        {
+          "path": "/sheet/7955",
+          "status": 200,
+          "seconds": 0.089,
+          "bytes": 83134,
+          "server_timing": "app;dur=87.5"
+        },
+        {
+          "path": "/kanbans?sheet_id=7955",
+          "status": 200,
+          "seconds": 0.375,
+          "bytes": 97938,
+          "server_timing": "app;dur=372.4"
+        },
+        {
+          "path": "/admin/queue-status",
+          "status": 200,
+          "seconds": 0.002,
+          "bytes": 97,
+          "server_timing": "app;dur=1.2",
+          "data": {
+            "queue_size": 0,
+            "worker_alive": true,
+            "cross_check": {
+              "pending": 0,
+              "shadow_pending": 0,
+              "active": null
+            }
+          }
+        }
+      ]
+    },
+    "warm_generic_export": {
+      "seconds": 0.332,
+      "status": 200,
+      "date_range_days": 1
     }
   },
   "isolated_replay_7904_seconds": {
@@ -36,10 +161,12 @@
     "unchanged_after": 0.019
   },
   "validation": {
-    "unit_tests_passed": 1569,
+    "unit_tests_passed": 1573,
     "replayed_sheets_with_identical_decisions_and_trace": 6,
     "process_refreshes_consumption_every_job": true,
-    "custom_templates_and_variant_isolation_tested": true
+    "custom_templates_and_variant_isolation_tested": true,
+    "separate_http_scoring_and_export_processes_tested": true,
+    "reference_cache_invalidates_when_content_changes_with_identical_metadata": true
   },
   "files": [
     {
@@ -52,7 +179,7 @@
     },
     {
       "path": "backend/app/web/main.py",
-      "sha256": "0b72cbb50e4876a9fb77999759e1104e8508d22d1776b751f0ecfc9b507ffdca"
+      "sha256": "812490aea73256088f7d85124f23ff26cac4db9543a8cd3dcae9415dbcfd174f"
     },
     {
       "path": "backend/app/web/cross_check_queue.py",
@@ -80,8 +207,29 @@
     },
     {
       "path": "backend/app/pipeline/scoring_process.py",
-      "sha256": "1bff3969adbaa4cd986ee639d52a5e27d082965333ed1379f6a6515bd57fe275"
+      "sha256": "1c5c25abfe6f7aa4f697758005ad76f9318a6e1194446c386a459efa376af3f3"
+    },
+    {
+      "path": "backend/app/web/export.py",
+      "sha256": "1dcb4538552daa5655d1f9d59cd298f1013777ec6e529ef838835d984bd00477"
+    },
+    {
+      "path": "backend/app/cross_check/ref_importer.py",
+      "sha256": "2625a2d2fa0f9e282d8b18e47ae7c73bc26abed0b43bd777d355969649e3f3b2"
     }
   ],
-  "systemd_dropin": "deploy/linux/mtg-ocr-original.service.d/30-scoring-process.conf"
+  "systemd_dropin": "deploy/linux/mtg-ocr-original.service.d/30-scoring-process.conf",
+  "release_directory": "ocr-latency-20261015T103225Z",
+  "export_benchmark_5000_synthetic_rows": {
+    "rows": 5000,
+    "seconds": {
+      "before": 4.0351488159976725,
+      "after": 1.2105131749995053
+    },
+    "identical_values": true
+  },
+  "operational_notes": [
+    "An unexpected process restart occurred while signal-based stack diagnosis was active before this release. Signal diagnostics were removed; final checks show no subsequent restarts.",
+    "Initial requests immediately after restart include reference and process warm-up. Public timings are point-in-time observations, not a latency guarantee."
+  ]
 }

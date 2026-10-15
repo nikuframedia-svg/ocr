@@ -2,6 +2,8 @@
 import copy
 from dataclasses import replace
 import datetime as dt
+import io
+import os
 
 import pytest
 
@@ -84,3 +86,34 @@ def test_process_variant_is_reset_and_custom_templates_are_transferred(worker):
         assert without_time(current) == without_time(baseline)
     finally:
         templates_registry.set_runtime_templates([])
+
+
+def test_exports_use_a_separate_process_and_preserve_workbook_values(worker, monkeypatch):
+    import openpyxl
+    from app.cross_check.ref_watcher import get_watcher
+    from app.web import export
+
+    data, refs = sample()
+    data["header"].update(data=dt.date.today().strftime("%d-%m-%Y"), cod_maquina="M002")
+    data["rows"][0]["of"] = "260001"
+    sid = db.insert_sheet("export-test.jpg")
+    db.update_extraction(sid, data, {}, data)
+    watcher = get_watcher()
+    monkeypatch.setattr(watcher, "_refs", refs)
+    monkeypatch.setattr(watcher, "_last_check_ts", float("inf"))
+    expected = export.build_cpis_workbook(None, None)
+    actual = scoring_process.run_export("cpis", {"date_from": None, "date_to": None}, refs)
+    a = openpyxl.load_workbook(io.BytesIO(actual))
+    e = openpyxl.load_workbook(io.BytesIO(expected))
+    try:
+        assert list(a.active.values) == list(e.active.values)
+        assert a.active.freeze_panes == "A2"
+        assert a.active.column_dimensions["B"].width == e.active.column_dimensions["B"].width
+        assert copy.copy(a.active["A1"].font) == copy.copy(e.active["A1"].font)
+        assert a.active["A2"].number_format == e.active["A2"].number_format
+    finally:
+        a.close()
+        e.close()
+    scoring_pid = scoring_process.run("warm", {}, None, refs)["pid"]
+    export_pid = scoring_process._export_pool.submit(os.getpid).result()
+    assert len({scoring_pid, export_pid, os.getpid()}) == 3
