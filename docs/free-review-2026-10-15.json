@@ -1,0 +1,355 @@
+{
+  "date": "2026-10-15",
+  "review_flow": "free-editing-2026-10-15.1",
+  "request": "Allow people to write their own corrections and validate without a mandatory plan match. Measure actual editing and validation, not only page opening.",
+  "plan_and_execution": [
+    {
+      "step": "Inspect screenshot failure and plan editing flows in all three deployed source versions",
+      "result": "Direct editing must preserve the literal requested OF 266303; accepting a proposed plan entry 265958 does not satisfy the request."
+    },
+    {
+      "step": "Separate human edits from optional catalogue comparison",
+      "result": "Pencil opens direct editing; plan lookup is a separate optional action. Written values, blanks and formatting survive subsequent comparisons."
+    },
+    {
+      "step": "Remove plan computation from save and validation",
+      "result": "Writes atomically update human evidence and affected local derived fields. Validation flushes pending writes and makes one transition without running the matching engine."
+    },
+    {
+      "step": "Keep exports and history faithful to human corrections",
+      "result": "Raw written values are archived. Parseable numbers retain numeric export types; arbitrary text remains available. A written date that cannot serve as a SQL date is preserved while a separate capture date indexes history."
+    },
+    {
+      "step": "Test race conditions and actual browser interaction",
+      "result": "Disposable databases cover exact OF, intentional blanks, free text, stale revisions, delayed responses, failed save and retry, remove and undo, mobile width, single validation and exported facts."
+    },
+    {
+      "step": "Publish verified source with rollback and passive observation",
+      "result": "Each app has a separate source baseline, guarded runtime manifest, same-host code/database backup, health verification, and persistent latency watcher."
+    }
+  ],
+  "measurement_contract": {
+    "http": "Full request duration, status, request id and action; starts also reveal requests that have not finished.",
+    "browser": "Edit submission through saved UI, or validation click through next-page rendering. Reported separately from HTTP.",
+    "sampling": "Exclude explicit X-OCR-Probe synthetic requests. Do not store form values, names or query strings. HTTP requests may include automated consumers and are not unique people.",
+    "statistics": "15 minute, 1 hour and 24 hour windows expose counts, median, maximum, errors and slow actions. P95 requires at least 20 observations.",
+    "limits_ms": {
+      "edit": 2000,
+      "validate": 2000,
+      "open": 3000,
+      "export": 10000
+    },
+    "watcher": {
+      "service": "ocr-latency-watcher.service",
+      "poll_seconds": 5,
+      "persistent_cursor": true,
+      "restart_resume": true,
+      "status_path": "/admin/latency-status",
+      "alert_destination": "server journal; no email or external messages configured"
+    },
+    "limitation": "No observed real edits or validations after publication means performance in actual user traffic is not yet confirmed. Controlled browser tests are labelled separately."
+  },
+  "research": {
+    "method": "Seven targeted searches (35 results) followed by eight primary-source documents. Existing implementation and production logs were checked before applying recommendations.",
+    "sources": [
+      {
+        "url": "https://fastapi.tiangolo.com/async/",
+        "finding": "Blocking I/O inside async routes occupies the event loop; ordinary def routes can run through the thread pool.",
+        "decision": "Original synchronous edit and validation routes now run outside the event loop; async row writes offload database work. Concurrency regression test verifies another request can respond while a write is deliberately stalled."
+      },
+      {
+        "url": "https://starlette.dev/threadpool/",
+        "finding": "Synchronous endpoints and background tasks share a bounded thread pool.",
+        "decision": "Remove avoidable computation and isolate CPU work rather than blindly raising thread limits or app worker count."
+      },
+      {
+        "url": "https://sqlite.org/wal.html",
+        "finding": "WAL allows readers alongside a writer, while SQLite still serializes writers.",
+        "decision": "Keep write transactions short and preserve CAS revision checks; do not hold a transaction while scoring a plan. WAL already exists in the deployed design."
+      },
+      {
+        "url": "https://www.psycopg.org/psycopg3/docs/advanced/pool.html",
+        "finding": "Pools reuse connections and need bounded capacity and observable wait behavior.",
+        "decision": "Existing pooling is retained. Save and manual validation no longer need to load the planning catalogue. Existing PG duration/query/connection measurements remain available."
+      },
+      {
+        "url": "https://www.postgresql.org/docs/current/pgstatstatements.html",
+        "finding": "Query statistics distinguish expensive queries from repeated queries.",
+        "decision": "Use query evidence before proposing indexes or capacity changes; no speculative production extension or DDL was installed."
+      },
+      {
+        "url": "https://www.w3.org/TR/event-timing/",
+        "finding": "Visible interaction latency includes event processing and rendering, beyond an HTTP response.",
+        "decision": "Add separate browser interaction measurements ending after UI application and animation frames; do not call backend duration end-to-end user latency."
+      },
+      {
+        "url": "https://www.w3.org/TR/navigation-timing-2/",
+        "finding": "Navigation lifecycle has separate network and document phases.",
+        "decision": "Carry validation start across navigation using sessionStorage and finish when the destination renders."
+      },
+      {
+        "url": "https://opentelemetry.io/docs/specs/semconv/http/http-metrics/",
+        "finding": "HTTP duration metrics should use bounded operation labels and suitable units.",
+        "decision": "Use a small fixed action vocabulary, explicit milliseconds, separate failures, and no user or sheet identifiers in stored metric series."
+      }
+    ]
+  },
+  "remaining_performance_work": [
+    {
+      "priority": 1,
+      "item": "Observe real post-publication editing and validation with enough samples, especially queued saves and page navigation.",
+      "trigger": "Any error, incomplete write, or edit/validation exceeding two seconds emits a server watcher alert."
+    },
+    {
+      "priority": 2,
+      "item": "CPIS exports still take approximately nine seconds in current production traffic.",
+      "constraint": "Already isolated from the HTTP event loop and scoring process. Further cache or materialization must invalidate on production, reference and filter changes; stale exports are unacceptable."
+    },
+    {
+      "priority": 3,
+      "item": "Profile the endpoint or query associated with a sustained latency alert before changing worker count, SQL indexes or database topology.",
+      "constraint": "Avoid trading CPU saturation, SQLite contention or memory pressure for apparent parallelism."
+    }
+  ],
+  "safety_and_scope": [
+    "No production sheet was edited or validated to manufacture monitoring evidence.",
+    "Validated records and concurrent-write protection remain intact.",
+    "No OCR provider or model switch was required for these review flow fixes.",
+    "Optional plan comparisons may still show differences, but they do not veto a human save or validation."
+  ],
+  "app": "original",
+  "production_release": "ocr-free-edit-20261015T105822Z",
+  "validation": {
+    "full_suite": {
+      "passed": 1594,
+      "failed": 0
+    },
+    "real_chromium": {
+      "passed": true,
+      "disposable_database": true,
+      "exact_of_saved": "266303",
+      "single_validation": true,
+      "responsive_widths": [
+        390,
+        1440
+      ]
+    },
+    "event_loop_regression": "A deliberately blocked database write does not block a concurrent health request.",
+    "controlled_timings_ms": {
+      "http_edit": 29.5,
+      "browser_edit": 203,
+      "http_validate": 26.3,
+      "browser_validate": 145
+    },
+    "timing_limitation": "One synthetic browser flow against a disposable local database; not production user measurements."
+  },
+  "prior_latency_work": "docs/ocr-latency-2026-10-15.json preserves measurements and runtime hashes for the preceding performance release. Current human-review changes supersede overlapping files.",
+  "historical_write_observations": {
+    "observed_at": "2026-10-15T11:18:44.852666+00:00",
+    "measurements": [
+      {
+        "app": "cantoneiras",
+        "phase": "before_free_edit_publication",
+        "source": "http_legacy_no_probe_marker",
+        "action": "edit",
+        "count": 14,
+        "median_ms": 1158.0,
+        "max_ms": 1743.0,
+        "first_at": "2026-10-15T10:14:40.352412+00:00",
+        "last_at": "2026-10-15T10:18:20.389221+00:00"
+      },
+      {
+        "app": "cantoneiras",
+        "phase": "before_free_edit_publication",
+        "source": "internal_validation_only_not_http",
+        "action": "validate",
+        "count": 20,
+        "median_ms": 6.38,
+        "max_ms": 124.47,
+        "first_at": "2026-10-15T10:09:23.732404+00:00",
+        "last_at": "2026-10-15T10:18:31.561628+00:00"
+      },
+      {
+        "app": "perfis",
+        "phase": "before_free_edit_publication",
+        "source": "http_legacy_no_probe_marker",
+        "action": "edit",
+        "count": 1,
+        "median_ms": 544.0,
+        "max_ms": 544.0,
+        "first_at": "2026-10-15T08:43:31.391033+00:00",
+        "last_at": "2026-10-15T08:43:31.391033+00:00"
+      }
+    ],
+    "note": "Internal validation durations omit HTTP queueing and other work. Legacy logs cannot distinguish older synthetic requests. Historical requests are not proof of post-publication performance."
+  },
+  "final_read_only_public_checks": {
+    "observed_at": "2026-10-15T11:31:46.624416+00:00",
+    "synthetic_read_only_probes": [
+      {
+        "app": "original",
+        "path": "/health",
+        "status": 200,
+        "seconds": 0.03,
+        "server_timing": "app;dur=1.4",
+        "bytes": 269,
+        "data": {
+          "status": "ok",
+          "engine_version": "v31_R270",
+          "latency_fix": "2026-10-15.6",
+          "review_flow": "free-editing-2026-10-15.1",
+          "scoring_process": true,
+          "python": "3.12.3"
+        }
+      },
+      {
+        "app": "original",
+        "path": "/sheet/7955",
+        "status": 200,
+        "seconds": 0.144,
+        "server_timing": "app;dur=138.3",
+        "bytes": 86898,
+        "direct_edit_present": true,
+        "interaction_metrics_present": true
+      },
+      {
+        "app": "original",
+        "path": "/kanbans?sheet_id=7955",
+        "status": 200,
+        "seconds": 0.354,
+        "server_timing": "app;dur=310.0",
+        "bytes": 98372
+      },
+      {
+        "app": "original",
+        "path": "/admin/queue-status",
+        "status": 200,
+        "seconds": 0.007,
+        "server_timing": "app;dur=1.3",
+        "bytes": 97,
+        "data": {
+          "queue_size": 0,
+          "worker_alive": true,
+          "cross_check": {
+            "pending": 0,
+            "shadow_pending": 0,
+            "active": null
+          }
+        }
+      },
+      {
+        "app": "original",
+        "path": "/admin/latency-status",
+        "status": 200,
+        "seconds": 0.045,
+        "server_timing": "app;dur=1.5",
+        "bytes": 1202
+      },
+      {
+        "app": "perfis",
+        "path": "/health",
+        "status": 200,
+        "seconds": 0.029,
+        "server_timing": "app;dur=1, pg;dur=0;desc=\"0 q 0 conn\"",
+        "bytes": 204,
+        "data": {
+          "app": "kanban-mes-mtg2",
+          "engine": "legacy",
+          "platform": "linux",
+          "code_fingerprint": "29414a6ebc1886a8741062577959eeda35c88906b76acf6385bd99b6ab5a209b",
+          "commit": null,
+          "review_flow": "free-editing-2026-10-15.1"
+        }
+      },
+      {
+        "app": "perfis",
+        "path": "/sheet/c67dd0c09ed2",
+        "status": 200,
+        "seconds": 0.172,
+        "server_timing": "app;dur=101, pg;dur=0;desc=\"0 q 0 conn\"",
+        "bytes": 79824,
+        "direct_edit_present": true,
+        "interaction_metrics_present": true
+      },
+      {
+        "app": "perfis",
+        "path": "/admin/latency-status",
+        "status": 200,
+        "seconds": 0.036,
+        "server_timing": "app;dur=1, pg;dur=0;desc=\"0 q 0 conn\"",
+        "bytes": 1202
+      },
+      {
+        "app": "cantoneiras",
+        "path": "/health",
+        "status": 200,
+        "seconds": 0.034,
+        "server_timing": "app;dur=1, pg;dur=0;desc=\"0 q 0 conn\"",
+        "bytes": 199,
+        "data": {
+          "app": "kanban-mes",
+          "engine": "legacy",
+          "platform": "linux",
+          "code_fingerprint": "ecacc47a9eb3d6d15326b24fee244b8f6636cf93e7a05fc1bd5b609e958df3f6",
+          "commit": null,
+          "review_flow": "free-editing-2026-10-15.1"
+        }
+      },
+      {
+        "app": "cantoneiras",
+        "path": "/sheet/37ad462fb044",
+        "status": 200,
+        "seconds": 0.173,
+        "server_timing": "app;dur=109, pg;dur=0;desc=\"0 q 0 conn\"",
+        "bytes": 60061,
+        "direct_edit_present": true,
+        "interaction_metrics_present": true
+      },
+      {
+        "app": "cantoneiras",
+        "path": "/admin/latency-status",
+        "status": 200,
+        "seconds": 0.034,
+        "server_timing": "app;dur=1, pg;dur=0;desc=\"0 q 0 conn\"",
+        "bytes": 1202
+      }
+    ],
+    "perfis_295_models_and_quantities_preserved": true,
+    "perfis_295_status": "in_review",
+    "watcher_updated_at": "2026-10-15T11:31:41.757041+00:00",
+    "real_write_measurements": [],
+    "in_flight": [],
+    "note": "No synthetic POST or production validation was performed."
+  },
+  "final_read_only_public_browser": {
+    "checks": [
+      {
+        "app": "original",
+        "status": 200,
+        "read_only_browser_ready_ms": 642,
+        "editable_text_fields": 8,
+        "javascript_errors": [],
+        "blocked_writes": []
+      },
+      {
+        "app": "perfis",
+        "status": 200,
+        "read_only_browser_ready_ms": 390,
+        "editable_text_fields": 50,
+        "javascript_errors": [],
+        "blocked_writes": []
+      },
+      {
+        "app": "cantoneiras",
+        "status": 200,
+        "read_only_browser_ready_ms": 283,
+        "editable_text_fields": 30,
+        "javascript_errors": [],
+        "blocked_writes": [
+          "https://cantoneiras.nikufra.ai/sheet/37ad462fb044/automatic-review"
+        ]
+      }
+    ],
+    "note": "Production read-only check: no values were filled or submitted; all non-read requests were blocked."
+  }
+}
