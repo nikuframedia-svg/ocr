@@ -119,6 +119,13 @@
   {% endif %}
 
   <main class="main">
+    {% if is_mobile %}
+    <nav aria-label="Kanbans" style="display:flex; gap:10px; padding:10px; flex-wrap:wrap;">
+      <a class="btn" href="/capture">Captura</a>
+      <a class="btn" href="/kanbans">Kanbans</a>
+      <a class="btn" href="/queue">Histórico</a>
+    </nav>
+    {% endif %}
     {# Top bar — always-visible "Exportar Excel" button #}
     {% if not is_mobile %}
     <div class="topbar"
@@ -436,5 +443,7 @@ function liveBanner(initialWatermark) {
     bar.textContent = 'Erro ' + status + (msg ? ' — ' + String(msg).slice(0, 300) : '');
   });
 </script>
+<script src="/static/interaction_timing.js?v=20261015" defer></script>
+<script src="/static/sheet_write_guard.js?v=20261015" defer></script>
 </body>
 </html>

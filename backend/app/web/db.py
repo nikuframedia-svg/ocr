@@ -2107,7 +2107,7 @@ def delete_row(sheet_id: int, row_index: int, *, source: str = "human") -> dict:
     return removed
 
 
-def validate_sheet(sheet_id: int, operador: str) -> int:
+def validate_sheet(sheet_id: int, operador: str, *, expected_revision: int | None = None) -> int:
     """Mark sheet validated. Dropdown ``operador`` overrides whatever
     OCR / manual edits put in production_rows — the dropdown is the
     KPI source of truth (``sheets.operador``).
@@ -2131,12 +2131,10 @@ def validate_sheet(sheet_id: int, operador: str) -> int:
             raise ValueError(f"Sheet {sheet_id} not found")
         if row["status"] == "validated":
             raise SheetValidatedError(f"Sheet {sheet_id} is already validated")
-        data = json.loads(row["sheet_data"]) if row["sheet_data"] else {}
-        if any(r.get("reference_review") == "pending"
-               for r in (data.get("rows") or []) if isinstance(r, dict)):
-            raise SheetReferenceReviewError(
-                "Há linhas por confirmar; resolve a referência ou confirma os dados da fotografia."
-            )
+        if expected_revision is not None and int(row["revision"] or 0) != expected_revision:
+            raise StaleSheetRevisionError("A folha mudou antes da validação")
+        # Differences and unresolved references remain informative. This is
+        # the operator's explicit decision to validate the persisted revision.
         new_revision = int(row["revision"] or 0) + 1
         c.execute(
             """UPDATE sheets

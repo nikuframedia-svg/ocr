@@ -63,6 +63,7 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _STATIC_DIR = Path(__file__).parent / "static"
 _DATA_DIR = _REPO / "data"
 _IMAGES_DIR = _DATA_DIR / "images"
+_LATENCY_STATUS_PATH = Path("/home/luis/apps/mtg-ocr-20261012/observability/status.json")
 _DATA_DIR.mkdir(parents=True, exist_ok=True)
 _IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -492,19 +493,9 @@ async def _attach_watermark(request: Request, call_next):
     embed it server-side on first paint. Also attaches a `mobile` flag
     used by templates to render mobile-only / desktop-only sections.
     """
-    started = time.perf_counter()
     request.state.watermark = await asyncio.to_thread(kpis.latest_sheet_id)
     request.state.mobile = _is_mobile_request(request)
     response = await call_next(request)
-    elapsed_ms = (time.perf_counter() - started) * 1000
-    response.headers["Server-Timing"] = f"app;dur={elapsed_ms:.1f}"
-    # Measure actual user-facing latency separately from background scoring.
-    # No query strings, request bodies or operator identities in the log.
-    if request.url.path.startswith(("/sheet/", "/kanbans", "/queue")):
-        print(json.dumps({"event": "http_timing", "method": request.method,
-                          "path": request.url.path, "status": response.status_code,
-                          "duration_ms": round(elapsed_ms, 1)}),
-              file=sys.stderr, flush=True)
     # Header is always present; client uses it to detect increments.
     response.headers["X-Sheet-Watermark"] = str(request.state.watermark)
     return response
@@ -2095,12 +2086,9 @@ async def sheet_edit(
     sheet_id: int,
     field_path: str = Form(...),
     new_value: str = Form(""),
+    expected_revision: int | None = Form(None),
 ) -> Response:
     """HTMX endpoint — applies an edit + returns the cell HTML fragment."""
-    # Round 34 — mobile cannot do full edits (only via /mobile/qtds-batch
-    # which has whitelist of qty-related fields)
-    if _is_mobile_request(request):
-        raise HTTPException(403, "Edição só pode ser feita em desktop")
     # Round 50 — folha validada é read-only; sem edits posteriores.
     sheet_pre = db.get_sheet(sheet_id)
     if sheet_pre is None:
@@ -2111,24 +2099,18 @@ async def sheet_edit(
     # pós cross-check para devolver swaps out-of-band das células que mudaram
     # em consequência (ex: header.operador quando se edita header.n_operador).
     header_before = dict((sheet_pre.get("sheet_data") or {}).get("header") or {})
-    # R136 — a célula header.data edita-se com <input type="date"> (ISO). O
-    # armazenamento canónico continua DD-MM-YYYY (CSV, date_iso, filenames),
-    # por isso converte-se aqui antes de persistir.
-    if field_path == "header.data":
-        _v = new_value.strip()
-        if _ISO_DATE_RE.match(_v):
-            new_value = f"{_v[8:10]}-{_v[5:7]}-{_v[0:4]}"
+    # Human text, including dates and blanks, remains exactly as submitted.
     if re.match(r"^rows\[\d{1,3}\]\.fecho$", field_path):
         tpl = _template_ctx_for_sheet(sheet_pre)["template"]
         if tpl is None or "fecho" not in tpl.row_fields:
             raise HTTPException(400, "fecho não é permitido neste template")
-        new_value = new_value.strip().upper()
-        if new_value not in ("", "X"):
-            raise HTTPException(400, "FECHO aceita apenas vazio ou X")
     try:
-        old, new = db.apply_edit(sheet_id, field_path, new_value)
+        old, new = db.apply_edit(sheet_id, field_path, new_value,
+                                 expected_revision=expected_revision)
     except db.SheetValidatedError as e:
         raise HTTPException(409, "Folha já validada — edits bloqueados") from e
+    except db.StaleSheetRevisionError as e:
+        raise HTTPException(409, "A folha mudou; a tua alteração foi mantida no editor.") from e
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     sheet = db.get_sheet(sheet_id)
@@ -2186,7 +2168,9 @@ async def sheet_edit(
             print(f"[lote-suggest] sheet {sheet_id}: {e}", file=sys.stderr)
 
     _start_sheet_cross_check({sheet_id}, profile_trigger="sheet_edit")
-    return HTMLResponse("".join(parts))
+    return HTMLResponse("".join(parts), headers={
+        "X-Sheet-Revision": str(sheet.get("revision") or 0),
+    })
 
 
 def _invalidate_production_caches() -> None:
@@ -2352,26 +2336,19 @@ async def sheet_validate(
     operador: str | None = Form(None),
     data: str | None = Form(None),
     n_operador: str | None = Form(None),
+    expected_revision: int | None = Form(None),
 ) -> RedirectResponse:
-    # Round 34 — mobile cannot validate (server-side enforcement)
-    if _is_mobile_request(request):
-        raise HTTPException(403, "Validação só pode ser feita em desktop")
     # Round 50 — re-validate bloqueada; folha validada é final.
     sheet_pre = db.get_sheet(sheet_id)
     if sheet_pre is None:
         raise HTTPException(404, f"sheet {sheet_id} not found")
     if sheet_pre.get("status") == "validated":
         raise HTTPException(409, "Folha já validada — não é possível re-validar")
-    # R257 — needs_review suspende o depósito no worker (main.py:~205), mas o
-    # validate não verificava e depositava na mesma ao validar — o lado
-    # duvidoso contornava a guarda e corrompia o CSV da fábrica. Resolver o
-    # lado primeiro (banner "rever lado" → /resolve-side).
-    if sheet_pre.get("needs_review"):
-        raise HTTPException(
-            409, "Folha marcada para revisão de lado — resolve o lado antes de validar"
-        )
+    if expected_revision is not None and expected_revision != int(sheet_pre.get("revision") or 0):
+        raise HTTPException(409, "A folha mudou; confirma os valores atuais antes de validar.")
 
     header = (sheet_pre.get("sheet_data") or {}).get("header") or {}
+    validation_revision = int(sheet_pre.get("revision") or 0)
     # R136 — dois fluxos partilham este endpoint:
     #   • sheet.html (Folha): a barra "Validar" deixou de ter inputs próprios
     #     (eram duplicados das células do cabeçalho e, por ficarem stale,
@@ -2381,52 +2358,33 @@ async def sheet_validate(
     #     no próprio form → caminho clássico (R94): valida e aplica os valores.
     from_form = operador is not None or data is not None or n_operador is not None
     if from_form:
-        operador_final = (operador or "").strip()
-        if not operador_final:
-            raise HTTPException(400, "operador em falta — corrige o cabeçalho antes de validar")
-        data_iso = (data or "").strip()
-        if not _ISO_DATE_RE.match(data_iso):
-            raise HTTPException(400, f"data must be YYYY-MM-DD, got {data!r}")
-        n_op_clean = (n_operador or "").strip()
-        if not n_op_clean.isdigit() or len(n_op_clean) > 5:
-            raise HTTPException(400, f"n_operador must be 1-5 digits, got {n_operador!r}")
-        # Convert ISO → DD-MM-YYYY for storage compatibility. Apply edits before
-        # the validation lock — standard apply_edit path keeps production_rows +
-        # cross-check in sync.
-        data_pt = f"{data_iso[8:10]}-{data_iso[5:7]}-{data_iso[0:4]}"
-        if (header.get("data") or "").strip() != data_pt:
-            try:
-                db.apply_edit(sheet_id, "header.data", data_pt)
-            except Exception:
-                pass
-        if (header.get("n_operador") or "").strip() != n_op_clean:
-            try:
-                db.apply_edit(sheet_id, "header.n_operador", n_op_clean)
-            except Exception:
-                pass
-    else:
-        operador_final = (header.get("operador") or "").strip()
-        if not operador_final:
-            raise HTTPException(
-                400, "Operador em falta — corrige o cabeçalho antes de validar."
-            )
-        n_op_clean = (header.get("n_operador") or "").strip()
-        if not n_op_clean.isdigit() or len(n_op_clean) > 5:
-            raise HTTPException(
-                400, "Nº operador inválido — corrige o cabeçalho (1-5 dígitos) antes de validar."
-            )
-        if db._normalize_data_pt_to_iso(header.get("data")) is None:
-            raise HTTPException(
-                400, "Data inválida — corrige a data no cabeçalho (dd-mm-aaaa) antes de validar."
-            )
+        # Confirmation saves exactly the submitted header. The plan and its
+        # warnings do not decide whether a person may validate their work.
+        submitted = {"operador": operador, "data": data, "n_operador": n_operador}
+        batch = []
+        for key, value in submitted.items():
+            if value is None:
+                continue
+            if str(header.get(key) or "") != value:
+                batch.append((f"header.{key}", value))
+        try:
+            db.apply_edits_batch(sheet_id, batch, expected_revision=validation_revision)
+        except (db.StaleSheetRevisionError, db.SheetValidatedError) as exc:
+            raise HTTPException(409, "A folha mudou; confirma os valores atuais antes de validar.") from exc
+        if batch:
+            validation_revision += 1
+            header = dict(header)
+            header.update({path.split(".", 1)[1]: value for path, value in batch})
+    operador_final = str(header.get("operador") or "")
 
     # R126 — edição de cesta_n foi removida do sheet.html (validate desktop).
     # A cesta entra exclusivamente pelo fluxo mobile (capture.html → /mobile/qtds-batch).
 
     try:
-        db.validate_sheet(sheet_id, operador_final)
-    except db.SheetReferenceReviewError as exc:
-        raise HTTPException(409, str(exc)) from exc
+        db.validate_sheet(sheet_id, operador_final,
+                          expected_revision=validation_revision)
+    except db.StaleSheetRevisionError as exc:
+        raise HTTPException(409, "A folha mudou; confirma os valores atuais antes de validar.") from exc
     except db.SheetValidatedError as exc:
         raise HTTPException(
             409, "Folha já validada — não é possível re-validar"
@@ -2730,10 +2688,7 @@ async def mobile_qtds_batch(request: Request) -> JSONResponse:
 # ============================================================================
 
 _DESKTOP_ONLY_PREFIXES = (
-    "/sheet/",       # editing/review page (full table edit)
-    "/kanbans",      # kanban viewer (operator selector + nav)
     "/dashboard",    # all dashboards (production, workers, jobs, etc.)
-    "/queue",        # full sheets list with edit/validate
     "/pair",         # QR code page (only useful on desktop showing the QR)
     "/export",       # bulk Excel export (covers /export and /export/cpis)
     "/excel",        # R66 — continuous data page (desktop-only)
@@ -2765,6 +2720,40 @@ async def _mobile_guard(request: Request, call_next):
             if path.startswith(prefix):
                 return RedirectResponse("/capture", status_code=303)
     return await call_next(request)
+
+
+@app.get("/admin/latency-status")
+def admin_latency_status() -> JSONResponse:
+    try:
+        report = json.loads(_LATENCY_STATUS_PATH.read_text())
+    except (OSError, ValueError):
+        report = {"available": False, "detail": "Ainda não há amostras do watcher."}
+    return JSONResponse(report, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/telemetry/interaction")
+async def browser_interaction(request: Request) -> Response:
+    # Reject oversized or malformed metrics; never record arbitrary client
+    # fields, edited text, identities or URLs from the request body.
+    import math
+    if len(await request.body()) > 1024:
+        raise HTTPException(413, "Métrica demasiado grande")
+    try:
+        data = await request.json()
+        action, duration, result = data["action"], data["duration_ms"], data["result"]
+        if action not in {"edit", "validate"} or result not in {"ok", "error"}:
+            raise ValueError
+        if isinstance(duration, bool) or not isinstance(duration, (int, float)):
+            raise ValueError
+        if not math.isfinite(duration) or not 0 <= duration <= 3600000:
+            raise ValueError
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(400, "Métrica inválida")
+    print(json.dumps({"event": "browser_timing", "action": action,
+                      "duration_ms": round(duration, 1), "result": result,
+                      **({"synthetic": True} if request.headers.get("X-OCR-Probe") == "1" else {})}),
+          file=sys.stderr, flush=True)
+    return Response(status_code=204)
 
 
 @app.get("/admin/refs-status")
@@ -4218,8 +4207,6 @@ def sheet_rotate(sheet_id: int, request: Request) -> JSONResponse:
     wrong (sometimes upside-down). User clicks "rodar" to cycle through
     0/90/180/270 until kanban is readable. Stored per-sheet.
     """
-    if _is_mobile_request(request):
-        raise HTTPException(403, "Rodar só pode ser feito em desktop")
     sheet = db.get_sheet(sheet_id)
     if sheet is None:
         raise HTTPException(404, f"sheet {sheet_id} not found")
@@ -4466,6 +4453,46 @@ def sheet_of_lookup(
     return JSONResponse(result)
 
 
+@app.post("/sheet/{sheet_id}/rows/{row_index}/edit")
+async def sheet_edit_row(sheet_id: int, row_index: int, request: Request) -> JSONResponse:
+    """Save the row as typed, independently of reference availability."""
+    sheet = db.get_sheet(sheet_id)
+    if sheet is None:
+        raise HTTPException(404, "Folha não encontrada")
+    if sheet.get("status") == "validated":
+        raise HTTPException(409, "Folha já validada — edits bloqueados")
+    rows = (sheet.get("sheet_data") or {}).get("rows") or []
+    if row_index < 0 or row_index >= len(rows) or not isinstance(rows[row_index], dict):
+        raise HTTPException(400, "Linha inválida")
+    try:
+        body = await request.json()
+        revision = body["expected_revision"]
+        values = body["values"]
+        if isinstance(revision, bool) or not isinstance(revision, int):
+            raise ValueError
+        if not isinstance(values, dict) or not values:
+            raise ValueError
+    except (ValueError, TypeError, KeyError):
+        raise HTTPException(400, "Campos e revisão da folha obrigatórios")
+    allowed = set(_template_ctx_for_sheet(sheet)["row_fields"])
+    if any(key not in allowed or not isinstance(value, str) for key, value in values.items()):
+        raise HTTPException(400, "Campo de produção inválido")
+    # Record even an unchanged field: submitting it explicitly is a human
+    # decision, including an intentional blank. No reference lookup occurs.
+    edits = [(f"rows[{row_index}].{key}", value) for key, value in values.items()]
+    if rows[row_index].get("reference_review"):
+        edits.append((f"rows[{row_index}].reference_review", ""))
+    try:
+        db.apply_edits_batch(sheet_id, edits, source="human", expected_revision=revision)
+    except (db.StaleSheetRevisionError, db.SheetValidatedError) as exc:
+        raise HTTPException(409, "A folha mudou; os teus valores continuam no editor.") from exc
+    persisted = db.get_sheet(sheet_id)
+    _start_sheet_cross_check({sheet_id}, profile_trigger="sheet_edit")
+    _invalidate_production_caches()
+    return JSONResponse({"ok": True, "revision": persisted["revision"],
+                         "final_row": persisted["sheet_data"]["rows"][row_index]})
+
+
 @app.post("/sheet/{sheet_id}/of-review")
 async def sheet_of_review(sheet_id: int, request: Request) -> JSONResponse:
     """Keep an unresolved row, or explicitly confirm the data as written."""
@@ -4684,8 +4711,6 @@ async def sheet_apply_lote_medidas(
     re-fit (learning filtra source='human'), o que é aceitável por serem
     decisões reais do revisor.
     """
-    if _is_mobile_request(request):
-        raise HTTPException(403, "Edição só pode ser feita em desktop")
     sheet = db.get_sheet(sheet_id)
     if sheet is None:
         raise HTTPException(404, f"sheet {sheet_id} not found")
@@ -4772,8 +4797,6 @@ async def sheet_add_row(sheet_id: int, request: Request) -> JSONResponse:
     Só antes da validação. Re-corre o cross-check para a nova linha (apenas
     células vazias ficam NA/cinza) e devolve o índice da nova linha.
     """
-    if _is_mobile_request(request):
-        raise HTTPException(403, "Edição só pode ser feita em desktop")
     sheet = db.get_sheet(sheet_id)
     if sheet is None:
         raise HTTPException(404, f"sheet {sheet_id} not found")
@@ -4796,8 +4819,6 @@ async def sheet_remove_row(sheet_id: int, request: Request) -> JSONResponse:
     (re-indexado) e invalida a cache de consumption — remover uma linha muda
     as quantidades produzidas.
     """
-    if _is_mobile_request(request):
-        raise HTTPException(403, "Edição só pode ser feita em desktop")
     sheet = db.get_sheet(sheet_id)
     if sheet is None:
         raise HTTPException(404, f"sheet {sheet_id} not found")
@@ -5316,6 +5337,7 @@ def excel_page(
         refs = get_watcher().get_refs()
     except Exception:
         refs = None
+    export.attach_human_values(raw_rows)
     cpis_rows = [export._build_cpis_row(r, refs=refs) for r in raw_rows]
 
     # Distinct operators for the filter dropdown (reuse db helper)
@@ -6129,3 +6151,39 @@ def _to_3block_csv(filename: str, data: dict, *, neutralize: bool = False) -> st
 
     # UTF-8 BOM prefix (Excel friendly) — preserved from R53.
     return "﻿" + buf.getvalue()
+
+
+@app.middleware("http")
+async def _http_timing(request: Request, call_next):
+    """Measure every mutation, including rejected and failed requests."""
+    started = time.perf_counter()
+    status = 500
+    path = request.url.path
+    request_id = secrets.token_hex(8)
+    request.state.request_id = request_id
+    probe = {"synthetic": True} if request.headers.get("X-OCR-Probe") == "1" else {}
+    mutating = request.method in {"POST", "PUT", "PATCH", "DELETE"}
+    action = ("export" if "/export" in path else
+              "recheck" if any(part in path for part in ("/recheck", "/revalidate", "/reprocess")) else
+              "validate" if re.search(r"/validate/?$", path) else
+              "edit" if any(part in path for part in (
+                  "/edit", "/apply-of-entry", "/of-review", "/qtds-batch",
+                  "/add-row", "/delete-row", "/remove-row", "/apply-lote")) else
+              "open" if request.method == "GET" and path.startswith(("/sheet/", "/kanbans", "/queue")) else "other")
+    measured = path != "/telemetry/interaction"
+    if mutating and measured:
+        print(json.dumps({"event": "http_request_start", "request_id": request_id,
+                          "method": request.method, "path": path, "action": action, **probe}),
+              file=sys.stderr, flush=True)
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        response.headers["X-Request-ID"] = request_id
+        response.headers["Server-Timing"] = f"app;dur={(time.perf_counter() - started) * 1000:.1f}"
+        return response
+    finally:
+        if measured and (mutating or action == "export" or path.startswith(("/sheet/", "/kanbans", "/queue"))):
+            print(json.dumps({"event": "http_timing", "request_id": request_id, "method": request.method,
+                              "path": path, "status": status, "action": action,
+                              "duration_ms": round((time.perf_counter() - started) * 1000, 1), **probe}),
+                  file=sys.stderr, flush=True)

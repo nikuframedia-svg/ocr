@@ -37,10 +37,6 @@
 {% set _is_id_field = field_path.endswith('.of')
                       or field_path.endswith('.ov')
                       or field_path.endswith('.cliente') %}
-{# R136 — a data do cabeçalho é o ÚNICO sítio para editar a data (a barra
-   "Validar" deixou de ter input). Edita-se com um date-picker nativo; o
-   valor mostra-se em DD-MM-YYYY mas o <input type="date"> usa ISO. #}
-{% set _is_date = field_path == 'header.data' %}
 {% if cc_status == 'MATCH' %}{% set cc_class = 'cc-match' %}
 {% elif cc_status == 'NO_MATCH' and (_is_dim_field or _is_id_field) %}{% set cc_class = 'cc-warn' %}
 {% elif cc_status == 'NO_MATCH' %}{% set cc_class = 'cc-no-match' %}
@@ -75,38 +71,11 @@
     x-data='{
       editing: false,
       original: {{ value | tojson }},
-      lastTap: 0,
-      isMobile() { return window.innerWidth <= 768; },
       handleClick() {
-        if (!this.isMobile()) {
-          this.editing = true;
-          // R123 — focar o input no $nextTick (depois de x-show o tornar
-          // visível). O x-init antigo corria na init do componente, com o
-          // form ainda display:none, e focus() num elemento oculto é no-op
-          // — por isso a edição "muitas vezes não fazia nada".
-          this.$nextTick(() => {
-            if (this.$refs.input) {
-              this.$refs.input.focus();
-              // R136 — select() lança InvalidStateError num <input type=date>
-              // (Firefox/Safari). Guarda para não partir o focus do picker.
-              try { this.$refs.input.select(); } catch (e) { /* date input */ }
-            }
-          });
-          return;
-        }
-        // R58 — duplo-toque (<400ms) abre o modal com input vazio para
-        // o operador poder escrever o novo valor de raiz, sem ter de
-        // apagar o existente.
-        const now = Date.now();
-        const isDoubleTap = (now - this.lastTap) < 400;
-        this.lastTap = now;
-        this.$dispatch("open-cell-editor", {
-          sheet_id: {{ sheet_id }},
-          field_path: {{ field_path | tojson }},
-          value: this.original,
-          label: {{ field_label | tojson }},
-          cell_id: {{ cell_id | tojson }},
-          clearValue: isDoubleTap
+        this.editing = true;
+        this.$nextTick(() => {
+          this.$refs.input?.focus();
+          this.$refs.input?.select();
         });
       }
     }'
@@ -134,7 +103,7 @@
         hx-post="/sheet/{{ sheet_id }}/edit"
         hx-target="#{{ cell_id }}"
         hx-swap="outerHTML"
-        @submit="editing = false"
+        hx-sync="#validate-form:queue all"
         style="position:absolute; left:0; top:0; z-index:30; min-width:280px;
                background:var(--paper); padding:5px; border-radius:5px;
                box-shadow:0 3px 12px rgba(0,0,0,0.20);">
@@ -143,26 +112,13 @@
        O blur só guarda quando o foco sai do form: clicar em ✓ ou ✕ tem
        relatedTarget dentro do form e não dispara um submit duplicado. #}
     <div style="display:flex; gap:3px; align-items:center;">
-      {% if _is_date %}
-      {# R136 — date-picker nativo. Guarda no @change (escolher data no
-         calendário) e no botão ✓. NÃO usa @blur: o popup do calendário tira
-         o foco ao input e dispararia um submit prematuro. O servidor
-         (sheet_edit) converte o ISO de volta para DD-MM-YYYY ao guardar. #}
-      <input type="date" name="new_value" value="{{ (value | pt_to_iso) or '' }}"
-             x-ref="input"
-             min="2024-01-01" max="2030-12-31"
-             @change="$el.form.requestSubmit()"
-             @keydown.escape="editing = false"
-             style="width:100%; min-width:200px; font-family:var(--font-mono); font-size:14px; padding:7px 10px; border:1px solid var(--ink); border-radius:3px;">
-      {% else %}
       <input type="text" name="new_value" value="{{ value }}" x-ref="input"
              @blur="if (!$el.form.contains($event.relatedTarget)) $el.form.requestSubmit()"
              @keydown.escape="editing = false; $el.value = original"
              style="width:100%; min-width:200px; font-family:var(--font-mono); font-size:14px; padding:7px 10px; border:1px solid var(--ink); border-radius:3px;">
-      {% endif %}
       <button type="submit" title="Guardar"
               style="flex:none; padding:7px 11px; font-size:14px; line-height:1.4; border:1px solid var(--ink); border-radius:3px; background:var(--ink); color:var(--paper); cursor:pointer;">✓</button>
-      <button type="button" title="Cancelar"
+      <button type="button" title="Cancelar" data-cancel-cell-edit
               @click="editing = false; $refs.input.value = original"
               style="flex:none; padding:7px 11px; font-size:14px; line-height:1.4; border:1px solid var(--rule-2); border-radius:3px; background:var(--paper); cursor:pointer;">✕</button>
     </div>

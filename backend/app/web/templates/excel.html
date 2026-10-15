@@ -67,12 +67,12 @@
                   {% elif v is none or v == "" %}
                     <span class="muted">—</span>
                   {% elif key == "data" %}
-                    {{ v.strftime("%d-%m-%Y") }}
+                    {{ v.strftime("%d-%m-%Y") if v.strftime is defined else v }}
                   {% elif key in ("peso_consumido_t", "peso_produzido_t", "desperdicio_t") %}
                     {{ "%.3f"|format(v) }}
                   {% elif key == "desperdicio_pct" %}
                     {{ "%.2f"|format(v) }}
-                  {% elif key == "esp_mm" %}
+                  {% elif key == "esp_mm" and v is number %}
                     {{ "%.1f"|format(v) }}
                   {% else %}
                     {{ v }}

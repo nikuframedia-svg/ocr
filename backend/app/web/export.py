@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import datetime as dt
 import io
+import math
+import re
 from collections import defaultdict
 
 import openpyxl
@@ -27,7 +29,7 @@ from app.cell_sanitize import neutralize_xlsx
 from app.production.weights import calculate_row_weights, find_plan_entry
 from app.templates_registry import detect_template
 
-from .db import conn
+from .db import conn, AUTHORITATIVE_EDIT_SOURCES
 from .kpis import _derive_cod_maquina
 
 # Order of columns in the per-day per-operator sub-tables (matches kanban)
@@ -87,6 +89,42 @@ def _filter_by_sector(rows: list[dict], sector: str | None) -> list[dict]:
     ]
 
 
+def attach_human_values(rows: list[dict]) -> list[dict]:
+    """Keep typed text for exported cells; numeric projections still drive sums."""
+    ids = sorted({r["sheet_id"] for r in rows if r.get("sheet_id") is not None})
+    last = {}
+    with conn() as c:
+        for start in range(0, len(ids), 500):
+            batch = ids[start:start + 500]
+            sql = ("SELECT sheet_id, field_path, new_value, source FROM edits "
+                   f"WHERE sheet_id IN ({','.join('?' for _ in batch)}) ORDER BY id")
+            for edit in c.execute(sql, batch):
+                last[(edit["sheet_id"], edit["field_path"])] = (edit["source"], edit["new_value"])
+    row_values, header_values = {}, {}
+    for (sid, path), (source, value) in last.items():
+        if source not in AUTHORITATIVE_EDIT_SOURCES:
+            continue
+        match = re.fullmatch(r"rows\[(\d+)\]\.([a-z_0-9]+)", path)
+        if match:
+            row_values.setdefault((sid, int(match[1])), {})[match[2]] = value
+        elif path.startswith("header."):
+            header_values.setdefault(sid, {})[path[7:]] = value
+    for row in rows:
+        row["_human_values"] = row_values.get((row.get("sheet_id"), row.get("row_index")), {})
+        row["_human_header"] = header_values.get(row.get("sheet_id"), {})
+    return rows
+
+
+def _human_export_cell(field: str, literal):
+    """Preserve numeric Excel types where possible; retain unparseable text."""
+    if field in {"qtd", "qtd_metros", "m2", "comp_mm", "larg_mm", "esp", "esp_mm",
+                 "lbase", "ltopo", "dbase", "dtopo", "sucata"}:
+        value = _to_float(literal)
+        if value is not None and math.isfinite(value):
+            return int(value) if value.is_integer() else value
+    return literal
+
+
 def _query_rows(
     date_from: str | None,
     date_to: str | None,
@@ -133,11 +171,13 @@ def _query_rows(
 
     with conn() as c:
         rows = [dict(r) for r in c.execute(sql, params).fetchall()]
-    return _filter_by_sector(rows, sector)
+    return attach_human_values(_filter_by_sector(rows, sector))
 
 
 def _operador_canon(row: dict) -> str:
     """Use the validated operador if available, else the row's stored operador."""
+    if "operador" in row.get("_human_header", {}):
+        return row["_human_header"]["operador"] or "—"
     return (row.get("validated_operador") or row.get("operador") or "—").strip() or "—"
 
 
@@ -213,7 +253,7 @@ def _write_resumo(
     # Per-day summary
     by_day: dict[str, dict] = defaultdict(lambda: {"qtd": 0, "sheets": set(), "ofs": set(), "ops": set()})
     for r in all_rows:
-        d = by_day[r["sheet_iso_date"]]
+        d = by_day[r["sheet_iso_date"] or "Sem data"]
         d["qtd"] += r["qtd"] or 0
         d["sheets"].add(r["sheet_id"])
         if r["of"]:
@@ -329,7 +369,8 @@ def _write_day_sheet(wb: openpyxl.Workbook, day_iso: str, day_rows: list[dict]) 
         # Rows
         for r in by_op[op]:
             for ci, (key, _) in enumerate(ROW_COLUMNS, start=1):
-                v = r.get(key)
+                v = (_human_export_cell(key, r["_human_values"][key])
+                     if key in r.get("_human_values", {}) else r.get(key))
                 # R257 — valores OCR/editados: '=' inicial executaria como
                 # fórmula ao abrir o XLSX (openpyxl infere data_type='f').
                 cell = ws.cell(row=row_idx, column=ci,
@@ -367,8 +408,7 @@ def export_excel(
     # Group by day, write one sheet per day with data
     by_day: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
-        if r["sheet_iso_date"]:
-            by_day[r["sheet_iso_date"]].append(r)
+        by_day[r["sheet_iso_date"] or "Sem data"].append(r)
     for day_iso in sorted(by_day):
         _write_day_sheet(wb, day_iso, by_day[day_iso])
 
@@ -510,7 +550,7 @@ def _query_cpis_rows(
     )
     with conn() as c:
         rows = [dict(r) for r in c.execute(sql, params).fetchall()]
-    return _filter_by_sector(rows, sector)
+    return attach_human_values(_filter_by_sector(rows, sector))
 
 
 def _iso_to_date(iso: str | None) -> dt.date | None:
@@ -689,7 +729,7 @@ def _build_cpis_row(row: dict, refs: dict | None = None) -> dict:
             pass
     cod_funcionario = _to_int(pernr_str) if pernr_str else None
 
-    return {
+    result = {
         "data": _iso_to_date(row.get("sheet_iso_date")),
         "cod_funcionario": cod_funcionario,
         "nome_funcionario": nome,
@@ -737,6 +777,27 @@ def _build_cpis_row(row: dict, refs: dict | None = None) -> dict:
         "lote": row.get("lote") or "",
         "fecho": "X" if str(row.get("fecho") or "").strip().upper() == "X" else "",
     }
+
+    aliases = {"esp": "esp_mm"}
+    output_fields = {key for key, _label in CPIS_COLUMNS}
+    for field, value in row.get("_human_values", {}).items():
+        key = aliases.get(field, field)
+        if key in output_fields:
+            result[key] = _human_export_cell(key, value)
+    header_aliases = {"data": "data", "operador": "nome_funcionario",
+                      "n_operador": "cod_funcionario", "cod_maquina": "cod_maquina",
+                      "setor_maquina": "setor_maquina_desc"}
+    for field, value in row.get("_human_header", {}).items():
+        key = header_aliases.get(field)
+        if key:
+            if field == "data":
+                from .db import _parse_date_iso
+                result[key] = _iso_to_date(str(value).strip()) or _iso_to_date(_parse_date_iso(value)) or value
+            elif field == "n_operador" and _to_int(value) is not None:
+                pass  # Keep the existing SAP personnel-code derivation.
+            else:
+                result[key] = value
+    return result
 
 
 def build_cpis_workbook(

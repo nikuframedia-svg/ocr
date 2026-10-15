@@ -46,37 +46,7 @@
         {# R94: validação pede confirmação de data + nº operador. #}
         <form id="validate-form" method="post" action="/sheet/{{ sheet.id }}/validate"
               style="display:inline-flex; gap:8px; align-items:center; flex-wrap:wrap;">
-          <label style="display:inline-flex; align-items:center; gap:4px;">
-            <span class="lbl" style="margin:0; font-size:10px;">DATA</span>
-            <input type="date" name="data"
-                   value="{{ data_iso_for_validate or '' }}"
-                   min="2024-01-01" max="2030-12-31"
-                   required class="kv-select" style="width:140px;">
-          </label>
-          <label style="display:inline-flex; align-items:center; gap:4px;">
-            <span class="lbl" style="margin:0; font-size:10px;">Nº OP</span>
-            <input type="text" name="n_operador" inputmode="numeric"
-                   value="{{ (header.n_operador if header else '') or '' }}"
-                   pattern="\d{1,5}" placeholder="ex: 1481"
-                   required class="kv-select" style="width:80px;">
-          </label>
-          {# R131 — dropdown pré-selecciona o snap result vindo de
-             `header.operador` (snap_operador escreveu o canónico após
-             cross-check). 1 clique para validar. Edge case: snap propôs
-             nome NÃO presente em `valid_operadores` (colaborador removido
-             do SAP) → adiciona option extra marcada "(do snap)" para o
-             operador poder ainda validar sem perder a referência. #}
-          {% set _snap_name = (header.operador if header else '') or '' %}
-          <select name="operador" required class="kv-select" style="min-width:180px;">
-            <option value="" {% if not _snap_name %}selected{% endif %}>Confirmar nome…</option>
-            {% if _snap_name and _snap_name not in valid_operadores %}
-              <option value="{{ _snap_name }}" selected>{{ _snap_name }} (do snap)</option>
-            {% endif %}
-            {% for op in valid_operadores %}
-              <option value="{{ op }}"
-                {% if op == _snap_name or (not _snap_name and op == current_operador) %}selected{% endif %}>{{ op }}</option>
-            {% endfor %}
-          </select>
+          <input type="hidden" name="expected_revision" value="{{ sheet.revision or 0 }}">
           <button class="btn primary" type="submit">Validar</button>
         </form>
       {% endif %}
@@ -524,18 +494,26 @@ window.addEventListener('keydown', (e) => {
 // inputs de cesta associados via form="validate-form" (R95).
 document.getElementById('validate-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
+  window.ocrLatency?.navigation('validate');
+  const failed = window.ocrLatency?.start('validate');
+  let navigating = false;
   const f = e.target;
   const btn = f.querySelector('button[type=submit]');
   if (btn) btn.disabled = true;
   try {
+    if (window.sheetWriteGuard && !await window.sheetWriteGuard.flush()) {
+      alert('A última alteração não ficou guardada. Confirma a gravação antes de validar.');
+      return;
+    }
     const r = await fetch(f.action, { method: 'POST', body: new FormData(f) });
-    if (r.ok) { window.location = r.redirected ? r.url : window.location.href; return; }
+    if (r.ok) { navigating = true; window.location = r.redirected ? r.url : window.location.href; return; }
     let d = '';
     try { d = (await r.json()).detail || ''; } catch (_) {}
     alert('Validação falhou: ' + (d || ('HTTP ' + r.status)));
   } catch (err) {
     alert('Erro de rede: ' + err.message);
   } finally {
+    if (!navigating) { window.ocrLatency?.cancelNavigation(); failed?.('error'); }
     if (btn) btn.disabled = false;
   }
 });

@@ -108,3 +108,64 @@ eval(source.slice(start,source.indexOf('</script>',start)));
   await old;assert.equal(wizard.lookupResult.q,'NEW');assert.equal(wizard.loading,false);
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """)
+
+
+def test_manual_row_editor_saves_exact_of_without_a_lookup_or_candidate():
+    _run(r"""
+const assert=require('node:assert/strict'),fs=require('node:fs');
+const source=fs.readFileSync(process.argv[1]+'/backend/app/web/templates/sheet.html','utf8');
+const start=source.indexOf('function ofWizard(');
+eval(source.slice(start,source.indexOf('</script>',start)));
+(async()=>{
+  let calls=[],reloads=0;
+  global.document={querySelector:()=>({value:'11'})};
+  global.window={location:{reload:()=>reloads++}};
+  global.fetch=async(url,options)=>{
+    calls.push({url,body:JSON.parse(options.body)});
+    return {ok:true,json:async()=>({ok:true,revision:12,final_row:{of:'266303'}})};
+  };
+  const wizard=ofWizard(7955,11,['of','modelo','qtd']);
+  wizard.open({row_index:4,current_of:'265958',row_values:{of:'265958',modelo:'ESCADAS TL465-101',qtd:'4'}});
+  assert.equal(calls.length,0); // Opening an editor does not need the plan.
+  wizard.rowDraft.of='266303';
+  wizard.lookupResult={found:true,entries:[{of:'265958'}]};wizard.selectedEntry=0;
+  await wizard.saveRow();
+  assert.equal(calls.length,1);
+  assert.equal(calls[0].url,'/sheet/7955/rows/4/edit');
+  assert.deepEqual(calls[0].body,{expected_revision:11,values:{of:'266303'}});
+  assert.equal(reloads,1);
+  wizard.open({row_index:4,current_of:'265958',row_values:{of:'265958'}});
+  wizard.rowDraft.of='  livre sem plano  ';
+  global.fetch=async()=>({ok:false,json:async()=>({detail:'Conflito de revisão'})});
+  await wizard.saveRow();
+  assert.equal(wizard.active,true);assert.equal(wizard.rowDraft.of,'  livre sem plano  ');
+  assert.equal(wizard.applyError,'Conflito de revisão');
+})().catch(error=>{console.error(error);process.exitCode=1;});
+""")
+
+
+def test_validation_waits_for_edit_commit_and_keeps_failed_drafts():
+    _run(r"""
+const assert=require('node:assert/strict'),fs=require('node:fs');
+const handlers={}, revision={value:'4'}, metrics=[];
+global.document={addEventListener:(name,handler)=>{handlers[name]=handler;},querySelector:()=>revision};
+global.window={ocrLatency:{start:()=>result=>metrics.push(result)}};
+eval(fs.readFileSync(process.argv[1]+'/backend/app/web/static/sheet_write_guard.js','utf8'));
+(async()=>{
+  const form={getAttribute:()=>'/sheet/7955/edit',querySelector:()=>({value:'rows[4].of'})};
+  const elt={closest:()=>form}, xhr={getResponseHeader:()=> '5'};
+  const config={elt,parameters:{}};
+  handlers['htmx:configRequest']({detail:config});
+  assert.equal(config.parameters.expected_revision,'4');
+  handlers['htmx:beforeRequest']({detail:{elt,xhr}});
+  let resolved=false;
+  const flush=window.sheetWriteGuard.flush().then(result=>{resolved=true;return result;});
+  await Promise.resolve();assert.equal(resolved,false);
+  handlers['htmx:afterRequest']({detail:{xhr,successful:false}});
+  assert.equal(await flush,false);assert.equal(revision.value,'4');
+  handlers['htmx:beforeRequest']({detail:{elt,xhr}});
+  handlers['htmx:afterRequest']({detail:{xhr,successful:true}});
+  assert.equal(await window.sheetWriteGuard.flush(),true);assert.equal(revision.value,'5');
+  assert.deepEqual(metrics,['error','ok']);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+""")

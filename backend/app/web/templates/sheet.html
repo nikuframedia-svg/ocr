@@ -22,8 +22,7 @@
 
 {% if reference_pending %}
 <div class="alert warn" style="margin-bottom:12px;">
-  {{ reference_pending | length }} linha(s) por confirmar. Abre «Corrigir via OF» nessa linha
-  para escolher uma referência ou confirmar os dados da fotografia.
+  {{ reference_pending | length }} linha(s) sem referência confirmada. Podes editar e validar os valores escritos.
 </div>
 {% endif %}
 
@@ -107,12 +106,11 @@
          cabeçalho (única fonte de verdade, gravam logo). A barra "Validar"
          deixou de ter inputs próprios: eram duplicados que, por ficarem
          stale, revertiam a edição do cabeçalho ao validar. Agora só confirma
-         e tranca — o servidor valida data/nº/operador a partir do cabeçalho. #}
+         e tranca os valores que a pessoa decidiu guardar. #}
       <form id="validate-form" method="post" action="/sheet/{{ sheet.id }}/validate"
             style="display:inline-flex; gap:8px; align-items:center; flex-wrap:wrap;">
-        <span class="muted tiny">Confirma data, nº e operador no cabeçalho →</span>
-        <button class="btn primary" type="submit"
-                {% if reference_pending %}disabled title="Há linhas por confirmar"{% endif %}>Validar</button>
+        <input type="hidden" name="expected_revision" value="{{ sheet.revision or 0 }}">
+        <button class="btn primary" type="submit">Validar</button>
       </form>
     {% endif %}
   </div>
@@ -168,7 +166,7 @@
       <b>Lado duvidoso — esta folha é frente ou verso?</b><br>
       <span class="muted tiny">
         O sistema não confirmou o lado{% if sheet.review_reason %} ({{ sheet.review_reason }}){% endif %}.
-        Confirma para retomar o depósito.
+        Podes editar e validar os valores; a indicação do lado fica para consulta.
       </span>
       {# rev00 — guarda de duplo-submit: o 1º submit desabilita ambos os botões
          para não re-enfileirar a folha 2× (o side vai no hidden input, por isso
@@ -292,10 +290,11 @@
                         @click='$dispatch("open-of-wizard", {
                           row_index: {{ loop.index0 }},
                           current_of: {{ (row.of or "") | tojson }},
+                          row_values: {{ row | tojson }},
                           reference_pending: {{ (row.get("reference_review") == "pending") | tojson }}
                         })'
-                        title="Corrigir via OF (escreve OF correcto e auto-fill cliente, modelo, dims)">
-                  🪄
+                        title="Editar linha">
+                  ✎
                 </button>
                 {# R136 — remover uma linha errada/inventada pelo OCR. Confirm
                    porque é irreversível (o conteúdo fica no audit trail). #}
@@ -392,20 +391,28 @@
 </div><!-- /cellEditor wrapper -->
 
 <!-- ============== R112 — Wizard "Corrigir via OF" ============== -->
-<div x-data="ofWizard({{ sheet.id }}, {{ sheet.revision or 0 }})"
+<div x-data='ofWizard({{ sheet.id }}, {{ sheet.revision or 0 }}, {{ row_fields | tojson }})'
      @open-of-wizard.window="open($event.detail)">
   <template x-if="active">
     <div class="sheet-bg of-wizard-overlay" @click.self="cancel()">
       <div class="sheet-modal of-wizard-modal">
         <div class="lbl">Linha L<span x-text="row_index + 1"></span></div>
         <div style="font-size:18px; font-weight:600; margin-bottom:4px;">
-          Corrigir linha via OF
+          Editar linha
         </div>
         <div class="muted tiny" style="margin-bottom:12px;">
-          Pesquisa por OF, OV ou referência e filtra por modelo e comprimento.
-          Podes usar cada filtro sozinho.
+          Escreve os valores que queres guardar.
         </div>
 
+        <div class="row-direct-fields">
+          {% for field in row_fields %}
+          <label class="lbl">{{ field_labels.get(field, field.upper().replace('_', ' ')) }}
+            <input type="text" x-model='rowDraft[{{ field | tojson }}]' autocomplete="off">
+          </label>
+          {% endfor %}
+        </div>
+        <details style="margin:14px 0;">
+          <summary>Consultar referências do plano</summary>
         <!-- Step 1 — input multi-modo (R128: OF / OV / modelo auto-detect) -->
         <div style="margin-bottom:12px;">
           <label class="lbl">Pesquisar:</label>
@@ -511,6 +518,10 @@
           </div>
         </template>
 
+          <button type="button" class="btn" :disabled="!canApply || applying" @click="apply()">
+            Usar referência selecionada
+          </button>
+        </details>
         <template x-if="applyError">
           <div class="alert warn" style="padding:10px; margin-bottom:12px;"
                x-text="applyError"></div>
@@ -521,36 +532,32 @@
           <button type="button" class="btn lg" style="flex:1;" @click="cancel()">
             Cancelar
           </button>
-          <button type="button" class="btn" :disabled="loading || applying"
-                  @click="reviewReference('pending')">Guardar por confirmar</button>
           <button type="button" class="btn lg primary" style="flex:2;"
-                  :disabled="!canApply || applying"
-                  @click="apply()">
-            <span x-show="!applying">Aplicar à linha</span>
-            <span x-show="applying">A aplicar…</span>
+                  :disabled="applying" @click="saveRow()">
+            <span x-show="!applying">Guardar alterações</span>
+            <span x-show="applying">A guardar…</span>
           </button>
         </div>
-        <button type="button" class="btn ghost" x-show="referencePending"
-                :disabled="loading || applying" @click="reviewReference('confirmed_manual')"
-                style="margin-top:8px;">Confirmar os dados como estão na fotografia</button>
       </div>
     </div>
   </template>
 </div>
 
 <script>
-function ofWizard(sheetId, sheetRevision = 0) {
+function ofWizard(sheetId, sheetRevision = 0, rowFields = []) {
   return {
     sheetId: sheetId,
     active: false, row_index: 0, ofInput: '', current_of: '',
     modelInput: '', lengthInput: '', searchVersion: 0, sheetRevision,
-    referencePending: false,
+    referencePending: false, rowDraft: {}, rowDraftInitial: {},
     loading: false, lookupResult: null, selectedEntry: -1,
     applying: false, applyError: '',
     includeDone: false,  // R113 — toggle "mostrar peças já fechadas"
     open(detail) {
       this.referencePending = Boolean(detail.reference_pending);
       this.active = true;
+      this.rowDraft = Object.fromEntries(rowFields.map(field => [field, String(detail.row_values?.[field] ?? "")]));
+      this.rowDraftInitial = {...this.rowDraft};
       this.row_index = detail.row_index;
       this.current_of = detail.current_of || '';
       this.ofInput = detail.current_of || '';
@@ -562,10 +569,7 @@ function ofWizard(sheetId, sheetRevision = 0) {
       this.selectedEntry = -1;
       this.includeDone = false;
       this.applyError = '';
-      // Auto-lookup se já existe OF na linha
-      if (this.ofInput.trim()) {
-        this.$nextTick(() => this.lookup());
-      }
+      this.sheetRevision = Number(document.querySelector('#validate-form [name="expected_revision"]')?.value ?? this.sheetRevision);
     },
     cancel() { this.searchVersion++; this.loading = false; this.active = false; },
     clearResults() {
@@ -672,17 +676,45 @@ function ofWizard(sheetId, sheetRevision = 0) {
             + 'Campos não aplicados: ' + notApplied.join(', ') + '.';
           return;
         }
-        if (!j.n_applied) {
-          this.applyError = j.message
-            || 'Nenhum campo mudou; a linha já poderá conter esta entrada.';
-          return;
-        }
         this.active = false;
         window.location.reload();
       } catch (e) {
         this.applyError = 'Erro de rede: ' + e.message;
       } finally {
         this.applying = false;
+      }
+    },
+    async saveRow() {
+      if (this.applying) return;
+      this.applying = true;
+      this.applyError = '';
+      window.ocrLatency?.navigation('edit');
+      const failed = window.ocrLatency?.start('edit');
+      let navigating = false;
+      try {
+        if (window.sheetWriteGuard && !await window.sheetWriteGuard.flush()) {
+          throw new Error('Confirma a gravação da última célula antes de guardar a linha.');
+        }
+        const values = Object.fromEntries(Object.entries(this.rowDraft)
+          .filter(([field, value]) => value !== this.rowDraftInitial[field]));
+        if (!Object.keys(values).length) { this.active = false; return; }
+        const response = await fetch('/sheet/' + this.sheetId + '/rows/' + this.row_index + '/edit', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({expected_revision: this.sheetRevision, values}),
+        });
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.detail || 'Não foi possível guardar.');
+        this.active = false;
+        navigating = true;
+        window.location.reload();
+      } catch (error) {
+        this.applyError = error.message || 'Não foi possível confirmar a gravação. Os valores continuam no editor.';
+      } finally {
+        this.applying = false;
+        if (!navigating) {
+          window.ocrLatency?.cancelNavigation();
+          if (this.applyError) failed?.('error');
+        }
       }
     },
     async reviewReference(decision) {
@@ -739,6 +771,8 @@ function ofWizard(sheetId, sheetRevision = 0) {
   border-color: var(--crit);
 }
 
+.row-direct-fields { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; }
+.row-direct-fields input { margin-top:4px; }
 .of-wizard-modal {
   max-width: 880px !important;
   max-height: 90vh;
@@ -933,18 +967,26 @@ function cellEditor() {
 // detail aparece num alert e a página fica onde está.
 document.getElementById('validate-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
+  window.ocrLatency?.navigation('validate');
+  const failed = window.ocrLatency?.start('validate');
+  let navigating = false;
   const f = e.target;
   const btn = f.querySelector('button[type=submit]');
   if (btn) btn.disabled = true;
   try {
+    if (window.sheetWriteGuard && !await window.sheetWriteGuard.flush()) {
+      alert('A última alteração não ficou guardada. Confirma a gravação antes de validar.');
+      return;
+    }
     const r = await fetch(f.action, { method: 'POST', body: new FormData(f) });
-    if (r.ok) { window.location = r.redirected ? r.url : window.location.href; return; }
+    if (r.ok) { navigating = true; window.location = r.redirected ? r.url : window.location.href; return; }
     let d = '';
     try { d = (await r.json()).detail || ''; } catch (_) {}
     alert('Validação falhou: ' + (d || ('HTTP ' + r.status)));
   } catch (err) {
     alert('Erro de rede: ' + err.message);
   } finally {
+    if (!navigating) { window.ocrLatency?.cancelNavigation(); failed?.('error'); }
     if (btn) btn.disabled = false;
   }
 });
