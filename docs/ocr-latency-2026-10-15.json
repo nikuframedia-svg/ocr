@@ -82,5 +82,6 @@
       "path": "backend/app/pipeline/scoring_process.py",
       "sha256": "1bff3969adbaa4cd986ee639d52a5e27d082965333ed1379f6a6515bd57fe275"
     }
-  ]
+  ],
+  "systemd_dropin": "deploy/linux/mtg-ocr-original.service.d/30-scoring-process.conf"
 }
