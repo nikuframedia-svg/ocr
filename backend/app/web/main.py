@@ -553,7 +553,8 @@ def health() -> JSONResponse:
     return JSONResponse({
         "status": "ok",
         "engine_version": ENGINE_VERSION,
-        "latency_fix": "2026-10-15.5",
+        "latency_fix": "2026-10-15.6",
+        "review_flow": "free-editing-2026-10-15.1",
         "scoring_process": scoring_process_enabled(),
         "git_sha": _git_short_sha(),
         "python": sys.version.split()[0],
@@ -2081,7 +2082,7 @@ def _render_lote_suggest(
 
 
 @app.post("/sheet/{sheet_id}/edit", response_class=HTMLResponse)
-async def sheet_edit(
+def sheet_edit(
     request: Request,
     sheet_id: int,
     field_path: str = Form(...),
@@ -2330,7 +2331,7 @@ def _deposit_csv_to_factory(sheet_id: int) -> Path | None:
 
 
 @app.post("/sheet/{sheet_id}/validate")
-async def sheet_validate(
+def sheet_validate(
     sheet_id: int,
     request: Request,
     operador: str | None = Form(None),
@@ -4456,7 +4457,7 @@ def sheet_of_lookup(
 @app.post("/sheet/{sheet_id}/rows/{row_index}/edit")
 async def sheet_edit_row(sheet_id: int, row_index: int, request: Request) -> JSONResponse:
     """Save the row as typed, independently of reference availability."""
-    sheet = db.get_sheet(sheet_id)
+    sheet = await asyncio.to_thread(db.get_sheet, sheet_id)
     if sheet is None:
         raise HTTPException(404, "Folha não encontrada")
     if sheet.get("status") == "validated":
@@ -4483,10 +4484,10 @@ async def sheet_edit_row(sheet_id: int, row_index: int, request: Request) -> JSO
     if rows[row_index].get("reference_review"):
         edits.append((f"rows[{row_index}].reference_review", ""))
     try:
-        db.apply_edits_batch(sheet_id, edits, source="human", expected_revision=revision)
+        await asyncio.to_thread(db.apply_edits_batch, sheet_id, edits, source="human", expected_revision=revision)
     except (db.StaleSheetRevisionError, db.SheetValidatedError) as exc:
         raise HTTPException(409, "A folha mudou; os teus valores continuam no editor.") from exc
-    persisted = db.get_sheet(sheet_id)
+    persisted = await asyncio.to_thread(db.get_sheet, sheet_id)
     _start_sheet_cross_check({sheet_id}, profile_trigger="sheet_edit")
     _invalidate_production_caches()
     return JSONResponse({"ok": True, "revision": persisted["revision"],

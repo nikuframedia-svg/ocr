@@ -2,6 +2,9 @@
 from copy import deepcopy
 import io
 import json
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import openpyxl
 
@@ -37,6 +40,36 @@ def post_row(env, values, **extra):
     sid, client = env
     return client.post(f"/sheet/{sid}/rows/4/edit", json={
         "expected_revision": db.get_sheet(sid)["revision"], "values": values, **extra})
+
+
+@pytest.mark.parametrize('action', ['edit', 'validate'])
+def test_slow_write_does_not_block_other_users_health(env, monkeypatch, action):
+    sid, client = env
+    entered, release = threading.Event(), threading.Event()
+    name = 'apply_edit' if action == 'edit' else 'validate_sheet'
+    original = getattr(db, name)
+
+    def delayed(*args, **kwargs):
+        entered.set()
+        release.wait(2)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(db, name, delayed)
+    monkeypatch.setattr(main.app.router, 'on_startup', [])
+    monkeypatch.setattr(main.app.router, 'on_shutdown', [])
+    data = {'expected_revision': db.get_sheet(sid)['revision']}
+    if action == 'edit':
+        data.update(field_path='rows[4].of', new_value='266303')
+    with client, ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(client.post, f'/sheet/{sid}/{action}', data=data, follow_redirects=False)
+        try:
+            assert entered.wait(2)
+            started = time.perf_counter()
+            assert client.get('/health').status_code == 200
+            assert time.perf_counter() - started < 1
+        finally:
+            release.set()
+        assert future.result().status_code in {200, 303}
 
 
 def test_image_7955_manual_of_never_becomes_suggested_of(env, monkeypatch):
