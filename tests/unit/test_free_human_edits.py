@@ -5,6 +5,10 @@ import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+import os
+from pathlib import Path
+import socket
+import subprocess
 
 import openpyxl
 
@@ -70,6 +74,37 @@ def test_slow_write_does_not_block_other_users_health(env, monkeypatch, action):
         finally:
             release.set()
         assert future.result().status_code in {200, 303}
+
+
+def test_real_browser_edits_exact_of_and_validates_once(env, tmp_path):
+    playwright, chromium = os.environ.get('PLAYWRIGHT_CORE_PATH'), os.environ.get('CHROMIUM_PATH')
+    if not playwright or not chromium:
+        pytest.skip('Set Playwright and Chromium paths for the real-browser check')
+    import uvicorn
+    sid, _ = env
+    server = uvicorn.Server(uvicorn.Config(main.app, host='127.0.0.1', port=0, lifespan='off', log_level='warning'))
+    sock = socket.socket()
+    sock.bind(('127.0.0.1', 0))
+    port = sock.getsockname()[1]
+    thread = threading.Thread(target=server.run, kwargs={'sockets': [sock]}, daemon=True)
+    thread.start()
+    try:
+        for _ in range(100):
+            if server.started:
+                break
+            time.sleep(.01)
+        config = {'url': f'http://127.0.0.1:{port}/sheet/{sid}', 'playwright': playwright,
+                  'chromium': chromium, 'output': str(tmp_path)}
+        result = subprocess.run(['node', str(Path(__file__).with_name('original_free_review_browser.cjs'))],
+                                input=json.dumps(config), text=True, capture_output=True, timeout=90)
+        assert result.returncode == 0, result.stdout + result.stderr
+        saved = db.get_sheet(sid)
+        assert saved['status'] == 'validated'
+        assert saved['sheet_data']['rows'][4]['of'] == '266303'
+    finally:
+        server.should_exit = True
+        thread.join(timeout=5)
+        sock.close()
 
 
 def test_image_7955_manual_of_never_becomes_suggested_of(env, monkeypatch):
