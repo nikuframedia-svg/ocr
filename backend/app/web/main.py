@@ -554,7 +554,7 @@ def health() -> JSONResponse:
         "status": "ok",
         "engine_version": ENGINE_VERSION,
         "latency_fix": "2026-10-15.6",
-        "review_flow": "inline-editing-2026-10-16.1",
+        "review_flow": "inline-editing-2026-10-16.2",
         "scoring_process": scoring_process_enabled(),
         "git_sha": _git_short_sha(),
         "python": sys.version.split()[0],
@@ -5319,6 +5319,8 @@ def excel_page(
 
     sql = f"""
         SELECT pr.*,
+               json_extract(s.sheet_data, '$.rows[' || pr.row_index || ']') AS _saved_row,
+               json_extract(s.sheet_data, '$.header') AS _saved_header,
                s.operador AS validated_operador,
                json_extract(s.sheet_data, '$.header.setor_maquina') AS setor_maquina,
                json_extract(s.sheet_data, '$.header.n_operador') AS n_operador,

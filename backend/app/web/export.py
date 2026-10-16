@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime as dt
 import io
+import json
 import math
 import re
 from collections import defaultdict
@@ -90,28 +91,44 @@ def _filter_by_sector(rows: list[dict], sector: str | None) -> list[dict]:
 
 
 def attach_human_values(rows: list[dict]) -> list[dict]:
-    """Keep typed text for exported cells; numeric projections still drive sums."""
+    """Export literal values from the saved sheet, never from audit payloads.
+
+    Audit paths identify fields that were explicitly written. Their old values
+    cannot identify the current row after deletion or reprocessing has changed
+    its index. Saved row/header JSON is selected with production_rows so every
+    exported value belongs to the same database snapshot.
+    """
     ids = sorted({r["sheet_id"] for r in rows if r.get("sheet_id") is not None})
     last = {}
     with conn() as c:
         for start in range(0, len(ids), 500):
             batch = ids[start:start + 500]
-            sql = ("SELECT sheet_id, field_path, new_value, source FROM edits "
+            sql = ("SELECT sheet_id, field_path, source FROM edits "
                    f"WHERE sheet_id IN ({','.join('?' for _ in batch)}) ORDER BY id")
             for edit in c.execute(sql, batch):
-                last[(edit["sheet_id"], edit["field_path"])] = (edit["source"], edit["new_value"])
-    row_values, header_values = {}, {}
-    for (sid, path), (source, value) in last.items():
+                last[(edit["sheet_id"], edit["field_path"])] = edit["source"]
+    row_fields, header_fields = {}, {}
+    for (sid, path), source in last.items():
         if source not in AUTHORITATIVE_EDIT_SOURCES:
             continue
         match = re.fullmatch(r"rows\[(\d+)\]\.([a-z_0-9]+)", path)
         if match:
-            row_values.setdefault((sid, int(match[1])), {})[match[2]] = value
+            row_fields.setdefault((sid, int(match[1])), set()).add(match[2])
         elif path.startswith("header."):
-            header_values.setdefault(sid, {})[path[7:]] = value
+            header_fields.setdefault(sid, set()).add(path[7:])
     for row in rows:
-        row["_human_values"] = row_values.get((row.get("sheet_id"), row.get("row_index")), {})
-        row["_human_header"] = header_values.get(row.get("sheet_id"), {})
+        saved_row = json.loads(row.pop("_saved_row", None) or "null") or {}
+        saved_header = json.loads(row.pop("_saved_header", None) or "null") or {}
+        row["_human_values"] = {
+            field: saved_row[field]
+            for field in row_fields.get((row.get("sheet_id"), row.get("row_index")), ())
+            if field in saved_row
+        }
+        row["_human_header"] = {
+            field: saved_header[field]
+            for field in header_fields.get(row.get("sheet_id"), ())
+            if field in saved_header
+        }
     return rows
 
 
@@ -158,6 +175,8 @@ def _query_rows(
 
     sql = """
         SELECT pr.*,
+               json_extract(s.sheet_data, '$.rows[' || pr.row_index || ']') AS _saved_row,
+               json_extract(s.sheet_data, '$.header') AS _saved_header,
                s.operador AS validated_operador,
                json_extract(s.sheet_data, '$.header.setor_maquina') AS setor_maquina,
                json_extract(s.sheet_data, '$.footer.colunas_produzidas') AS colunas_produzidas,
@@ -534,6 +553,8 @@ def _query_cpis_rows(
 
     sql = """
         SELECT pr.*,
+               json_extract(s.sheet_data, '$.rows[' || pr.row_index || ']') AS _saved_row,
+               json_extract(s.sheet_data, '$.header') AS _saved_header,
                s.operador AS validated_operador,
                json_extract(s.sheet_data, '$.header.setor_maquina') AS setor_maquina,
                json_extract(s.sheet_data, '$.header.n_operador') AS n_operador,
