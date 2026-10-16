@@ -356,11 +356,12 @@ def test_confusion_overlay_closed_loop():
         snap.reload_lexicons()
 
 
-def test_empty_overlay_is_noop():
+def test_empty_overlay_is_noop(monkeypatch):
     from app.dq import snap
 
     base_clientes = snap._BASE_CLIENTES
-    snap.reload_lexicons()  # real overlay file is absent => no-op
+    monkeypatch.setattr(snap, "_load_overlay", lambda _repo: {})
+    snap.reload_lexicons()
     assert snap._CLIENTES == base_clientes
 
 

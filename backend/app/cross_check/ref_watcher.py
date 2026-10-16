@@ -780,6 +780,8 @@ class RefWatcher:
         self._refs: dict[str, Any] = _empty_refs()
         self._lock = threading.Lock()
         self._last_check_ts = 0.0
+        self._refresh_guard = threading.Lock()
+        self._refresh_thread: threading.Thread | None = None
         self._check_interval = 1.0  # seconds — debounce mtime stat calls
         # R134 — snapshot dos mtimes de um ficheiro que falhou a mineração.
         # Enquanto o ficheiro on-disk não mudar, não voltamos a tentar minerar
@@ -872,6 +874,22 @@ class RefWatcher:
             if self._needs_reload():
                 self._reload_locked()
         return self._refs
+
+    def peek_refs(self) -> dict[str, Any]:
+        """Return the published snapshot immediately; refresh away from views.
+
+        Scoring/validation still use get_refs() and wait for current inputs.
+        A dropdown must never wait for Excel parsing or another scoring run.
+        """
+        snapshot = self._refs
+        if time.monotonic() - self._last_check_ts < self._check_interval:
+            return snapshot
+        with self._refresh_guard:
+            if self._refresh_thread is None or not self._refresh_thread.is_alive():
+                self._refresh_thread = threading.Thread(
+                    target=self.get_refs, name="refs-view-refresh", daemon=True)
+                self._refresh_thread.start()
+        return snapshot
 
     def force_reload(self) -> dict[str, Any]:
         """Skip mtime check, force reload + persist. Used by /admin/reload-refs."""

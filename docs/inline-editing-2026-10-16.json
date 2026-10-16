@@ -1,0 +1,23 @@
+{
+  "date": "2026-10-16",
+  "application": "original",
+  "review_flow": "inline-editing-2026-10-16.1",
+  "behavior": [
+    "Click a table cell and type directly, including the cell padding.",
+    "Enter or leaving the cell saves without an editing dialog or plan selection.",
+    "Human text, intentional blanks and formatting are preserved.",
+    "Validation waits for pending saves and commits once."
+  ],
+  "changes": [
+    "Remove the row edit shortcut and its editing window from the Original. Remove the redundant row edit shortcut in MES.",
+    "Keep the existing photo, table and cross-check layout.",
+    "Original: cancel does not save on blur; let Alpine initialize swapped cells once."
+  ],
+  "verification": {
+    "passed": 21,
+    "real_chromium": true,
+    "desktop_and_phone": true,
+    "persist_after_reload": true,
+    "production_test_writes": 0
+  }
+}

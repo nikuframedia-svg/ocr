@@ -1,0 +1,55 @@
+{
+  "date": "2026-10-16",
+  "issue": "Exported quantities disagreed with the validated sheet after row removal or reprocessing.",
+  "cause": "Literal export overrides replayed edits.new_value by positional row index. Deleting an intermediate row shifted saved rows while historical audit paths retained old positions.",
+  "reported_examples": {
+    "8020": {
+      "before": [
+        5,
+        0,
+        4
+      ],
+      "validated_and_fixed": [
+        5,
+        4,
+        6
+      ]
+    },
+    "8034": {
+      "before": [
+        10
+      ],
+      "validated_and_fixed": [
+        15
+      ]
+    }
+  },
+  "impact_before_fix": {
+    "quantity_cells": 656,
+    "validated_sheets": 332,
+    "production_date_2026_10_15_affected_sheets": [
+      8007,
+      8020,
+      8034
+    ]
+  },
+  "change": "Use saved row/header JSON selected with production_rows in the same SQLite snapshot. Audit identifies explicitly written fields but its payload is never replayed into an export. Applies to CPIS, standard Excel and the Excel preview.",
+  "verification": {
+    "tests_passed": 57,
+    "real_chromium": true,
+    "regressions": [
+      "removing first/middle/last row",
+      "literal text, intentional blanks and zero",
+      "OF/model and quantity alignment",
+      "concurrent edits cannot overwrite the selected export snapshot"
+    ],
+    "read_only_candidate_audit": {
+      "validated_sheets": 6147,
+      "export_rows": 16990,
+      "remaining_quantity_mismatches": 0
+    }
+  },
+  "data_changes": 0,
+  "history_rewrites": 0,
+  "other_applications": "Perfis and Cantoneiras export their saved validation data through a different implementation and do not replay edits.new_value."
+}

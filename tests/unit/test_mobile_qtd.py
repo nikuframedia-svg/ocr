@@ -111,13 +111,14 @@ def test_mobile_qtd_batch_rejects_invalid_path(tmp_db, isolate, client):
     assert isolate == []
 
 
-def test_mobile_validate_still_forbidden(tmp_db, isolate, client):
+def test_mobile_can_validate_with_same_integrity_checks(tmp_db, isolate, client, monkeypatch):
     sid = _seed_sheet()
-
-    response = client.post(f"/sheet/{sid}/validate", headers=_MOBILE)
-
-    assert response.status_code == 403
-    assert "Validação só pode ser feita em desktop" in response.text
+    monkeypatch.setattr(main, "_deposit_csv_to_factory", lambda *a: None)
+    monkeypatch.setattr(main.kernel, "emit_event", lambda *a, **k: None)
+    monkeypatch.setattr("app.learning.scheduler.maybe_trigger_learning", lambda: None)
+    response = client.post(f"/sheet/{sid}/validate", headers=_MOBILE, follow_redirects=False)
+    assert response.status_code == 303
+    assert db.get_sheet(sid)["status"] == "validated"
 
 
 def test_mobile_qtd_batch_blocks_validated_sheet(tmp_db, isolate, client):

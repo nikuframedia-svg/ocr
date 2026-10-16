@@ -59,52 +59,28 @@ const raw = {sheets:[{sheet_id:7546, row_fields_extra:['fecho'], colunas_produzi
 """)
 
 
-def test_lookup_filters_pages_labels_and_applies_original_entry():
-    _run(r"""
-const assert = require('node:assert/strict'), fs = require('node:fs');
-const root=process.argv[1];
-const source=fs.readFileSync(root+'/backend/app/web/templates/sheet.html','utf8');
-const start=source.indexOf('function ofWizard(');
-eval(source.slice(start,source.indexOf('</script>',start)));
-(async()=>{
-  const wizard=ofWizard(7);wizard.active=true;wizard.row_index=2;
-  wizard.ofInput='';wizard.modelInput='FST';wizard.lengthInput='1076';
-  let lookedUp, applied, reloads=0;
-  global.window={location:{reload:()=>reloads++}};
-  const result={found:true,offset:50,total:51,limit:50,has_more:false,
-    revision:3,plan_sha256:'snapshot',setor:'ACABAMENTO MTG2',entries:[
-      {of:'266068',orig_idx:54,remaining:0,done:true,fechado:false,status_known:true,pending_valid:true}]};
-  global.fetch=async(url,options)=>{
-    if(!options){lookedUp=url;return{ok:true,json:async()=>result};}
-    applied=JSON.parse(options.body);
-    return{ok:true,text:async()=>JSON.stringify({ok:true,n_applied:1,revision:4,final_row:{}})};
-  };
-  await wizard.lookup(50);
-  const url=new URL(lookedUp,'http://localhost');
-  assert.equal(url.searchParams.get('q'),'');assert.equal(url.searchParams.get('modelo'),'FST');
-  assert.equal(url.searchParams.get('comp_mm'),'1076');assert.equal(url.searchParams.get('offset'),'50');
-  assert.equal(wizard.pendingLabel(result.entries[0]),'Por fazer em ACABAMENTO MTG2: 0 · Aberta');
-  assert(wizard.pendingLabel({pending_valid:false,status_known:false}).includes('Indisponível'));
-  await wizard.apply();assert.equal(applied.entry_idx,54);assert.equal(applied.row_index,2);
-  assert.equal(applied.expected_revision,3);assert.equal(applied.plan_sha256,'snapshot');
-  assert.equal(reloads,1);
-  wizard.selectedEntry=0;wizard.clearResults();assert(!wizard.canApply);
-})().catch(error=>{console.error(error);process.exitCode=1;});
-""")
-
-
-def test_older_search_response_cannot_replace_a_newer_filter():
+def test_validation_waits_for_edit_commit_and_keeps_failed_drafts():
     _run(r"""
 const assert=require('node:assert/strict'),fs=require('node:fs');
-const source=fs.readFileSync(process.argv[1]+'/backend/app/web/templates/sheet.html','utf8');
-const start=source.indexOf('function ofWizard(');
-eval(source.slice(start,source.indexOf('</script>',start)));
+const handlers={}, revision={value:'4'}, metrics=[];
+global.document={addEventListener:(name,handler)=>{handlers[name]=handler;},querySelector:()=>revision};
+global.window={ocrLatency:{start:()=>result=>metrics.push(result)}};
+eval(fs.readFileSync(process.argv[1]+'/backend/app/web/static/sheet_write_guard.js','utf8'));
 (async()=>{
-  const wizard=ofWizard(7);wizard.ofInput='OLD';let resolveOld;
-  global.fetch=()=>new Promise(resolve=>{resolveOld=resolve;});
-  const old=wizard.lookup();wizard.ofInput='NEW';wizard.clearResults();
-  global.fetch=async()=>({ok:true,json:async()=>({found:true,q:'NEW',entries:[]})});
-  await wizard.lookup();resolveOld({ok:true,json:async()=>({found:true,q:'OLD',entries:[]})});
-  await old;assert.equal(wizard.lookupResult.q,'NEW');assert.equal(wizard.loading,false);
+  const form={getAttribute:()=>'/sheet/7955/edit',querySelector:()=>({value:'rows[4].of'})};
+  const elt={closest:()=>form}, xhr={getResponseHeader:()=> '5'};
+  const config={elt,parameters:{}};
+  handlers['htmx:configRequest']({detail:config});
+  assert.equal(config.parameters.expected_revision,'4');
+  handlers['htmx:beforeRequest']({detail:{elt,xhr}});
+  let resolved=false;
+  const flush=window.sheetWriteGuard.flush().then(result=>{resolved=true;return result;});
+  await Promise.resolve();assert.equal(resolved,false);
+  handlers['htmx:afterRequest']({detail:{xhr,successful:false}});
+  assert.equal(await flush,false);assert.equal(revision.value,'4');
+  handlers['htmx:beforeRequest']({detail:{elt,xhr}});
+  handlers['htmx:afterRequest']({detail:{xhr,successful:true}});
+  assert.equal(await window.sheetWriteGuard.flush(),true);assert.equal(revision.value,'5');
+  assert.deepEqual(metrics,['error','ok']);
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """)

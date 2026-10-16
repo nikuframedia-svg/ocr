@@ -1,0 +1,20 @@
+<div id="cross-check-progress" role="status" aria-live="polite"
+     hx-get="/sheet/{{ sheet.id }}/cross-check-status?seen={{ cc_seen | urlencode }}"
+     hx-trigger="every 3s" hx-swap="outerHTML">
+  {% if cc_state == 'pending' %}
+    <div class="alert info" style="margin-bottom:16px;">
+      A verificar os dados da folha. Pode continuar a rever e editar;
+      o resultado será calculado com as alterações mais recentes.
+    </div>
+  {% elif cc_changed %}
+    <div class="alert info" style="margin-bottom:16px;">
+      Verificação concluída. Termine a edição em curso antes de
+      <button class="btn" type="button" onclick="window.location.reload()">Atualizar resultado</button>
+    </div>
+  {% elif cc_state == 'outdated' %}
+    <div class="alert info" style="margin-bottom:16px;">
+      A verificação desta versão ainda não está disponível.
+      <button class="btn" type="button" onclick="window.location.reload()">Voltar a tentar</button>
+    </div>
+  {% endif %}
+</div>

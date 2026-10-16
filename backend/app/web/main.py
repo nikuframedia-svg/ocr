@@ -40,6 +40,7 @@ sys.path.insert(0, str(_REPO / "backend"))
 from app import kernel
 from app.config import get_settings
 from app.web import attractors, calendario, db, db_backup, export, kpi_params, kpis, llm_assistant, ocr_queue, ocr_runner, pdf_ingest, template_store
+from app.web import cross_check_queue
 from app.cross_check import (
     cross_check_sheet,
     get_watcher,
@@ -62,6 +63,7 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _STATIC_DIR = Path(__file__).parent / "static"
 _DATA_DIR = _REPO / "data"
 _IMAGES_DIR = _DATA_DIR / "images"
+_LATENCY_STATUS_PATH = Path("/home/luis/apps/mtg-ocr-20261012/observability/status.json")
 _DATA_DIR.mkdir(parents=True, exist_ok=True)
 _IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -84,7 +86,8 @@ def _get_operadores() -> tuple[str, ...]:
     ainda não foi carregado ou está vazio — defensivo para boot frio.
     """
     try:
-        refs = get_watcher().get_refs()
+        watcher = get_watcher()
+        refs = getattr(watcher, "peek_refs", watcher.get_refs)()
         colabs = refs.get("colaboradores") or {}
         snames = sorted({
             (c.get("sname") or "").strip()
@@ -385,16 +388,26 @@ def _startup() -> None:
                               {"scope": "env", "mode": mode})
     except Exception as e:
         print(f"[declared-vote startup] {e}", file=sys.stderr)
-    # R71 — boot background OCR worker + recover any sheets stuck in
-    # status='pending' from a previous process. The 10s window skips
-    # sheets that are about to be enqueued by /upload in flight right now.
+    # Startup runs before accepting uploads. Recover every durable pending
+    # sheet, including uploads just before a restart.
     ocr_queue.start_worker(_process_sheet_ocr, _process_discovery)
     n_recovered = ocr_queue.recover_pending(
-        older_than_seconds=10,
+        older_than_seconds=0,
         list_pending_fn=db.list_stuck_pending,
     )
     if n_recovered:
         print(f"[R71 startup] re-enqueued {n_recovered} pending sheet(s)", file=sys.stderr)
+    # A restart can interrupt the cross-check after OCR already changed the
+    # status to extracted. Resume that stage without another paid OCR call.
+    _recover_incomplete_cross_checks()
+    from app.pipeline import scoring_process
+    if scoring_process.enabled():
+        def _warm_scoring() -> None:
+            try:
+                scoring_process.warmup()
+            except Exception:
+                traceback.print_exc()
+        threading.Thread(target=_warm_scoring, name="scoring-warmup", daemon=True).start()
     # Task C E4 — re-enfileira descobertas órfãs (processo morreu a meio).
     try:
         for tpl in db.list_kanban_templates(status="a_analisar"):
@@ -480,7 +493,7 @@ async def _attach_watermark(request: Request, call_next):
     embed it server-side on first paint. Also attaches a `mobile` flag
     used by templates to render mobile-only / desktop-only sections.
     """
-    request.state.watermark = kpis.latest_sheet_id()
+    request.state.watermark = await asyncio.to_thread(kpis.latest_sheet_id)
     request.state.mobile = _is_mobile_request(request)
     response = await call_next(request)
     # Header is always present; client uses it to detect increments.
@@ -536,9 +549,13 @@ def health() -> JSONResponse:
     haver dúvida sobre o que está a correr."""
     from app.pipeline.scoring_engine import ENGINE_VERSION
     from app.pipeline.inference.remote_ocr import configuration_status
+    from app.pipeline.scoring_process import enabled as scoring_process_enabled
     return JSONResponse({
         "status": "ok",
         "engine_version": ENGINE_VERSION,
+        "latency_fix": "2026-10-15.6",
+        "review_flow": "inline-editing-2026-10-16.2",
+        "scoring_process": scoring_process_enabled(),
         "git_sha": _git_short_sha(),
         "python": sys.version.split()[0],
         "pid": os.getpid(),
@@ -1206,7 +1223,7 @@ def _run_and_store_cross_check(
     ocr_metrics: dict | None = None,
 ) -> dict | None:
     """Serialize scoring runs for a sheet, then process its latest revision."""
-    with _cross_check_lock(sheet_id):
+    with cross_check_queue.SCORING_SLOT, _cross_check_lock(sheet_id):
         return _run_and_store_cross_check_locked(
             sheet_id,
             rebuild_from_raw=rebuild_from_raw,
@@ -1446,6 +1463,7 @@ def _run_and_store_cross_check_locked(
     if len(date_pt) == 10 and date_pt[2] == "-":
         date_iso = f"{date_pt[6:10]}-{date_pt[3:5]}-{date_pt[0:2]}"
     _t0 = time.perf_counter()
+    result["sheet_revision"] = int(sheet.get("revision") or 0)
     store_cross_check(
         sheet_id=sheet_id,
         image_path=sheet["image_path"],
@@ -1496,6 +1514,7 @@ def _spawn_shadow_scoring(
     def _run() -> None:
         try:
             from app.pipeline.scoring_engine import shadow_score, set_scoring_variant
+            from app.pipeline import scoring_process
             # R250 — A/B real na fábrica: a sombra corre a variante configurada
             # (só nesta thread — ContextVar); produção intocada, output em
             # sheets.shadow_scoring_json.
@@ -1509,9 +1528,12 @@ def _spawn_shadow_scoring(
                 set_scoring_variant(shadow_variant)
             run_id = db.start_shadow_run(sheet_id)
             try:
-                scoring, total, snapped, confirmed, na, dur_ms = shadow_score(
-                    sheet_data, dq_audit, refs
-                )
+                if scoring_process.enabled():
+                    scoring, total, snapped, confirmed, na, dur_ms = scoring_process.run(
+                        "shadow", sheet_data, dq_audit, refs)
+                else:
+                    scoring, total, snapped, confirmed, na, dur_ms = shadow_score(
+                        sheet_data, dq_audit, refs)
                 db.finish_shadow_run(
                     run_id, sheet_id, scoring,
                     total, snapped, confirmed, na, dur_ms,
@@ -1540,9 +1562,16 @@ def _spawn_shadow_scoring(
             # Falha a abrir o run sequer — não devia acontecer, mas guarda
             traceback.print_exc()
 
-    threading.Thread(
-        target=_run, daemon=True, name=f"shadow-score-{sheet_id}"
-    ).start()
+    def _bounded_run() -> None:
+        with cross_check_queue.SCORING_SLOT:
+            _run()
+
+    # The latest pending shadow replaces older snapshots of this sheet.
+    # Production recalculations are served before shadow jobs.
+    cross_check_queue.queue.submit(
+        ("shadow", sheet_id), json.dumps(sheet_data, sort_keys=True),
+        _bounded_run, shadow=True,
+    )
 
 
 @app.get("/sheet/{sheet_id}", response_class=HTMLResponse)
@@ -1577,6 +1606,7 @@ def sheet_page(
         cells_by_path = sheet["dq_audit"].get("cells", {})
 
     view_mode = "raw" if view == "raw" else "final"
+    cc_context = _cross_check_view_context(sheet_id)
     if view_mode == "raw" and sheet.get("raw_extraction"):
         # Show original OCR — disable cross-check colors (they validate
         # the post-snap values, not raw)
@@ -1631,6 +1661,7 @@ def sheet_page(
             "back_url": back_url,
             "has_cropped": sheet_has_cropped,
             "date_iso_for_correction": date_iso_for_correction,
+            **cc_context,
             **tpl_ctx,  # template, template_name, row/footer/header_fields
         },
     )
@@ -1678,6 +1709,20 @@ def _build_snapped_map_from_raw(sheet: dict) -> dict[str, bool]:
     return out
 
 
+def _cross_check_view_context(sheet_id: int) -> dict:
+    from app.cross_check.storage import load_sheet_cross_check
+
+    sheet = db.get_sheet(sheet_id) or {}
+    cc = load_sheet_cross_check(sheet_id)
+    stale = not cc or (cc.get("sheet_revision") is not None
+                      and cc["sheet_revision"] != int(sheet.get("revision") or 0))
+    busy = (cross_check_queue.queue.busy(("cross", sheet_id))
+            or _cross_check_lock(sheet_id).locked())
+    token = str(cc.get("checked_at") or "") if cc else ""
+    return {"cc_state": "pending" if busy else "outdated" if stale else "ready",
+            "cc_seen": token, "cc_changed": False}
+
+
 def _build_cc_maps(sheet_id: int, *, allow_regen: bool = True) -> tuple[
     dict[str, str], dict[str, str], dict[str, str], dict[str, bool],
     dict[str, bool], dict[str, bool],
@@ -1698,24 +1743,26 @@ def _build_cc_maps(sheet_id: int, *, allow_regen: bool = True) -> tuple[
     from app.cross_check.storage import load_sheet_cross_check
     from app.pipeline.scoring_engine import ENGINE_VERSION
     cc = load_sheet_cross_check(sheet_id)
+    sheet = db.get_sheet(sheet_id) or {}
+    if (cc and cc.get("sheet_revision") is not None
+            and cc["sheet_revision"] != int(sheet.get("revision") or 0)):
+        cc = None
     stale_cc = None
     if not cc:
         stale_cc = load_sheet_cross_check(sheet_id, include_stale=True)
-    # R123 (D1) — fallback on-demand. A folha nunca teve cross-check
-    # (processada antes do R118) ou o JSON é de um motor anterior ao R123:
-    # regenera-o agora e relê, para nenhuma folha abrir toda cinza nem com
-    # cores de um motor antigo.
-    if allow_regen and (not cc or cc.get("engine_version") != ENGINE_VERSION):
+    # Never make page rendering wait for CPU work or a previous sheet lock.
+    # Stale colors stay hidden; the viewer shows progress and a refresh link.
+    if (allow_regen and sheet.get("sheet_data") and sheet.get("status") != "pending"
+            and (not cc or cc.get("engine_version") != ENGINE_VERSION)):
         try:
             rebuild_from_raw = bool(
                 (cc and cc.get("engine_version") != ENGINE_VERSION)
                 or (stale_cc and stale_cc.get("engine_version") != ENGINE_VERSION)
             )
-            _run_and_store_cross_check(
-                sheet_id, rebuild_from_raw=rebuild_from_raw,
+            _start_sheet_cross_check(
+                {sheet_id}, rebuild_from_raw=rebuild_from_raw,
                 profile_trigger="view_regen",
             )
-            cc = load_sheet_cross_check(sheet_id)
         except Exception:
             # R223 — NÃO engolir em silêncio. Esta regeneração on-demand é o que
             # aplica um motor novo às folhas antigas ao abri-las; se falhava
@@ -1727,7 +1774,6 @@ def _build_cc_maps(sheet_id: int, *, allow_regen: bool = True) -> tuple[
                 f"{sheet_id}: {traceback.format_exc()}",
                 file=sys.stderr, flush=True,
             )
-    sheet = db.get_sheet(sheet_id) or {}
     snapped_map = _build_snapped_map_from_raw(sheet)
     if not cc:
         return {}, {}, {}, {}, snapped_map, {}
@@ -2036,17 +2082,14 @@ def _render_lote_suggest(
 
 
 @app.post("/sheet/{sheet_id}/edit", response_class=HTMLResponse)
-async def sheet_edit(
+def sheet_edit(
     request: Request,
     sheet_id: int,
     field_path: str = Form(...),
     new_value: str = Form(""),
+    expected_revision: int | None = Form(None),
 ) -> Response:
     """HTMX endpoint — applies an edit + returns the cell HTML fragment."""
-    # Round 34 — mobile cannot do full edits (only via /mobile/qtds-batch
-    # which has whitelist of qty-related fields)
-    if _is_mobile_request(request):
-        raise HTTPException(403, "Edição só pode ser feita em desktop")
     # Round 50 — folha validada é read-only; sem edits posteriores.
     sheet_pre = db.get_sheet(sheet_id)
     if sheet_pre is None:
@@ -2057,24 +2100,18 @@ async def sheet_edit(
     # pós cross-check para devolver swaps out-of-band das células que mudaram
     # em consequência (ex: header.operador quando se edita header.n_operador).
     header_before = dict((sheet_pre.get("sheet_data") or {}).get("header") or {})
-    # R136 — a célula header.data edita-se com <input type="date"> (ISO). O
-    # armazenamento canónico continua DD-MM-YYYY (CSV, date_iso, filenames),
-    # por isso converte-se aqui antes de persistir.
-    if field_path == "header.data":
-        _v = new_value.strip()
-        if _ISO_DATE_RE.match(_v):
-            new_value = f"{_v[8:10]}-{_v[5:7]}-{_v[0:4]}"
+    # Human text, including dates and blanks, remains exactly as submitted.
     if re.match(r"^rows\[\d{1,3}\]\.fecho$", field_path):
         tpl = _template_ctx_for_sheet(sheet_pre)["template"]
         if tpl is None or "fecho" not in tpl.row_fields:
             raise HTTPException(400, "fecho não é permitido neste template")
-        new_value = new_value.strip().upper()
-        if new_value not in ("", "X"):
-            raise HTTPException(400, "FECHO aceita apenas vazio ou X")
     try:
-        old, new = db.apply_edit(sheet_id, field_path, new_value)
+        old, new = db.apply_edit(sheet_id, field_path, new_value,
+                                 expected_revision=expected_revision)
     except db.SheetValidatedError as e:
         raise HTTPException(409, "Folha já validada — edits bloqueados") from e
+    except db.StaleSheetRevisionError as e:
+        raise HTTPException(409, "A folha mudou; a tua alteração foi mantida no editor.") from e
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     sheet = db.get_sheet(sheet_id)
@@ -2132,7 +2169,9 @@ async def sheet_edit(
             print(f"[lote-suggest] sheet {sheet_id}: {e}", file=sys.stderr)
 
     _start_sheet_cross_check({sheet_id}, profile_trigger="sheet_edit")
-    return HTMLResponse("".join(parts))
+    return HTMLResponse("".join(parts), headers={
+        "X-Sheet-Revision": str(sheet.get("revision") or 0),
+    })
 
 
 def _invalidate_production_caches() -> None:
@@ -2292,32 +2331,25 @@ def _deposit_csv_to_factory(sheet_id: int) -> Path | None:
 
 
 @app.post("/sheet/{sheet_id}/validate")
-async def sheet_validate(
+def sheet_validate(
     sheet_id: int,
     request: Request,
     operador: str | None = Form(None),
     data: str | None = Form(None),
     n_operador: str | None = Form(None),
+    expected_revision: int | None = Form(None),
 ) -> RedirectResponse:
-    # Round 34 — mobile cannot validate (server-side enforcement)
-    if _is_mobile_request(request):
-        raise HTTPException(403, "Validação só pode ser feita em desktop")
     # Round 50 — re-validate bloqueada; folha validada é final.
     sheet_pre = db.get_sheet(sheet_id)
     if sheet_pre is None:
         raise HTTPException(404, f"sheet {sheet_id} not found")
     if sheet_pre.get("status") == "validated":
         raise HTTPException(409, "Folha já validada — não é possível re-validar")
-    # R257 — needs_review suspende o depósito no worker (main.py:~205), mas o
-    # validate não verificava e depositava na mesma ao validar — o lado
-    # duvidoso contornava a guarda e corrompia o CSV da fábrica. Resolver o
-    # lado primeiro (banner "rever lado" → /resolve-side).
-    if sheet_pre.get("needs_review"):
-        raise HTTPException(
-            409, "Folha marcada para revisão de lado — resolve o lado antes de validar"
-        )
+    if expected_revision is not None and expected_revision != int(sheet_pre.get("revision") or 0):
+        raise HTTPException(409, "A folha mudou; confirma os valores atuais antes de validar.")
 
     header = (sheet_pre.get("sheet_data") or {}).get("header") or {}
+    validation_revision = int(sheet_pre.get("revision") or 0)
     # R136 — dois fluxos partilham este endpoint:
     #   • sheet.html (Folha): a barra "Validar" deixou de ter inputs próprios
     #     (eram duplicados das células do cabeçalho e, por ficarem stale,
@@ -2327,52 +2359,33 @@ async def sheet_validate(
     #     no próprio form → caminho clássico (R94): valida e aplica os valores.
     from_form = operador is not None or data is not None or n_operador is not None
     if from_form:
-        operador_final = (operador or "").strip()
-        if not operador_final:
-            raise HTTPException(400, "operador em falta — corrige o cabeçalho antes de validar")
-        data_iso = (data or "").strip()
-        if not _ISO_DATE_RE.match(data_iso):
-            raise HTTPException(400, f"data must be YYYY-MM-DD, got {data!r}")
-        n_op_clean = (n_operador or "").strip()
-        if not n_op_clean.isdigit() or len(n_op_clean) > 5:
-            raise HTTPException(400, f"n_operador must be 1-5 digits, got {n_operador!r}")
-        # Convert ISO → DD-MM-YYYY for storage compatibility. Apply edits before
-        # the validation lock — standard apply_edit path keeps production_rows +
-        # cross-check in sync.
-        data_pt = f"{data_iso[8:10]}-{data_iso[5:7]}-{data_iso[0:4]}"
-        if (header.get("data") or "").strip() != data_pt:
-            try:
-                db.apply_edit(sheet_id, "header.data", data_pt)
-            except Exception:
-                pass
-        if (header.get("n_operador") or "").strip() != n_op_clean:
-            try:
-                db.apply_edit(sheet_id, "header.n_operador", n_op_clean)
-            except Exception:
-                pass
-    else:
-        operador_final = (header.get("operador") or "").strip()
-        if not operador_final:
-            raise HTTPException(
-                400, "Operador em falta — corrige o cabeçalho antes de validar."
-            )
-        n_op_clean = (header.get("n_operador") or "").strip()
-        if not n_op_clean.isdigit() or len(n_op_clean) > 5:
-            raise HTTPException(
-                400, "Nº operador inválido — corrige o cabeçalho (1-5 dígitos) antes de validar."
-            )
-        if db._normalize_data_pt_to_iso(header.get("data")) is None:
-            raise HTTPException(
-                400, "Data inválida — corrige a data no cabeçalho (dd-mm-aaaa) antes de validar."
-            )
+        # Confirmation saves exactly the submitted header. The plan and its
+        # warnings do not decide whether a person may validate their work.
+        submitted = {"operador": operador, "data": data, "n_operador": n_operador}
+        batch = []
+        for key, value in submitted.items():
+            if value is None:
+                continue
+            if str(header.get(key) or "") != value:
+                batch.append((f"header.{key}", value))
+        try:
+            db.apply_edits_batch(sheet_id, batch, expected_revision=validation_revision)
+        except (db.StaleSheetRevisionError, db.SheetValidatedError) as exc:
+            raise HTTPException(409, "A folha mudou; confirma os valores atuais antes de validar.") from exc
+        if batch:
+            validation_revision += 1
+            header = dict(header)
+            header.update({path.split(".", 1)[1]: value for path, value in batch})
+    operador_final = str(header.get("operador") or "")
 
     # R126 — edição de cesta_n foi removida do sheet.html (validate desktop).
     # A cesta entra exclusivamente pelo fluxo mobile (capture.html → /mobile/qtds-batch).
 
     try:
-        db.validate_sheet(sheet_id, operador_final)
-    except db.SheetReferenceReviewError as exc:
-        raise HTTPException(409, str(exc)) from exc
+        db.validate_sheet(sheet_id, operador_final,
+                          expected_revision=validation_revision)
+    except db.StaleSheetRevisionError as exc:
+        raise HTTPException(409, "A folha mudou; confirma os valores atuais antes de validar.") from exc
     except db.SheetValidatedError as exc:
         raise HTTPException(
             409, "Folha já validada — não é possível re-validar"
@@ -2491,12 +2504,40 @@ def _run_sheet_cross_checks(
 ) -> None:
     for sid in sheet_ids:
         try:
+            # A queued edit may replace a pending view regeneration. Preserve
+            # the need to rebuild old engine output while keeping human edits.
+            from app.cross_check.storage import load_sheet_cross_check
+            from app.pipeline.scoring_engine import ENGINE_VERSION
+            previous = load_sheet_cross_check(sid, include_stale=True)
             kwargs = {"profile_trigger": profile_trigger}
-            if rebuild_from_raw:
+            if rebuild_from_raw or (previous and previous.get("engine_version") != ENGINE_VERSION):
                 kwargs["rebuild_from_raw"] = True
             _run_and_store_cross_check(sid, **kwargs)
         except Exception:
             traceback.print_exc()
+
+
+def _recover_incomplete_cross_checks() -> None:
+    from functools import partial
+    from app.cross_check.storage import load_sheet_cross_check
+
+    def resume(sid: int) -> None:
+        result = _run_and_store_cross_check(sid, profile_trigger="startup_resume")
+        current = db.get_sheet(sid) or {}
+        if result is not None and not current.get("needs_review"):
+            _deposit_csv_to_factory(sid)
+
+    # Bound startup work to recent uploads; older sheets recover on opening.
+    for sheet in db.list_sheets(limit=100):
+        if sheet.get("status") != "extracted":
+            continue
+        sid = int(sheet["id"])
+        if load_sheet_cross_check(sid, include_stale=True) is None:
+            current = db.get_sheet(sid) or {}
+            if current.get("status") != "extracted":
+                continue
+            cross_check_queue.queue.submit(
+                ("cross", sid), int(current.get("revision") or 0), partial(resume, sid))
 
 
 def _start_sheet_cross_check(
@@ -2505,19 +2546,16 @@ def _start_sheet_cross_check(
     profile_trigger: str,
     rebuild_from_raw: bool = False,
 ) -> None:
-    ordered_ids = tuple(sorted({int(sid) for sid in sheet_ids}))
-    if not ordered_ids:
-        return
-    threading.Thread(
-        target=_run_sheet_cross_checks,
-        args=(ordered_ids,),
-        kwargs={
-            "profile_trigger": profile_trigger,
-            "rebuild_from_raw": rebuild_from_raw,
-        },
-        name=f"{profile_trigger}-cross-check",
-        daemon=True,
-    ).start()
+    from functools import partial
+    for sid in sorted({int(sid) for sid in sheet_ids}):
+        sheet = db.get_sheet(sid)
+        if not sheet or not sheet.get("sheet_data"):
+            continue
+        cross_check_queue.queue.submit(
+            ("cross", sid), int(sheet.get("revision") or 0),
+            partial(_run_sheet_cross_checks, (sid,),
+                    profile_trigger=profile_trigger, rebuild_from_raw=rebuild_from_raw),
+        )
 
 
 @app.post("/mobile/qtds-batch")
@@ -2651,10 +2689,7 @@ async def mobile_qtds_batch(request: Request) -> JSONResponse:
 # ============================================================================
 
 _DESKTOP_ONLY_PREFIXES = (
-    "/sheet/",       # editing/review page (full table edit)
-    "/kanbans",      # kanban viewer (operator selector + nav)
     "/dashboard",    # all dashboards (production, workers, jobs, etc.)
-    "/queue",        # full sheets list with edit/validate
     "/pair",         # QR code page (only useful on desktop showing the QR)
     "/export",       # bulk Excel export (covers /export and /export/cpis)
     "/excel",        # R66 — continuous data page (desktop-only)
@@ -2686,6 +2721,40 @@ async def _mobile_guard(request: Request, call_next):
             if path.startswith(prefix):
                 return RedirectResponse("/capture", status_code=303)
     return await call_next(request)
+
+
+@app.get("/admin/latency-status")
+def admin_latency_status() -> JSONResponse:
+    try:
+        report = json.loads(_LATENCY_STATUS_PATH.read_text())
+    except (OSError, ValueError):
+        report = {"available": False, "detail": "Ainda não há amostras do watcher."}
+    return JSONResponse(report, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/telemetry/interaction")
+async def browser_interaction(request: Request) -> Response:
+    # Reject oversized or malformed metrics; never record arbitrary client
+    # fields, edited text, identities or URLs from the request body.
+    import math
+    if len(await request.body()) > 1024:
+        raise HTTPException(413, "Métrica demasiado grande")
+    try:
+        data = await request.json()
+        action, duration, result = data["action"], data["duration_ms"], data["result"]
+        if action not in {"edit", "validate"} or result not in {"ok", "error"}:
+            raise ValueError
+        if isinstance(duration, bool) or not isinstance(duration, (int, float)):
+            raise ValueError
+        if not math.isfinite(duration) or not 0 <= duration <= 3600000:
+            raise ValueError
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(400, "Métrica inválida")
+    print(json.dumps({"event": "browser_timing", "action": action,
+                      "duration_ms": round(duration, 1), "result": result,
+                      **({"synthetic": True} if request.headers.get("X-OCR-Probe") == "1" else {})}),
+          file=sys.stderr, flush=True)
+    return Response(status_code=204)
 
 
 @app.get("/admin/refs-status")
@@ -2721,6 +2790,7 @@ def admin_queue_status() -> JSONResponse:
     return JSONResponse({
         "queue_size": ocr_queue.queue_size(),
         "worker_alive": ocr_queue.worker_alive(),
+        "cross_check": cross_check_queue.queue.snapshot(),
     })
 
 
@@ -2881,6 +2951,19 @@ def sheet_status_fragment(sheet_id: int) -> Response:
         '</span></div>'
     )
     return HTMLResponse(html)
+
+
+@app.get("/sheet/{sheet_id}/cross-check-status", response_class=HTMLResponse)
+def sheet_cross_check_status(request: Request, sheet_id: int, seen: str = "") -> Response:
+    if db.get_sheet(sheet_id) is None:
+        raise HTTPException(404)
+    context = _cross_check_view_context(sheet_id)
+    context["cc_changed"] = context["cc_state"] == "ready" and context["cc_seen"] != seen
+    context["cc_seen"] = seen
+    return templates.TemplateResponse(
+        request, "_cross_check_status.html", {"sheet": {"id": sheet_id}, **context},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.post("/admin/reload-refs")
@@ -4125,8 +4208,6 @@ def sheet_rotate(sheet_id: int, request: Request) -> JSONResponse:
     wrong (sometimes upside-down). User clicks "rodar" to cycle through
     0/90/180/270 until kanban is readable. Stored per-sheet.
     """
-    if _is_mobile_request(request):
-        raise HTTPException(403, "Rodar só pode ser feito em desktop")
     sheet = db.get_sheet(sheet_id)
     if sheet is None:
         raise HTTPException(404, f"sheet {sheet_id} not found")
@@ -4373,6 +4454,46 @@ def sheet_of_lookup(
     return JSONResponse(result)
 
 
+@app.post("/sheet/{sheet_id}/rows/{row_index}/edit")
+async def sheet_edit_row(sheet_id: int, row_index: int, request: Request) -> JSONResponse:
+    """Save the row as typed, independently of reference availability."""
+    sheet = await asyncio.to_thread(db.get_sheet, sheet_id)
+    if sheet is None:
+        raise HTTPException(404, "Folha não encontrada")
+    if sheet.get("status") == "validated":
+        raise HTTPException(409, "Folha já validada — edits bloqueados")
+    rows = (sheet.get("sheet_data") or {}).get("rows") or []
+    if row_index < 0 or row_index >= len(rows) or not isinstance(rows[row_index], dict):
+        raise HTTPException(400, "Linha inválida")
+    try:
+        body = await request.json()
+        revision = body["expected_revision"]
+        values = body["values"]
+        if isinstance(revision, bool) or not isinstance(revision, int):
+            raise ValueError
+        if not isinstance(values, dict) or not values:
+            raise ValueError
+    except (ValueError, TypeError, KeyError):
+        raise HTTPException(400, "Campos e revisão da folha obrigatórios")
+    allowed = set(_template_ctx_for_sheet(sheet)["row_fields"])
+    if any(key not in allowed or not isinstance(value, str) for key, value in values.items()):
+        raise HTTPException(400, "Campo de produção inválido")
+    # Record even an unchanged field: submitting it explicitly is a human
+    # decision, including an intentional blank. No reference lookup occurs.
+    edits = [(f"rows[{row_index}].{key}", value) for key, value in values.items()]
+    if rows[row_index].get("reference_review"):
+        edits.append((f"rows[{row_index}].reference_review", ""))
+    try:
+        await asyncio.to_thread(db.apply_edits_batch, sheet_id, edits, source="human", expected_revision=revision)
+    except (db.StaleSheetRevisionError, db.SheetValidatedError) as exc:
+        raise HTTPException(409, "A folha mudou; os teus valores continuam no editor.") from exc
+    persisted = await asyncio.to_thread(db.get_sheet, sheet_id)
+    _start_sheet_cross_check({sheet_id}, profile_trigger="sheet_edit")
+    _invalidate_production_caches()
+    return JSONResponse({"ok": True, "revision": persisted["revision"],
+                         "final_row": persisted["sheet_data"]["rows"][row_index]})
+
+
 @app.post("/sheet/{sheet_id}/of-review")
 async def sheet_of_review(sheet_id: int, request: Request) -> JSONResponse:
     """Keep an unresolved row, or explicitly confirm the data as written."""
@@ -4591,8 +4712,6 @@ async def sheet_apply_lote_medidas(
     re-fit (learning filtra source='human'), o que é aceitável por serem
     decisões reais do revisor.
     """
-    if _is_mobile_request(request):
-        raise HTTPException(403, "Edição só pode ser feita em desktop")
     sheet = db.get_sheet(sheet_id)
     if sheet is None:
         raise HTTPException(404, f"sheet {sheet_id} not found")
@@ -4679,8 +4798,6 @@ async def sheet_add_row(sheet_id: int, request: Request) -> JSONResponse:
     Só antes da validação. Re-corre o cross-check para a nova linha (apenas
     células vazias ficam NA/cinza) e devolve o índice da nova linha.
     """
-    if _is_mobile_request(request):
-        raise HTTPException(403, "Edição só pode ser feita em desktop")
     sheet = db.get_sheet(sheet_id)
     if sheet is None:
         raise HTTPException(404, f"sheet {sheet_id} not found")
@@ -4703,8 +4820,6 @@ async def sheet_remove_row(sheet_id: int, request: Request) -> JSONResponse:
     (re-indexado) e invalida a cache de consumption — remover uma linha muda
     as quantidades produzidas.
     """
-    if _is_mobile_request(request):
-        raise HTTPException(403, "Edição só pode ser feita em desktop")
     sheet = db.get_sheet(sheet_id)
     if sheet is None:
         raise HTTPException(404, f"sheet {sheet_id} not found")
@@ -4980,6 +5095,7 @@ def kanban_viewer(
     footer = (sheet.get("sheet_data") or {}).get("footer", {}) if sheet else {}
 
     # Round 33: cross-check colors per cell
+    cc_context = _cross_check_view_context(sheet["id"]) if sheet else {}
     (cc_status_by_path, cc_ref_by_path, cc_ref_title_by_path,
      cc_suspended_by_path, cc_snapped_by_path,
      cc_obra_concluida_by_path) = ({}, {}, {}, {}, {}, {})
@@ -5026,6 +5142,7 @@ def kanban_viewer(
             "data_iso_for_validate": data_iso_for_validate,
             "date_iso_for_correction": data_iso_for_validate,
             "has_cropped": sheet_has_cropped,
+            **cc_context,
             **_template_ctx_for_sheet(sheet),  # per-current-sheet template
         },
     )
@@ -5157,7 +5274,14 @@ def export_excel(
             raise HTTPException(400, "date_to must be >= date_from")
     if sec and sec not in PRODUCTION_SECTORS:
         raise HTTPException(400, f"sector must be one of {list(PRODUCTION_SECTORS)}")
-    xlsx_bytes = export.export_excel(df, dt_, operador, sec, validated_only)
+    from app.pipeline import scoring_process
+    if scoring_process.enabled():
+        xlsx_bytes = scoring_process.run_export("excel", {
+            "date_from": df, "date_to": dt_, "operador": operador,
+            "sector": sec, "validated_only": validated_only,
+        }, get_watcher().get_refs())
+    else:
+        xlsx_bytes = export.export_excel(df, dt_, operador, sec, validated_only)
     filename = export.filename_for(df, dt_, operador, sec, validated_only)
     return Response(
         content=xlsx_bytes,
@@ -5195,6 +5319,8 @@ def excel_page(
 
     sql = f"""
         SELECT pr.*,
+               json_extract(s.sheet_data, '$.rows[' || pr.row_index || ']') AS _saved_row,
+               json_extract(s.sheet_data, '$.header') AS _saved_header,
                s.operador AS validated_operador,
                json_extract(s.sheet_data, '$.header.setor_maquina') AS setor_maquina,
                json_extract(s.sheet_data, '$.header.n_operador') AS n_operador,
@@ -5214,6 +5340,7 @@ def excel_page(
         refs = get_watcher().get_refs()
     except Exception:
         refs = None
+    export.attach_human_values(raw_rows)
     cpis_rows = [export._build_cpis_row(r, refs=refs) for r in raw_rows]
 
     # Distinct operators for the filter dropdown (reuse db helper)
@@ -5322,14 +5449,16 @@ def export_cpis(
             raise HTTPException(400, "date_to must be >= date_from")
     if sec and sec not in PRODUCTION_SECTORS:
         raise HTTPException(400, f"sector must be one of {list(PRODUCTION_SECTORS)}")
-    xlsx_bytes = export.build_cpis_workbook(
-        df,
-        dt_,
-        operador,
-        sec,
-        validated_only,
-        selected_dates=dates,
-    )
+    from app.pipeline import scoring_process
+    if scoring_process.enabled():
+        xlsx_bytes = scoring_process.run_export("cpis", {
+            "date_from": df, "date_to": dt_, "operador": operador,
+            "sector": sec, "validated_only": validated_only,
+            "selected_dates": dates,
+        }, get_watcher().get_refs())
+    else:
+        xlsx_bytes = export.build_cpis_workbook(
+            df, dt_, operador, sec, validated_only, selected_dates=dates)
     filename = export.cpis_filename_for(
         df,
         dt_,
@@ -6025,3 +6154,39 @@ def _to_3block_csv(filename: str, data: dict, *, neutralize: bool = False) -> st
 
     # UTF-8 BOM prefix (Excel friendly) — preserved from R53.
     return "﻿" + buf.getvalue()
+
+
+@app.middleware("http")
+async def _http_timing(request: Request, call_next):
+    """Measure every mutation, including rejected and failed requests."""
+    started = time.perf_counter()
+    status = 500
+    path = request.url.path
+    request_id = secrets.token_hex(8)
+    request.state.request_id = request_id
+    probe = {"synthetic": True} if request.headers.get("X-OCR-Probe") == "1" else {}
+    mutating = request.method in {"POST", "PUT", "PATCH", "DELETE"}
+    action = ("export" if "/export" in path else
+              "recheck" if any(part in path for part in ("/recheck", "/revalidate", "/reprocess")) else
+              "validate" if re.search(r"/validate/?$", path) else
+              "edit" if any(part in path for part in (
+                  "/edit", "/apply-of-entry", "/of-review", "/qtds-batch",
+                  "/add-row", "/delete-row", "/remove-row", "/apply-lote")) else
+              "open" if request.method == "GET" and path.startswith(("/sheet/", "/kanbans", "/queue")) else "other")
+    measured = path != "/telemetry/interaction"
+    if mutating and measured:
+        print(json.dumps({"event": "http_request_start", "request_id": request_id,
+                          "method": request.method, "path": path, "action": action, **probe}),
+              file=sys.stderr, flush=True)
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        response.headers["X-Request-ID"] = request_id
+        response.headers["Server-Timing"] = f"app;dur={(time.perf_counter() - started) * 1000:.1f}"
+        return response
+    finally:
+        if measured and (mutating or action == "export" or path.startswith(("/sheet/", "/kanbans", "/queue"))):
+            print(json.dumps({"event": "http_timing", "request_id": request_id, "method": request.method,
+                              "path": path, "status": status, "action": action,
+                              "duration_ms": round((time.perf_counter() - started) * 1000, 1), **probe}),
+                  file=sys.stderr, flush=True)

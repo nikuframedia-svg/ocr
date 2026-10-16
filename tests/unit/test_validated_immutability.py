@@ -153,12 +153,12 @@ class TestValidatedIsFinal:
 
 
 class TestValidateNeedsReviewGate:
-    def test_validate_needs_review_sheet_409(self, client):
+    def test_operator_can_validate_needs_review_sheet(self, client):
         sid = _mk_sheet(needs_review=True)
         r = client.post(f"/sheet/{sid}/validate", headers=_DESKTOP,
                         follow_redirects=False)
-        assert r.status_code == 409
-        assert db.get_sheet(sid)["status"] != "validated"
+        assert r.status_code == 303
+        assert db.get_sheet(sid)["status"] == "validated"
 
     def test_validate_clean_sheet_still_works(self, client):
         sid = _mk_sheet()

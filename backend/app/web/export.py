@@ -16,17 +16,21 @@ from __future__ import annotations
 
 import datetime as dt
 import io
+import json
+import math
+import re
 from collections import defaultdict
 
 import openpyxl
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.cell import WriteOnlyCell
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side, NamedStyle
 from openpyxl.utils import get_column_letter
 
 from app.cell_sanitize import neutralize_xlsx
 from app.production.weights import calculate_row_weights, find_plan_entry
 from app.templates_registry import detect_template
 
-from .db import conn
+from .db import conn, AUTHORITATIVE_EDIT_SOURCES
 from .kpis import _derive_cod_maquina
 
 # Order of columns in the per-day per-operator sub-tables (matches kanban)
@@ -86,6 +90,58 @@ def _filter_by_sector(rows: list[dict], sector: str | None) -> list[dict]:
     ]
 
 
+def attach_human_values(rows: list[dict]) -> list[dict]:
+    """Export literal values from the saved sheet, never from audit payloads.
+
+    Audit paths identify fields that were explicitly written. Their old values
+    cannot identify the current row after deletion or reprocessing has changed
+    its index. Saved row/header JSON is selected with production_rows so every
+    exported value belongs to the same database snapshot.
+    """
+    ids = sorted({r["sheet_id"] for r in rows if r.get("sheet_id") is not None})
+    last = {}
+    with conn() as c:
+        for start in range(0, len(ids), 500):
+            batch = ids[start:start + 500]
+            sql = ("SELECT sheet_id, field_path, source FROM edits "
+                   f"WHERE sheet_id IN ({','.join('?' for _ in batch)}) ORDER BY id")
+            for edit in c.execute(sql, batch):
+                last[(edit["sheet_id"], edit["field_path"])] = edit["source"]
+    row_fields, header_fields = {}, {}
+    for (sid, path), source in last.items():
+        if source not in AUTHORITATIVE_EDIT_SOURCES:
+            continue
+        match = re.fullmatch(r"rows\[(\d+)\]\.([a-z_0-9]+)", path)
+        if match:
+            row_fields.setdefault((sid, int(match[1])), set()).add(match[2])
+        elif path.startswith("header."):
+            header_fields.setdefault(sid, set()).add(path[7:])
+    for row in rows:
+        saved_row = json.loads(row.pop("_saved_row", None) or "null") or {}
+        saved_header = json.loads(row.pop("_saved_header", None) or "null") or {}
+        row["_human_values"] = {
+            field: saved_row[field]
+            for field in row_fields.get((row.get("sheet_id"), row.get("row_index")), ())
+            if field in saved_row
+        }
+        row["_human_header"] = {
+            field: saved_header[field]
+            for field in header_fields.get(row.get("sheet_id"), ())
+            if field in saved_header
+        }
+    return rows
+
+
+def _human_export_cell(field: str, literal):
+    """Preserve numeric Excel types where possible; retain unparseable text."""
+    if field in {"qtd", "qtd_metros", "m2", "comp_mm", "larg_mm", "esp", "esp_mm",
+                 "lbase", "ltopo", "dbase", "dtopo", "sucata"}:
+        value = _to_float(literal)
+        if value is not None and math.isfinite(value):
+            return int(value) if value.is_integer() else value
+    return literal
+
+
 def _query_rows(
     date_from: str | None,
     date_to: str | None,
@@ -119,6 +175,8 @@ def _query_rows(
 
     sql = """
         SELECT pr.*,
+               json_extract(s.sheet_data, '$.rows[' || pr.row_index || ']') AS _saved_row,
+               json_extract(s.sheet_data, '$.header') AS _saved_header,
                s.operador AS validated_operador,
                json_extract(s.sheet_data, '$.header.setor_maquina') AS setor_maquina,
                json_extract(s.sheet_data, '$.footer.colunas_produzidas') AS colunas_produzidas,
@@ -132,11 +190,13 @@ def _query_rows(
 
     with conn() as c:
         rows = [dict(r) for r in c.execute(sql, params).fetchall()]
-    return _filter_by_sector(rows, sector)
+    return attach_human_values(_filter_by_sector(rows, sector))
 
 
 def _operador_canon(row: dict) -> str:
     """Use the validated operador if available, else the row's stored operador."""
+    if "operador" in row.get("_human_header", {}):
+        return row["_human_header"]["operador"] or "—"
     return (row.get("validated_operador") or row.get("operador") or "—").strip() or "—"
 
 
@@ -212,7 +272,7 @@ def _write_resumo(
     # Per-day summary
     by_day: dict[str, dict] = defaultdict(lambda: {"qtd": 0, "sheets": set(), "ofs": set(), "ops": set()})
     for r in all_rows:
-        d = by_day[r["sheet_iso_date"]]
+        d = by_day[r["sheet_iso_date"] or "Sem data"]
         d["qtd"] += r["qtd"] or 0
         d["sheets"].add(r["sheet_id"])
         if r["of"]:
@@ -328,7 +388,8 @@ def _write_day_sheet(wb: openpyxl.Workbook, day_iso: str, day_rows: list[dict]) 
         # Rows
         for r in by_op[op]:
             for ci, (key, _) in enumerate(ROW_COLUMNS, start=1):
-                v = r.get(key)
+                v = (_human_export_cell(key, r["_human_values"][key])
+                     if key in r.get("_human_values", {}) else r.get(key))
                 # R257 — valores OCR/editados: '=' inicial executaria como
                 # fórmula ao abrir o XLSX (openpyxl infere data_type='f').
                 cell = ws.cell(row=row_idx, column=ci,
@@ -366,8 +427,7 @@ def export_excel(
     # Group by day, write one sheet per day with data
     by_day: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
-        if r["sheet_iso_date"]:
-            by_day[r["sheet_iso_date"]].append(r)
+        by_day[r["sheet_iso_date"] or "Sem data"].append(r)
     for day_iso in sorted(by_day):
         _write_day_sheet(wb, day_iso, by_day[day_iso])
 
@@ -493,6 +553,8 @@ def _query_cpis_rows(
 
     sql = """
         SELECT pr.*,
+               json_extract(s.sheet_data, '$.rows[' || pr.row_index || ']') AS _saved_row,
+               json_extract(s.sheet_data, '$.header') AS _saved_header,
                s.operador AS validated_operador,
                json_extract(s.sheet_data, '$.header.setor_maquina') AS setor_maquina,
                json_extract(s.sheet_data, '$.header.n_operador') AS n_operador,
@@ -509,7 +571,7 @@ def _query_cpis_rows(
     )
     with conn() as c:
         rows = [dict(r) for r in c.execute(sql, params).fetchall()]
-    return _filter_by_sector(rows, sector)
+    return attach_human_values(_filter_by_sector(rows, sector))
 
 
 def _iso_to_date(iso: str | None) -> dt.date | None:
@@ -688,7 +750,7 @@ def _build_cpis_row(row: dict, refs: dict | None = None) -> dict:
             pass
     cod_funcionario = _to_int(pernr_str) if pernr_str else None
 
-    return {
+    result = {
         "data": _iso_to_date(row.get("sheet_iso_date")),
         "cod_funcionario": cod_funcionario,
         "nome_funcionario": nome,
@@ -737,6 +799,27 @@ def _build_cpis_row(row: dict, refs: dict | None = None) -> dict:
         "fecho": "X" if str(row.get("fecho") or "").strip().upper() == "X" else "",
     }
 
+    aliases = {"esp": "esp_mm"}
+    output_fields = {key for key, _label in CPIS_COLUMNS}
+    for field, value in row.get("_human_values", {}).items():
+        key = aliases.get(field, field)
+        if key in output_fields:
+            result[key] = _human_export_cell(key, value)
+    header_aliases = {"data": "data", "operador": "nome_funcionario",
+                      "n_operador": "cod_funcionario", "cod_maquina": "cod_maquina",
+                      "setor_maquina": "setor_maquina_desc"}
+    for field, value in row.get("_human_header", {}).items():
+        key = header_aliases.get(field)
+        if key:
+            if field == "data":
+                from .db import _parse_date_iso
+                result[key] = _iso_to_date(str(value).strip()) or _iso_to_date(_parse_date_iso(value)) or value
+            elif field == "n_operador" and _to_int(value) is not None:
+                pass  # Keep the existing SAP personnel-code derivation.
+            else:
+                result[key] = value
+    return result
+
 
 def build_cpis_workbook(
     date_from: str | None,
@@ -775,35 +858,23 @@ def build_cpis_workbook(
         refs = get_watcher().get_refs()
     except Exception:
         refs = None
-    cpis_rows = [_build_cpis_row(r, refs=refs) for r in raw_rows]
-
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Folha1"
-
-    # Header row (matches template exactly)
-    for ci, (_, label) in enumerate(CPIS_COLUMNS, start=1):
-        cell = ws.cell(row=1, column=ci, value=label)
-        _style_cell(cell, bold=True, fill=_FILL_HEADER)
-        cell.font = _FONT_HEADER
-
-    # Data rows
-    for ri, cpis in enumerate(cpis_rows, start=2):
-        for ci, (key, _) in enumerate(CPIS_COLUMNS, start=1):
-            v = cpis.get(key)
-            # R257 — ver neutralize_xlsx (injeção de fórmulas).
-            cell = ws.cell(row=ri, column=ci, value=neutralize_xlsx(v))
-            _style_cell(cell)
-            if key == "data" and isinstance(v, dt.date):
-                cell.number_format = "DD-MM-YYYY"
-            elif key in ("peso_consumido_t", "peso_produzido_t", "desperdicio_t"):
-                cell.number_format = "0.000"   # toneladas com 3 casas
-            elif key == "desperdicio_pct":
-                cell.number_format = "0.00"
-            elif key == "esp_mm":
-                cell.number_format = "0.0"
-            elif key in ("n_chapas", "sucata"):
-                cell.number_format = "0"       # integer
+    # Stream rows instead of retaining millions of styled cells and a second
+    # copy of every CPIS row. Styles are registered once per number format.
+    wb = openpyxl.Workbook(write_only=True)
+    ws = wb.create_sheet("Folha1")
+    styles = {}
+    for name, number_format in {
+        "body": "General", "date": "DD-MM-YYYY", "tonnes": "0.000",
+        "percent": "0.00", "thickness": "0.0", "integer": "0",
+    }.items():
+        style = NamedStyle(name="cpis_" + name, font=_FONT_BASE, border=_BORDER,
+                           alignment=Alignment(horizontal="left", vertical="center"),
+                           number_format=number_format)
+        wb.add_named_style(style)
+        styles[name] = style.as_tuple()
+    header_style = NamedStyle(name="cpis_header", font=_FONT_HEADER, fill=_FILL_HEADER,
+                              border=_BORDER, alignment=Alignment(horizontal="left", vertical="center"))
+    wb.add_named_style(header_style)
 
     # Column widths — one entry per CPIS column.
     widths = [
@@ -816,6 +887,33 @@ def build_cpis_workbook(
 
     # Freeze header row
     ws.freeze_panes = "A2"
+
+    header = []
+    for _, label in CPIS_COLUMNS:
+        cell = WriteOnlyCell(ws, value=label)
+        cell._style = header_style.as_tuple()
+        header.append(cell)
+    ws.append(header)
+    for raw in raw_rows:
+        cpis = _build_cpis_row(raw, refs=refs)
+        cells = []
+        for key, _ in CPIS_COLUMNS:
+            value = cpis.get(key)
+            cell = WriteOnlyCell(ws, value=neutralize_xlsx(value))
+            name = "body"
+            if key == "data" and isinstance(value, dt.date):
+                name = "date"
+            elif key in ("peso_consumido_t", "peso_produzido_t", "desperdicio_t"):
+                name = "tonnes"
+            elif key == "desperdicio_pct":
+                name = "percent"
+            elif key == "esp_mm":
+                name = "thickness"
+            elif key in ("n_chapas", "sucata"):
+                name = "integer"
+            cell._style = styles[name]
+            cells.append(cell)
+        ws.append(cells)
 
     out = io.BytesIO()
     wb.save(out)

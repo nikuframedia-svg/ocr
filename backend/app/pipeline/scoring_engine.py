@@ -21,6 +21,7 @@ Fluxo atual:
 from __future__ import annotations
 
 import math
+import json
 import os
 import time
 import unicodedata
@@ -28,9 +29,14 @@ from bisect import bisect_left, bisect_right
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from functools import lru_cache
+from collections import OrderedDict
+import copy
+import threading
 import re
 from itertools import product
 from typing import Any
+
+from rapidfuzz.distance import Levenshtein
 
 from app.dq.ferramenta import ALLOWED_FERRAMENTA_TEXT, normalize_ferramenta
 from app.dq.machines import machine_phase_from_setor, resolve_machine_from_setor
@@ -957,6 +963,9 @@ ENGINE_VERSION = "v31_R270"
 SCORING_VARIANT: ContextVar[str] = ContextVar(
     "scoring_variant", default=os.environ.get("CROSS_SCORING_VARIANT", "v30")
 )
+_CONSUMPTION_SNAPSHOT: ContextVar[tuple | None] = ContextVar(
+    "scoring_consumption_snapshot", default=None)
+_ROW_CACHE_LOCK = threading.Lock()
 
 
 def set_scoring_variant(name: str):
@@ -1002,16 +1011,9 @@ def _lev_distance(a: str, b: str) -> int:
         return len(a)
     if abs(len(a) - len(b)) > 5:
         return 999
-    if len(a) > len(b):
-        a, b = b, a
-    prev = list(range(len(b) + 1))
-    for i, ca in enumerate(a, 1):
-        cur = [i]
-        for j, cb in enumerate(b, 1):
-            cost = 0 if ca == cb else 1
-            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost))
-        prev = cur
-    return prev[-1]
+    # Same unit-cost Unicode distance, using the already-required native
+    # implementation. Keep the historical length/empty-string guards above.
+    return Levenshtein.distance(a, b)
 
 
 @lru_cache(maxsize=500_000)
@@ -1370,7 +1372,11 @@ def _model_matches_designacao(model_value: object, designacao: object) -> bool:
 
 
 def _is_missing_ocr(value: object) -> bool:
-    text = str(value or "").strip()
+    return _is_missing_ocr_cached(str(value or "").strip())
+
+
+@lru_cache(maxsize=50_000)
+def _is_missing_ocr_cached(text: str) -> bool:
     if not text:
         return True
     compact = re.sub(r"[\s\-_.:/\\]+", "", text)
@@ -1378,7 +1384,11 @@ def _is_missing_ocr(value: object) -> bool:
 
 
 def _identifier_compact(value: object, *, pad_of: bool = False) -> str:
-    raw = _norm_ascii_upper(value)
+    return _identifier_compact_cached(_norm_ascii_upper(value), pad_of)
+
+
+@lru_cache(maxsize=100_000)
+def _identifier_compact_cached(raw: str, pad_of: bool) -> str:
     compact = re.sub(r"[^A-Z0-9]+", "", raw)
     if pad_of and compact.isdigit() and len(compact) < 6:
         compact = compact.zfill(6)
@@ -1541,9 +1551,26 @@ def _entry_field_similarity(
     ck = (field, str(_entry_attr_for_field(field, entry)))
     if ck in cache:
         return cache[ck]
-    r = _efs_compute(field, entry, row, refs, value)
+    shared_compute = cache.get("_shared_compute")
+    if shared_compute is not None:
+        candidate = _entry_attr_for_field(field, entry)
+        r = shared_compute(field, str(value), None if candidate is None else str(candidate))
+    else:
+        r = _efs_compute(field, entry, row, refs, value)
     cache[ck] = r
     return r
+
+
+def _make_similarity_cache(refs: dict):
+    # Each reference index owns a bounded cache. A new reference snapshot
+    # creates a new cache, so edits and reference reloads cannot reuse stale
+    # matches. The similarity depends only on the field and its two values.
+    @lru_cache(maxsize=200_000)
+    def compute(field: str, value: str, candidate: str | None):
+        attr = {"of": "_of", "ov": "ov", "cliente": "cliente",
+                "modelo": "designacao"}.get(field, _PLAN_ATTR_BY_FIELD.get(field))
+        return _efs_compute(field, {attr: candidate}, {}, refs, value)
+    return compute
 
 
 def _entry_global_score(
@@ -2232,6 +2259,7 @@ def _get_indices(refs: dict) -> dict:
 
     indices = {
         "loaded_at": loaded_at,
+        "field_similarity_cache": _make_similarity_cache(refs),
         "of_to_entries": of_to_entries,
         "ov_to_entries": ov_to_entries,
         "des_to_entries": des_to_entries,
@@ -2578,34 +2606,52 @@ def _best_scored_entry(
     guarda de ambiguidade R219; a margem para o melhor rival de OF diferente
     fica em ``winner['_margin_bits']`` e alimenta o modo decisivo/marginal.
     """
-    from app.pipeline.of_consumption import remaining as _remaining
+    from app.pipeline.of_consumption import (
+        _to_num as _consumption_number,
+        get_consumption,
+        remaining as _remaining,
+    )
+    from app.pipeline.plan_status import closed_status
 
     # R225 — memo de similaridade por-linha: o pool tem ~12k entries mas poucos
     # valores distintos por campo; calcular a similaridade 1x por valor distinto
     # (não 1x por entry) corta o grosso do custo sem mudar nenhum resultado.
-    _sim_cache: dict = {}
-    # R225 — só construir os `reasons` (dict por campo por entry) quando são
-    # precisos: o traço (opt-in) usa-os para todos; sem traço, recalculamos só
-    # os do vencedor no fim. Poupa ~1,7M dicts/folha no caso de produção.
-    _want_reasons = trace is not None
     idx = idx or _get_indices(refs)
+    _sim_cache: dict = {"_shared_compute": idx.get("field_similarity_cache")}
+    # Missing fields contribute nothing. Resolve that once for this row,
+    # preserving field order and every numerical operation of the score.
+    global_fields = tuple(
+        f for f in (score_fields if score_fields is not None else _PLAN_FIELDS)
+        if f in _PLAN_FIELDS and not _is_missing_ocr(row.get(f))
+    )
+    # Only the winner and trace top-K need field explanations. Materializing
+    # them for every candidate allocated millions of discarded dictionaries.
     fs_ctx = _fs_row_context(row, idx, score_fields, extra_bias=extra_bias,
                              declared_vote=declared_vote)
     eligible: list[tuple] = []
+    snapshot = _CONSUMPTION_SNAPSHOT.get()
+    consumption = (snapshot[2] if snapshot is not None
+                   and snapshot[0] == current_phase and snapshot[1] is refs else None)
     for order, (k, e) in enumerate(entries_by_key.items()):
         if "_of" not in e:
             e = dict(e)
             e["_of"] = k[0]
         global_score, exact_score, reasons, raw_score, agree, exact_id, agree_id = (
-            _entry_global_score(e, row, refs, score_fields, cache=_sim_cache,
-                                collect_reasons=_want_reasons)
+            _entry_global_score(e, row, refs, global_fields, cache=_sim_cache,
+                                collect_reasons=False)
         )
         bits = _entry_bits_score(
             e, row, refs, idx, fs_ctx, score_fields, cache=_sim_cache,
         )
         phase_full = 1 if (current_phase and _phase_is_full(e, current_phase)) else 0
         # R138 — remaining consciente do setor (mesma medida do wizard).
-        rem = _remaining(e, phase=current_phase)
+        # A ranking uses one consumption snapshot. Previously each candidate
+        # rebuilt/sorted the machine-map cache key and acquired the cache lock.
+        # Load lazily: closed/unquantified entries never needed the database.
+        if (consumption is None and closed_status(e.get("fechado")) is not True
+                and (_consumption_number(e.get("quanttrp")) or 0) > 0):
+            consumption = get_consumption(current_phase, refs=refs)
+        rem = _remaining(e, consumption=consumption, phase=current_phase)
         rem_sort = 9e9 if rem == float("inf") else rem
         # R236 — ordena por BITS primeiro (evidência medida); a votação
         # holística R226 (agree → raw → exact_id) fica como desempate, e o
@@ -2644,7 +2690,10 @@ def _best_scored_entry(
                         "weight": r.get("weight"),
                         "points": round(float(r.get("points") or 0.0), 3),
                     }
-                    for r in (cand[8] or [])
+                    for r in _entry_global_score(
+                        cand[7], row, refs, global_fields,
+                        cache=_sim_cache, collect_reasons=True,
+                    )[2]
                 ],
             }
             for cand in eligible[:_TRACE_TOP_K]
@@ -2663,13 +2712,9 @@ def _best_scored_entry(
     winner["_weighted_score"] = round(float(best[10]), 3)
     winner["_exact_score"] = int(best[11])
     winner["_combined"] = round(float(best_agree + best_raw), 3)
-    # R225 — se os reasons não foram colhidos (caso de produção), recalcula só
-    # os do vencedor (idêntico ao que seria colhido; usa o cache quente).
-    winner_reasons = best[8]
-    if not _want_reasons:
-        winner_reasons = _entry_global_score(
-            best[7], row, refs, score_fields, cache=_sim_cache, collect_reasons=True,
-        )[2]
+    winner_reasons = _entry_global_score(
+        best[7], row, refs, global_fields, cache=_sim_cache, collect_reasons=True,
+    )[2]
     winner["_score_reasons"] = sorted(
         winner_reasons,
         key=lambda reason: abs(float(reason.get("points") or 0.0)),
@@ -5478,18 +5523,78 @@ def shadow_score(
     except Exception:
         pass
 
+    # Re-score only changed rows. References own the bounded cache, while
+    # consumption, variant, learned casing and all template/bias inputs are
+    # part of the key. Coherence and collisions below still run every time.
+    row_cache = None
+    consumption_snapshot = None
+    cache_context = None
+    if idx.get("loaded_at"):
+        try:
+            from app.pipeline.of_consumption import get_consumption
+            from app.dq import snap
+            consumption_snapshot = get_consumption(current_phase, refs=refs)
+            cache_context = (
+                scoring_variant(),
+                json.dumps((_load_cross_params(), snap._CASE_RULES_BY_TEMPLATE),
+                           sort_keys=True, default=str),
+                frozenset(consumption_snapshot.items()),
+                tuple(row_fields), tuple(cross_check_fields), current_phase,
+                canonical_template_name, getattr(template, "has_production_rows", True),
+                json.dumps((declared_cross, declared_vote), sort_keys=True, default=str),
+            )
+            with _ROW_CACHE_LOCK:
+                row_cache = idx.setdefault("row_result_cache", OrderedDict())
+        except Exception:
+            # Synthetic references / unavailable consumption: use the normal
+            # uncached path, retaining its existing validation/error behavior.
+            row_cache = None
+
+    def score_one(i: int, row: dict, bias: dict | None):
+        cache_key = None
+        if row_cache is not None:
+            cache_bias = dict(bias or {})
+            # Only the age bucket's prior is consumed by row scoring, not
+            # elapsed fractions of a second. Crossing a bucket invalidates it.
+            cache_bias["plan_age_days"] = _pi_h0(cache_bias.get("plan_age_days"))
+            cache_key = (cache_context, i,
+                         json.dumps((row, cache_bias), sort_keys=True, default=str))
+            with _ROW_CACHE_LOCK:
+                cached = row_cache.get(cache_key)
+                if cached is not None and (trace_sink is None or cached[1] is not None):
+                    row_cache.move_to_end(cache_key)
+                    result, saved_trace = copy.deepcopy(cached)
+                    if trace_sink is not None:
+                        trace_sink.extend(saved_trace)
+                    return result
+        local_trace = [] if trace_sink is not None else None
+        token = _CONSUMPTION_SNAPSHOT.set(
+            (current_phase, refs, consumption_snapshot)
+            if row_cache is not None else None)
+        try:
+            result = _score_row(
+                i, row, refs, idx, row_fields, cross_check_fields,
+                current_phase, canonical_template_name,
+                force_top1=getattr(template, "has_production_rows", True),
+                trace_sink=local_trace, extra_bias=bias,
+                declared=declared_cross, declared_vote=declared_vote,
+            )
+        finally:
+            _CONSUMPTION_SNAPSHOT.reset(token)
+        if row_cache is not None:
+            with _ROW_CACHE_LOCK:
+                row_cache[cache_key] = copy.deepcopy((result, local_trace))
+                row_cache.move_to_end(cache_key)
+                while len(row_cache) > 256:
+                    row_cache.popitem(last=False)
+        if trace_sink is not None:
+            trace_sink.extend(local_trace)
+        return result
+
     out_rows = []
     row_tallies: list[tuple[int, int, int, int]] = []
     for i, row in enumerate(rows):
-        row_out, s, c, n, vd, _t = _score_row(
-            i, row, refs, idx, row_fields, cross_check_fields,
-            current_phase, canonical_template_name,
-            force_top1=getattr(template, "has_production_rows", True),
-            trace_sink=trace_sink,
-            extra_bias=prod_bias,
-            declared=declared_cross,
-            declared_vote=declared_vote,
-        )
+        row_out, s, c, n, vd, _t = score_one(i, row, prod_bias)
         out_rows.append(row_out)
         row_tallies.append((s, c, n, vd))
 
@@ -5529,15 +5634,7 @@ def shadow_score(
                 bias2["coh_of"] = coh_of
             if coh_cli:
                 bias2["coh_cliente"] = coh_cli
-            row_out, s, c, n, vd, _t = _score_row(
-                i, rows[i], refs, idx, row_fields, cross_check_fields,
-                current_phase, canonical_template_name,
-                force_top1=getattr(template, "has_production_rows", True),
-                trace_sink=trace_sink,
-                extra_bias=bias2,
-                declared=declared_cross,
-                declared_vote=declared_vote,
-            )
+            row_out, s, c, n, vd, _t = score_one(i, rows[i], bias2)
             out_rows[i] = row_out
             row_tallies[i] = (s, c, n, vd)
 

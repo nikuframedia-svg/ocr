@@ -11,6 +11,8 @@ import shutil
 import threading
 import time
 import traceback
+import copy
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
@@ -149,7 +151,43 @@ def configured_interval_seconds() -> int:
         return DEFAULT_IMPORT_INTERVAL_SECONDS
 
 
+_INSPECTION_CACHE: OrderedDict = OrderedDict()
+_INSPECTION_LOCK = threading.Lock()
+
+
 def inspect_refs_xlsx(path: Path, kind: str) -> tuple[str | None, dict[str, Any]]:
+    """Reuse validation only for the same path, metadata and content digest."""
+    path = Path(path)
+    try:
+        stat = path.stat()
+        signature = (str(path.resolve()), kind, stat.st_mtime_ns, stat.st_size,
+                     file_sha256(path))
+    except OSError:
+        return _inspect_refs_xlsx_uncached(path, kind)
+    with _INSPECTION_LOCK:
+        cached = _INSPECTION_CACHE.get(signature)
+        if cached is not None:
+            _INSPECTION_CACHE.move_to_end(signature)
+            return copy.deepcopy(cached)
+    result = _inspect_refs_xlsx_uncached(path, kind)
+    # A file arriving in the shared folder may change while being inspected.
+    # Cache only a stable read; imports still perform their original checks.
+    try:
+        current = path.stat()
+        stable = (current.st_mtime_ns == stat.st_mtime_ns
+                  and current.st_size == stat.st_size
+                  and file_sha256(path) == signature[-1])
+    except OSError:
+        stable = False
+    if stable and not str(result[0] or "").startswith("não consegui abrir"):
+        with _INSPECTION_LOCK:
+            _INSPECTION_CACHE[signature] = copy.deepcopy(result)
+            while len(_INSPECTION_CACHE) > 128:
+                _INSPECTION_CACHE.popitem(last=False)
+    return result
+
+
+def _inspect_refs_xlsx_uncached(path: Path, kind: str) -> tuple[str | None, dict[str, Any]]:
     """Validate a refs workbook and return lightweight file stats."""
     import openpyxl
 

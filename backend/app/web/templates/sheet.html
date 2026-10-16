@@ -4,7 +4,7 @@
 {% set review_rows = sheet.sheet_data.get('rows', []) if sheet.sheet_data else [] %}
 {% set reference_pending = review_rows | selectattr('reference_review', 'defined')
     | selectattr('reference_review', 'equalto', 'pending') | list %}
-<div x-data="cellEditor()" @open-cell-editor.window="open($event.detail)">
+<div>
 
 {# R88+: seta "← Voltar à lista" sempre visível.
    - back_url (de ?back=): preserva filtros do histórico/kanbans.
@@ -22,8 +22,7 @@
 
 {% if reference_pending %}
 <div class="alert warn" style="margin-bottom:12px;">
-  {{ reference_pending | length }} linha(s) por confirmar. Abre «Corrigir via OF» nessa linha
-  para escolher uma referência ou confirmar os dados da fotografia.
+  {{ reference_pending | length }} linha(s) sem referência confirmada. Podes editar e validar os valores escritos.
 </div>
 {% endif %}
 
@@ -107,18 +106,21 @@
          cabeçalho (única fonte de verdade, gravam logo). A barra "Validar"
          deixou de ter inputs próprios: eram duplicados que, por ficarem
          stale, revertiam a edição do cabeçalho ao validar. Agora só confirma
-         e tranca — o servidor valida data/nº/operador a partir do cabeçalho. #}
+         e tranca os valores que a pessoa decidiu guardar. #}
       <form id="validate-form" method="post" action="/sheet/{{ sheet.id }}/validate"
             style="display:inline-flex; gap:8px; align-items:center; flex-wrap:wrap;">
-        <span class="muted tiny">Confirma data, nº e operador no cabeçalho →</span>
-        <button class="btn primary" type="submit"
-                {% if reference_pending %}disabled title="Há linhas por confirmar"{% endif %}>Validar</button>
+        <input type="hidden" name="expected_revision" value="{{ sheet.revision or 0 }}">
+        <button class="btn primary" type="submit">Validar</button>
       </form>
     {% endif %}
   </div>
 </div>
 
 <div class="page-content">
+
+{% if sheet.status not in ('pending', 'error') and view_mode != 'raw' %}
+  {% include "_cross_check_status.html" %}
+{% endif %}
 
 {% if sheet.status == 'pending' %}
   {# R71 — sheet is in the background OCR queue. HTMX polls the
@@ -164,7 +166,7 @@
       <b>Lado duvidoso — esta folha é frente ou verso?</b><br>
       <span class="muted tiny">
         O sistema não confirmou o lado{% if sheet.review_reason %} ({{ sheet.review_reason }}){% endif %}.
-        Confirma para retomar o depósito.
+        Podes editar e validar os valores; a indicação do lado fica para consulta.
       </span>
       {# rev00 — guarda de duplo-submit: o 1º submit desabilita ambos os botões
          para não re-enfileirar a folha 2× (o side vai no hidden input, por isso
@@ -266,6 +268,9 @@
           {% endif %}
         </div>
       </div>
+      {% if sheet.status != 'validated' %}
+      <p class="muted tiny" style="padding:0 12px;">Clica numa célula para editar. Enter ou sair da célula guarda o valor.</p>
+      {% endif %}
       {# R261 — alvo OOB do banner de cross-check lote↔StockSAP (tempo real) #}
       <div id="lote-cc-banner"></div>
       <div class="scroll-x">
@@ -282,17 +287,7 @@
             {% for row in rows %}
             <tr>
               <td class="mono muted" style="white-space:nowrap;">
-                {# R112 — botão para abrir wizard "Corrigir via OF" da linha #}
                 {% if sheet.status != 'validated' %}
-                <button type="button" class="btn ghost row-of-wand-btn"
-                        @click='$dispatch("open-of-wizard", {
-                          row_index: {{ loop.index0 }},
-                          current_of: {{ (row.of or "") | tojson }},
-                          reference_pending: {{ (row.get("reference_review") == "pending") | tojson }}
-                        })'
-                        title="Corrigir via OF (escreve OF correcto e auto-fill cliente, modelo, dims)">
-                  🪄
-                </button>
                 {# R136 — remover uma linha errada/inventada pelo OCR. Confirm
                    porque é irreversível (o conteúdo fica no audit trail). #}
                 <button type="button" class="btn ghost row-remove-btn"
@@ -360,367 +355,7 @@
 
 </div>
 
-<!-- ============== Mobile bottom-sheet editor ============== -->
-<template x-if="active">
-  <div class="sheet-bg" @click.self="cancel()">
-    <div class="sheet-modal">
-      <div class="lbl" x-text="label"></div>
-      <div style="font-size:16px; font-weight:600;">Editar valor</div>
-      <div class="muted tiny" style="margin-top:2px; font-size:11px;">
-        Dica: duplo-toque numa célula abre com input vazio.
-      </div>
-      <form :action="'/sheet/' + sheet_id + '/edit'" method="post"
-            @submit.prevent="submit()">
-        <input type="hidden" name="field_path" :value="field_path">
-        <input type="text" name="new_value" x-model="value"
-               x-ref="bsInput"
-               x-init="$nextTick(() => $refs.bsInput.focus())"
-               inputmode="text">
-        <div style="display:flex; gap:8px; margin-top:12px;">
-          <button type="button" class="btn lg" style="flex:1;" @click="cancel()">Cancelar</button>
-          <button type="submit" class="btn lg primary" style="flex:1;">Confirmar</button>
-        </div>
-      </form>
-    </div>
-  </div>
-</template>
-
-</div><!-- /cellEditor wrapper -->
-
-<!-- ============== R112 — Wizard "Corrigir via OF" ============== -->
-<div x-data="ofWizard({{ sheet.id }}, {{ sheet.revision or 0 }})"
-     @open-of-wizard.window="open($event.detail)">
-  <template x-if="active">
-    <div class="sheet-bg of-wizard-overlay" @click.self="cancel()">
-      <div class="sheet-modal of-wizard-modal">
-        <div class="lbl">Linha L<span x-text="row_index + 1"></span></div>
-        <div style="font-size:18px; font-weight:600; margin-bottom:4px;">
-          Corrigir linha via OF
-        </div>
-        <div class="muted tiny" style="margin-bottom:12px;">
-          Pesquisa por OF, OV ou referência e filtra por modelo e comprimento.
-          Podes usar cada filtro sozinho.
-        </div>
-
-        <!-- Step 1 — input multi-modo (R128: OF / OV / modelo auto-detect) -->
-        <div style="margin-bottom:12px;">
-          <label class="lbl">Pesquisar:</label>
-          <div class="of-search" style="margin-top:4px;">
-            <input type="text" x-model="ofInput"
-                   aria-label="OF, OV ou referência" placeholder="OF, OV ou referência"
-                   @input="clearResults()"
-                   @keydown.enter.prevent="lookup()"
-                   x-ref="ofInputRef"
-                   x-init="$nextTick(() => $refs.ofInputRef.focus())"
-                   inputmode="text"
-                   style="padding:8px; font-size:16px; font-family:var(--font-mono);">
-            <input type="search" x-model="modelInput" placeholder="Modelo" aria-label="Modelo"
-                   @input="clearResults()" @keydown.enter.prevent="lookup()">
-            <input type="text" x-model="lengthInput" placeholder="Comprimento (mm)"
-                   aria-label="Comprimento (mm)" inputmode="decimal"
-                   @input="clearResults()" @keydown.enter.prevent="lookup()">
-            <button class="btn primary" type="button" @click="lookup()"
-                    :disabled="loading || !hasQuery">
-              <span x-show="!loading">Procurar</span>
-              <span x-show="loading">…</span>
-            </button>
-          </div>
-          <label style="display:inline-flex; gap:6px; align-items:center; margin-top:10px;">
-            <input type="checkbox" x-model="includeDone" @change="lookup()">
-            <span class="tiny muted">Incluir peças já fechadas</span>
-          </label>
-        </div>
-
-        <!-- Step 2 — lookup result -->
-        <template x-if="includeDone && lookupResult && lookupResult?.history_message">
-          <div class="alert warn" style="padding:10px; margin-bottom:12px;"
-               x-text="lookupResult?.history_message"></div>
-        </template>
-        <template x-if="lookupResult && !lookupResult?.found">
-          <div class="alert warn" style="padding:10px; margin-bottom:12px;"
-               x-text="lookupResult?.notice || 'Sem resultados. Confirma a pesquisa e os filtros.'"></div>
-        </template>
-        <template x-if="lookupResult && lookupResult?.found && lookupResult?.notice">
-          <div class="alert warn" style="padding:10px; margin-bottom:12px;"
-               x-text="lookupResult?.notice"></div>
-        </template>
-
-        <template x-if="lookupResult && lookupResult?.found">
-          <div style="margin-bottom:12px;">
-            <div class="muted tiny"
-                 style="margin-bottom:6px; display:flex; align-items:center;
-                        justify-content:space-between; gap:8px; flex-wrap:wrap;">
-              <span>
-                <span class="of-mode-pill" :class="'mode-'+lookupResult?.mode"
-                      x-text="lookupResult?.mode === 'of' ? 'OF '+lookupResult?.of
-                              : lookupResult?.mode === 'ov' ? 'OV '+lookupResult?.q
-                              : lookupResult?.mode === 'filters' ? 'Filtros'
-                              : lookupResult?.mode === 'suggestions' ? 'Sugestões para OF '+lookupResult?.requested_of
-                              : 'modelo '+lookupResult?.q"></span>
-                <span x-text="lookupResult?.entries.length
-                    ? `${lookupResult?.offset + 1}–${lookupResult?.offset + lookupResult?.entries.length} de ${lookupResult?.total}`
-                    : 'Nenhuma peça pendente; inclui peças já fechadas ou ajusta os filtros.'"></span>
-                <span class="tiny muted" x-show="lookupResult?.plan_date"
-                      x-text="'· plano de ' + lookupResult?.plan_date"></span>
-              </span>
-            </div>
-            <div class="of-entries-list">
-              <template x-for="(e, i) in lookupResult?.entries" :key="i">
-                <label class="of-entry-card"
-                       :class="{ selected: selectedEntry === i, done: e.done }"
-                       @click="selectedEntry = i">
-                  <input type="radio" :value="i" x-model="selectedEntry"
-                         style="margin-top:4px;">
-                  <div style="flex:1;">
-                    <div class="of-modelo-row">
-                      <b class="of-modelo" :title="e.modelo"
-                         x-text="e.modelo || '(sem modelo)'"></b>
-                        <span class="of-remaining-badge"
-                              :class="e.done ? 'done' : (e.pending_valid && e.remaining < 5 ? 'urgent' : '')"
-                              :title="'ERP (fase do setor): ' + (e.produced_erp ?? 'Indisponível')
-                                + ' · kanbans pós-plano'
-                                + (lookupResult?.plan_date ? ' (desde ' + lookupResult?.plan_date + ')' : '')
-                                + ': ' + (e.kanban_qty ?? 0)"
-                              x-text="pendingLabel(e)"></span>
-                    </div>
-                    <div class="tiny muted" style="margin-top:2px;">
-                      OF <b x-text="e.of"></b> ·
-                      <span x-text="e.cliente"></span>
-                      <span x-show="e.quanttrp !== null"> · Qtd. planeada <b x-text="e.quanttrp"></b></span>
-                      <span x-show="e.ov"> · OV <b x-text="e.ov"></b></span>
-                      <span x-show="e.comp_mm"> · comp <b x-text="e.comp_mm"></b>mm</span>
-                      <span x-show="e.lbase"> · lbase <b x-text="e.lbase"></b></span>
-                      <span x-show="e.ltopo"> · ltopo <b x-text="e.ltopo"></b></span>
-                      <span x-show="e.esp"> · esp <b x-text="e.esp"></b></span>
-                      <span x-show="e.material"> · <b x-text="e.material"></b></span>
-                    </div>
-                  </div>
-                </label>
-              </template>
-            </div>
-            <nav aria-label="Resultados da pesquisa" style="display:flex; justify-content:space-between; margin-top:10px;">
-              <button type="button" class="btn ghost" :disabled="loading || lookupResult?.offset === 0"
-                      @click="lookup(Math.max(0, lookupResult?.offset - lookupResult?.limit))">← Anteriores</button>
-              <button type="button" class="btn ghost" :disabled="loading || !lookupResult?.has_more"
-                      @click="lookup(lookupResult?.offset + lookupResult?.limit)">Mais resultados →</button>
-            </nav>
-          </div>
-        </template>
-
-        <template x-if="applyError">
-          <div class="alert warn" style="padding:10px; margin-bottom:12px;"
-               x-text="applyError"></div>
-        </template>
-
-        <!-- Actions -->
-        <div style="display:flex; gap:8px;">
-          <button type="button" class="btn lg" style="flex:1;" @click="cancel()">
-            Cancelar
-          </button>
-          <button type="button" class="btn" :disabled="loading || applying"
-                  @click="reviewReference('pending')">Guardar por confirmar</button>
-          <button type="button" class="btn lg primary" style="flex:2;"
-                  :disabled="!canApply || applying"
-                  @click="apply()">
-            <span x-show="!applying">Aplicar à linha</span>
-            <span x-show="applying">A aplicar…</span>
-          </button>
-        </div>
-        <button type="button" class="btn ghost" x-show="referencePending"
-                :disabled="loading || applying" @click="reviewReference('confirmed_manual')"
-                style="margin-top:8px;">Confirmar os dados como estão na fotografia</button>
-      </div>
-    </div>
-  </template>
-</div>
-
-<script>
-function ofWizard(sheetId, sheetRevision = 0) {
-  return {
-    sheetId: sheetId,
-    active: false, row_index: 0, ofInput: '', current_of: '',
-    modelInput: '', lengthInput: '', searchVersion: 0, sheetRevision,
-    referencePending: false,
-    loading: false, lookupResult: null, selectedEntry: -1,
-    applying: false, applyError: '',
-    includeDone: false,  // R113 — toggle "mostrar peças já fechadas"
-    open(detail) {
-      this.referencePending = Boolean(detail.reference_pending);
-      this.active = true;
-      this.row_index = detail.row_index;
-      this.current_of = detail.current_of || '';
-      this.ofInput = detail.current_of || '';
-      this.modelInput = '';
-      this.lengthInput = '';
-      this.searchVersion++;
-      this.loading = false;
-      this.lookupResult = null;
-      this.selectedEntry = -1;
-      this.includeDone = false;
-      this.applyError = '';
-      // Auto-lookup se já existe OF na linha
-      if (this.ofInput.trim()) {
-        this.$nextTick(() => this.lookup());
-      }
-    },
-    cancel() { this.searchVersion++; this.loading = false; this.active = false; },
-    clearResults() {
-      this.searchVersion++;
-      this.loading = false;
-      this.lookupResult = null;
-      this.selectedEntry = -1;
-    },
-    get hasQuery() {
-      return Boolean(this.ofInput.trim() || this.modelInput.trim() || this.lengthInput.trim());
-    },
-    pendingLabel(entry) {
-      const quantity = entry.pending_valid
-        ? Math.max(0, entry.remaining).toLocaleString('pt-PT') : 'Indisponível';
-      const status = entry.status_known
-        ? (entry.fechado ? 'Fechada' : 'Aberta') : 'Estado indisponível';
-      return `Por fazer em ${this.lookupResult?.setor || 'setor indisponível'}: ${quantity} · ${status}`;
-    },
-    get canApply() {
-      return !this.loading && this.lookupResult && this.lookupResult.found
-             && this.selectedEntry >= 0 && Boolean(this.lookupResult.entries[this.selectedEntry]);
-    },
-    async lookup(offset = 0) {
-      const q = (this.ofInput || '').trim();
-      if (!this.hasQuery) { this.clearResults(); return; }
-      const version = ++this.searchVersion;
-      this.loading = true;
-      this.applyError = '';
-      this.lookupResult = null;
-      this.selectedEntry = -1;
-      try {
-        // R128 — query genérica (?q=) com auto-detect OF/OV/modelo
-        const params = new URLSearchParams({q, modelo: this.modelInput.trim(),
-          comp_mm: this.lengthInput.trim(), offset: String(offset),
-          include_done: this.includeDone ? '1' : '0', row_index: String(this.row_index)});
-        const url = '/sheet/' + this.sheetId + '/of-lookup?' + params;
-        const r = await fetch(url);
-        const result = await r.json();
-        if (version !== this.searchVersion) return;
-        if (!r.ok) throw new Error(result.detail || 'Pesquisa indisponível.');
-        this.lookupResult = result;
-        this.sheetRevision = result.revision;
-        if (!result.requires_confirmation && this.lookupResult.found && this.lookupResult.entries.length === 1) {
-          this.selectedEntry = 0;
-        }
-      } catch (e) {
-        if (version === this.searchVersion) this.applyError = e.message || 'Erro de rede na pesquisa.';
-      } finally {
-        if (version === this.searchVersion) this.loading = false;
-      }
-    },
-    async apply() {
-      if (!this.canApply || this.applying) return;
-      const chosen = this.lookupResult.entries[this.selectedEntry];
-      if (this.lookupResult.requires_confirmation && !window.confirm(
-        'Aplicar OF ' + chosen.of + ' — ' + chosen.modelo + '? '
-        + 'Confirma que esta é a OF e a peça corretas na fotografia.'
-      )) return;
-      this.applying = true;
-      this.applyError = '';
-      try {
-        // R116 — selectedEntry é índice na lista ordenada; apply precisa do
-        // orig_idx (índice na lista não-ordenada). R128 — entry.of vence
-        // sobre lookupResult.of porque modos modelo/OV agrupam OFs várias.
-        const entry = this.lookupResult.entries[this.selectedEntry];
-        const r = await fetch('/sheet/' + this.sheetId + '/apply-of-entry', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            row_index: this.row_index,
-            of: entry.of || this.lookupResult.of,
-            entry_idx: entry.orig_idx,
-            entry_source: entry.entry_source || 'plan',
-            entry_id: entry.entry_id,
-            history_sha256: this.lookupResult.history_sha256,
-            suggestion_for: this.lookupResult.suggestion_for,
-            reference_change_confirmed: Boolean(this.lookupResult.requires_confirmation),
-            plan_sha256: this.lookupResult.plan_sha256,
-            expected_revision: this.lookupResult.revision,
-          }),
-        });
-        const responseText = await r.text();
-        let j = {};
-        try {
-          j = responseText ? JSON.parse(responseText) : {};
-        } catch (_) {
-          j = {};
-        }
-        if (!r.ok || !j.ok) {
-          this.applyError = j.error || j.detail
-            || ('Falha ao guardar (HTTP ' + r.status + '). Tenta novamente.');
-          return;
-        }
-        if (!j.final_row || typeof j.revision !== 'number') {
-          this.applyError = 'O servidor não confirmou o estado final da linha. '
-            + 'A janela ficou aberta por segurança.';
-          return;
-        }
-        const notApplied = []
-          .concat(j.kept || [])
-          .concat(j.skipped || []);
-        if (notApplied.length) {
-          this.applyError = 'A linha não foi substituída por completo. '
-            + 'Campos não aplicados: ' + notApplied.join(', ') + '.';
-          return;
-        }
-        if (!j.n_applied) {
-          this.applyError = j.message
-            || 'Nenhum campo mudou; a linha já poderá conter esta entrada.';
-          return;
-        }
-        this.active = false;
-        window.location.reload();
-      } catch (e) {
-        this.applyError = 'Erro de rede: ' + e.message;
-      } finally {
-        this.applying = false;
-      }
-    },
-    async reviewReference(decision) {
-      if (this.applying || this.loading) return;
-      if (decision === 'confirmed_manual' && !window.confirm(
-        'Confirmas que a OF, a peça e a quantidade foram verificadas na fotografia? '
-        + 'Os dados desta linha ficam como estão, confirmados manualmente.'
-      )) return;
-      this.applying = true;
-      this.applyError = '';
-      try {
-        const r = await fetch('/sheet/' + this.sheetId + '/of-review', {
-          method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({row_index: this.row_index, decision,
-                                expected_revision: this.sheetRevision}),
-        });
-        const result = await r.json();
-        if (!r.ok || !result.ok) throw new Error(result.detail || 'Não foi possível guardar.');
-        this.cancel();
-        window.location.reload();
-      } catch (e) {
-        this.applyError = e.message || 'Erro ao guardar a decisão.';
-      } finally {
-        this.applying = false;
-      }
-    },
-  };
-}
-</script>
-
 <style>
-/* R112 — Wizard styles */
-.row-of-wand-btn {
-  padding: 2px 6px !important;
-  font-size: 13px !important;
-  line-height: 1 !important;
-  margin-right: 4px;
-  border-color: rgba(22,20,15,0.1);
-  background: transparent;
-}
-.row-of-wand-btn:hover { background: #faf6ed; }
-
 /* R136 — botão "remover linha", mesmo tamanho compacto do wand, hover vermelho */
 .row-remove-btn {
   padding: 2px 6px !important;
@@ -735,94 +370,6 @@ function ofWizard(sheetId, sheetRevision = 0) {
   border-color: var(--crit);
 }
 
-.of-wizard-modal {
-  max-width: 880px !important;
-  max-height: 90vh;
-  overflow-y: auto;
-}
-.of-wizard-overlay { align-items:center; justify-content:center; padding:12px; }
-.of-search {
-  display:grid; grid-template-columns:1fr 1fr 1fr auto; gap:8px;
-}
-.of-search input { min-width:0; width:100%; font-size:14px; padding:8px; }
-@media (max-width:700px) { .of-search { grid-template-columns:1fr; } }
-
-.of-entries-list {
-  max-height: min(60vh, 480px);
-  overflow-y: auto;
-  padding: 2px;
-}
-.of-entry-card {
-  display: flex; gap: 8px; align-items: flex-start;
-  padding: 6px 10px; margin-bottom: 3px;
-  background: #fff; border: 1px solid rgba(22,20,15,0.1);
-  border-radius: 6px; cursor: pointer;
-  transition: background 0.1s, border-color 0.1s;
-}
-.of-entry-card:hover { background: #faf6ed; }
-.of-entry-card.selected {
-  border-color: #2F7D43; background: #f0f7e8;
-}
-.of-entry-card.done { opacity: 0.65; }
-.of-entry-card > div { min-width: 0; }
-
-/* R128 fix — override do `.sheet-modal input { width:100%; padding:14px;
-   font-size:22px }` (design.css:624, intencional para o bottom-sheet
-   editor mobile) que esmaga radios/checkboxes dentro do wizard. */
-.of-wizard-modal .of-entry-card input[type="radio"],
-.of-wizard-modal input[type="checkbox"] {
-  width: auto;
-  padding: 0;
-  font-size: inherit;
-  flex-shrink: 0;
-  margin: 0;
-  border: 1px solid rgba(22,20,15,0.4);
-  border-radius: 3px;
-}
-.of-wizard-modal .of-entry-card input[type="radio"] {
-  margin-top: 3px;
-}
-
-/* Linha 1: modelo (truncate) + badges (flex-shrink:0 implícito). */
-.of-entry-card .of-modelo-row {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  flex-wrap: wrap;
-  min-width: 0;
-}
-.of-entry-card .of-modelo {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-/* R128 — pill que mostra o modo (OF / OV / modelo) detectado */
-.of-mode-pill {
-  display: inline-block;
-  font-family: var(--font-mono);
-  font-size: 10px; font-weight: 700;
-  padding: 1px 6px; border-radius: 3px;
-  margin-right: 4px;
-}
-.of-mode-pill.mode-of { background: #e8f1d8; color: #2F5B33; }
-.of-mode-pill.mode-ov { background: #d8e8f1; color: #2F4A5B; }
-.of-mode-pill.mode-modelo { background: #f1e8d8; color: #5B4A2F; }
-
-/* R113 — badge "faltam X de Y" */
-.of-remaining-badge {
-  background: #e8f1d8; color: #2F5B33;
-  padding: 1px 6px; border-radius: 3px;
-  font-size: 10px; font-weight: 600;
-}
-.of-remaining-badge.urgent {
-  background: #fdedc8; color: #8A5F2D;
-}
-.of-remaining-badge.done {
-  background: #f0e6e5; color: #756F61;
-}
 </style>
 
 <style>
@@ -872,75 +419,31 @@ window.recropImageFor = function(sheetId, alpineScope) {
     });
 };
 
-function cellEditor() {
-  return {
-    active: false,
-    sheet_id: null,
-    field_path: '',
-    value: '',
-    label: '',
-    cell_id: '',
-    open(detail) {
-      this.sheet_id = detail.sheet_id;
-      this.field_path = detail.field_path;
-      // R58 — duplo-toque na célula abre modal com input vazio para
-      // escrever novo valor de raiz sem ter de apagar com o dedo.
-      this.value = detail.clearValue ? '' : (detail.value || '');
-      this.label = detail.label || '';
-      this.cell_id = detail.cell_id;
-      this.active = true;
-    },
-    cancel() {
-      this.active = false;
-    },
-    async submit() {
-      // R261 — htmx.ajax em vez de fetch + outerHTML manual: processa também
-      // os fragmentos hx-swap-oob da resposta (companion cells R136 + banner
-      // lote↔StockSAP), que o swap manual ignorava.
-      const cell = document.getElementById(this.cell_id);
-      if (!cell) { this.active = false; return; }
-      let failedStatus = null;
-      const onErr = (evt) => {
-        failedStatus = (evt.detail && evt.detail.xhr) ? evt.detail.xhr.status : '?';
-      };
-      document.body.addEventListener('htmx:responseError', onErr, { once: true });
-      try {
-        await htmx.ajax('POST', '/sheet/' + this.sheet_id + '/edit', {
-          target: cell,
-          swap: 'outerHTML',
-          values: { field_path: this.field_path, new_value: this.value },
-        });
-        if (failedStatus !== null) {
-          alert('Falha ao guardar (' + failedStatus + ')');
-        } else {
-          this.active = false;
-        }
-      } catch (e) {
-        alert('Falha ao guardar: ' + (e && e.message ? e.message : e));
-      } finally {
-        document.body.removeEventListener('htmx:responseError', onErr);
-      }
-    },
-  };
-}
-
 // R263 — validate por fetch: o submit nativo navegava para o JSON cru do
 // FastAPI em erro (ex.: 409 "Folha marcada para revisão de lado"). Agora o
 // detail aparece num alert e a página fica onde está.
 document.getElementById('validate-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
+  window.ocrLatency?.navigation('validate');
+  const failed = window.ocrLatency?.start('validate');
+  let navigating = false;
   const f = e.target;
   const btn = f.querySelector('button[type=submit]');
   if (btn) btn.disabled = true;
   try {
+    if (window.sheetWriteGuard && !await window.sheetWriteGuard.flush()) {
+      alert('A última alteração não ficou guardada. Confirma a gravação antes de validar.');
+      return;
+    }
     const r = await fetch(f.action, { method: 'POST', body: new FormData(f) });
-    if (r.ok) { window.location = r.redirected ? r.url : window.location.href; return; }
+    if (r.ok) { navigating = true; window.location = r.redirected ? r.url : window.location.href; return; }
     let d = '';
     try { d = (await r.json()).detail || ''; } catch (_) {}
     alert('Validação falhou: ' + (d || ('HTTP ' + r.status)));
   } catch (err) {
     alert('Erro de rede: ' + err.message);
   } finally {
+    if (!navigating) { window.ocrLatency?.cancelNavigation(); failed?.('error'); }
     if (btn) btn.disabled = false;
   }
 });

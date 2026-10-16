@@ -126,7 +126,7 @@ def _seed_bobine_v3():
     return sid
 
 
-@pytest.mark.parametrize(("value", "expected"), [("", ""), ("x", "X"), ("X", "X")])
+@pytest.mark.parametrize(("value", "expected"), [("", ""), ("x", "x"), ("X", "X")])
 def test_desktop_edit_accepts_and_normalizes_fecho(
     value, expected, tmp_db, isolate, client,
 ):
@@ -140,15 +140,15 @@ def test_desktop_edit_accepts_and_normalizes_fecho(
     assert db.get_sheet(sid)["sheet_data"]["rows"][0]["fecho"] == expected
 
 
-def test_desktop_edit_rejects_invalid_fecho(tmp_db, isolate, client):
+def test_desktop_edit_preserves_free_text_fecho(tmp_db, isolate, client):
     sid = _seed_bobine_v3()
     response = client.post(
         f"/sheet/{sid}/edit",
         data={"field_path": "rows[0].fecho", "new_value": "SIM"},
         headers=_DESKTOP,
     )
-    assert response.status_code == 400
-    assert db.get_sheet(sid)["sheet_data"]["rows"][0]["fecho"] == ""
+    assert response.status_code == 200
+    assert db.get_sheet(sid)["sheet_data"]["rows"][0]["fecho"] == "SIM"
 
 
 class TestEditNumberRefreshesName:
@@ -185,10 +185,10 @@ class TestEditNumberRefreshesName:
         assert "hx-swap-oob" not in r.text
 
 
-class TestDateCellStoresPt:
-    """Point #1 — a célula da data recebe ISO mas grava DD-MM-YYYY."""
+class TestDateCellPreservesHumanText:
+    """Human date formatting is preserved in the source data."""
 
-    def test_iso_input_stored_as_dd_mm_yyyy(self, tmp_db, isolate, client):
+    def test_iso_input_stored_exactly_as_typed(self, tmp_db, isolate, client):
         sid = _seed(operador="AUGUSTO MONTEIRO", n_operador="95", data="20-05-2026")
         r = client.post(
             f"/sheet/{sid}/edit",
@@ -196,7 +196,7 @@ class TestDateCellStoresPt:
             headers=_DESKTOP,
         )
         assert r.status_code == 200
-        assert db.get_sheet(sid)["sheet_data"]["header"]["data"] == "29-05-2026"
+        assert db.get_sheet(sid)["sheet_data"]["header"]["data"] == "2026-05-29"
 
     def test_edit_queues_cross_check_without_running_inline(
         self, tmp_db, isolate, monkeypatch, client
@@ -225,7 +225,7 @@ class TestDateCellStoresPt:
 
 
 class TestValidateReadsHeader:
-    """Point #1 — validate lê do cabeçalho; rejeita cabeçalho inválido."""
+    """Validation confirms persisted header values without business gates."""
 
     def test_validate_uses_header_values(self, tmp_db, isolate, client):
         sid = _seed(operador="AUGUSTO MONTEIRO", n_operador="95", data="20-05-2026")
@@ -236,19 +236,19 @@ class TestValidateReadsHeader:
         assert sheet["status"] == "validated"
         assert sheet["operador"] == "AUGUSTO MONTEIRO"
 
-    def test_validate_rejects_bad_date_in_header(self, tmp_db, isolate, client):
+    def test_validate_preserves_unparsed_date_in_header(self, tmp_db, isolate, client):
         sid = _seed(operador="AUGUSTO MONTEIRO", n_operador="95", data="lixo")
         r = client.post(f"/sheet/{sid}/validate", headers=_DESKTOP,
                         follow_redirects=False)
-        assert r.status_code == 400
-        assert db.get_sheet(sid)["status"] != "validated"
+        assert r.status_code == 303
+        assert db.get_sheet(sid)["status"] == "validated"
 
-    def test_validate_rejects_empty_operador(self, tmp_db, isolate, client):
+    def test_validate_allows_empty_operador(self, tmp_db, isolate, client):
         sid = _seed(operador="", n_operador="95", data="20-05-2026")
         r = client.post(f"/sheet/{sid}/validate", headers=_DESKTOP,
                         follow_redirects=False)
-        assert r.status_code == 400
-        assert db.get_sheet(sid)["status"] != "validated"
+        assert r.status_code == 303
+        assert db.get_sheet(sid)["status"] == "validated"
 
     def test_validate_from_form_still_applies_values(self, tmp_db, isolate, client):
         # Backward-compat: kanban_viewer.html confirma data/nº/operador no
@@ -263,7 +263,7 @@ class TestValidateReadsHeader:
         sheet = db.get_sheet(sid)
         assert sheet["status"] == "validated"
         assert sheet["operador"] == "AUGUSTO MONTEIRO"  # do form (KPI)
-        assert sheet["sheet_data"]["header"]["data"] == "29-05-2026"
+        assert sheet["sheet_data"]["header"]["data"] == "2026-05-29"
         assert sheet["sheet_data"]["header"]["n_operador"] == "95"
 
 
