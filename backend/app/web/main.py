@@ -554,7 +554,7 @@ def health() -> JSONResponse:
         "status": "ok",
         "engine_version": ENGINE_VERSION,
         "latency_fix": "2026-10-15.6",
-        "review_flow": "free-editing-2026-10-15.1",
+        "review_flow": "inline-editing-2026-10-16.1",
         "scoring_process": scoring_process_enabled(),
         "git_sha": _git_short_sha(),
         "python": sys.version.split()[0],

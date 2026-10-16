@@ -1,11 +1,7 @@
 {# Cell partial: returned by /sheet/{id}/edit (HTMX swap target).
    Also rendered inline in sheet.html for initial render.
 
-   Behaviour:
-     - Desktop: click → inline edit input with autofocus + blur-to-save (Alpine).
-     - Mobile (window.innerWidth <= 768): click dispatches 'open-cell-editor'
-       event with cell metadata; sheet.html catches it and opens the
-       bottom-sheet modal which posts to the same /edit endpoint.
+   Desktop and mobile: click the cell, type, then Enter or blur saves inline.
 #}
 {% set conf = audit.confidence if audit else 1.0 %}
 {% set cell_class = 'cell-conf-hi' if conf >= 0.9 else ('cell-conf-md' if conf >= 0.7 else 'cell-conf-lo') %}
@@ -68,6 +64,7 @@
     {% elif cc_status == 'NO_MATCH' and cc_ref_by_path is defined and cc_ref_by_path.get(field_path) %}title="Plan diz: {{ cc_ref_by_path.get(field_path, '') }}"{% endif %}
     style="padding:6px 8px; font-family:var(--font-mono); font-size:12px; {% if _is_validated %}cursor:default;{% else %}cursor:text;{% endif %} min-width:60px; position:relative;"
     {% if not _is_validated %}
+    @click.self="handleClick()"
     x-data='{
       editing: false,
       original: {{ value | tojson }},
@@ -91,7 +88,7 @@
     {% if _was_snapped %}<span class="cc-snapped-mark" aria-hidden="true">*</span>{% endif %}
   </div>
   {% else %}
-  <div x-show="!editing" @click="handleClick()" style="min-height:18px;">
+  <div x-show="!editing" @click="handleClick()" title="Clicar para editar" style="min-height:18px;">
     {%- if value -%}{{ value }}{%- else -%}&nbsp;{%- endif -%}
     {% if _was_snapped %}<span class="cc-snapped-mark" aria-hidden="true">*</span>{% endif %}
   </div>
@@ -113,8 +110,8 @@
        relatedTarget dentro do form e não dispara um submit duplicado. #}
     <div style="display:flex; gap:3px; align-items:center;">
       <input type="text" name="new_value" value="{{ value }}" x-ref="input"
-             @blur="if (!$el.form.contains($event.relatedTarget)) $el.form.requestSubmit()"
-             @keydown.escape="editing = false; $el.value = original"
+             @blur="if (editing && !$el.form.contains($event.relatedTarget)) $el.form.requestSubmit()"
+             @keydown.escape.prevent.stop="editing = false; $el.value = original"
              style="width:100%; min-width:200px; font-family:var(--font-mono); font-size:14px; padding:7px 10px; border:1px solid var(--ink); border-radius:3px;">
       <button type="submit" title="Guardar"
               style="flex:none; padding:7px 11px; font-size:14px; line-height:1.4; border:1px solid var(--ink); border-radius:3px; background:var(--ink); color:var(--paper); cursor:pointer;">✓</button>
